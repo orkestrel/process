@@ -231,10 +231,13 @@ describe('Process', () => {
 				workspace: process.cwd(),
 				grace: 50,
 			})
+			const iterator = child.lines[Symbol.asyncIterator]()
+			const ready = await iterator.next()
 
 			const confirmed = await child.stop()
 			const exit = await child.exit
 
+			expect(ready.value).toBe('trapped')
 			expect(confirmed).toBe(true)
 			expect(exit.signal).toBe('SIGKILL')
 			expect(exit.code).toBeNull()
@@ -327,9 +330,12 @@ describe('Process', () => {
 				expect(holds(() => process.kill(held, 0))).toBe(true)
 
 				await child.stop()
-				await waitForDelay(100)
+				const settlement = await Promise.race([
+					child.exit.then(() => 'closed'),
+					waitForDelay(100).then(() => 'held'),
+				])
 
-				expect(holds(() => process.kill(held, 0))).toBe(false)
+				expect(settlement).toBe('closed')
 			} finally {
 				holds(() => process.kill(held, 'SIGKILL'))
 			}

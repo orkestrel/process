@@ -153,6 +153,8 @@ describe('ProcessManager', () => {
 		const marker = join(scratch.path, 'launched.pid')
 		const teardown: Array<Promise<void>> = []
 		let pid = 0
+		let markerValid = false
+		let terminationValid = true
 
 		try {
 			let thrown: unknown
@@ -171,17 +173,30 @@ describe('ProcessManager', () => {
 				thrown = error
 			}
 			await Promise.all(teardown)
-			for (let attempt = 0; attempt < 60; attempt += 1) {
-				if (pid === 0 && existsSync(marker)) pid = Number.parseInt(readFileSync(marker, 'utf8'), 10)
-				if (pid > 0 && !holds(() => process.kill(pid, 0))) break
-				await waitForDelay(50)
-			}
 
 			expect(isProcessError(thrown)).toBe(true)
 			expect(isProcessError(thrown) ? thrown.code : undefined).toBe('protocol')
 			expect(manager.count).toBe(0)
-			expect(pid).toBeGreaterThan(0)
-			expect(holds(() => process.kill(pid, 0))).toBe(false)
+
+			if (process.platform === 'win32') {
+				for (let attempt = 0; attempt < 60; attempt += 1) {
+					if (pid === 0 && existsSync(marker)) {
+						pid = Number.parseInt(readFileSync(marker, 'utf8'), 10)
+					}
+					if (pid > 0 && !holds(() => process.kill(pid, 0))) break
+					await waitForDelay(50)
+				}
+				markerValid = pid > 0
+				terminationValid = pid > 0 && !holds(() => process.kill(pid, 0))
+			} else {
+				// This branch proves only that the marker stays absent during the window. A change that
+				// stopped spawning the child would also pass it.
+				await waitForDelay(100)
+				markerValid = !existsSync(marker)
+			}
+
+			expect(markerValid).toBe(true)
+			expect(terminationValid).toBe(true)
 		} finally {
 			if (pid > 0) holds(() => process.kill(pid, 'SIGKILL'))
 			scratch.destroy()

@@ -350,10 +350,11 @@ outlives the root is beyond this mechanism; Windows job objects, which would clo
 part of this package.
 
 `killProcess` is the direct signalling helper underneath. On a POSIX host it signals the negated pid,
-which reaches the detached child's whole process group; on Windows, or when no pid is available, it
-signals the child alone. A throw during signalling is swallowed, because the process can exit between
-the caller's liveness check and the call, and the child's native exit stays the authoritative
-terminal state.
+which reaches the detached child's whole process group. When the host reports that no group owns the
+pid, it falls back to signalling the child directly, so `killProcess` and `stopChild` also support a
+non-detached child. On Windows, or when no pid is available, it signals the child alone. Every other
+throw during signalling is swallowed, because the process can exit between the caller's liveness
+check and the call, and the child's native exit stays the authoritative terminal state.
 
 ```ts
 import { createProcess } from '@orkestrel/process/server'
@@ -385,9 +386,10 @@ rather than as syntax: the one path that builds a command line at all — a Wind
 script — runs through an explicit quoted `cmd.exe /d /s /c` invocation, and the one argument that
 invocation could corrupt is refused rather than passed.
 
-A POSIX host resolves the file itself, so `resolveExecutable` returns `undefined` there and the
-command file is spawned as written. Windows needs the lookup, because the host searches the working
-directory before `PATH` and applies `PATHEXT`, and Node reproduces neither for a direct spawn.
+A POSIX host resolves the file through `execvp` against the child's effective `PATH`, so
+`resolveExecutable` returns `undefined` there and the command file is spawned as written. Windows
+needs the lookup, because the host searches the working directory before `PATH` and applies
+`PATHEXT`, and Node reproduces neither for a direct spawn.
 Within each searched directory the literal name is tried first and each `PATHEXT` candidate after
 it, whether or not the name already carries an extension: `report.txt` resolves to a `report.txt`
 file where one exists, and to `report.txt.cmd` where none does. The lookup reads the child's
@@ -434,6 +436,8 @@ unpredictably. `readVariable` reads one variable back under the same folding rul
 overrides alone from this package's side. That qualification is exact on Windows: libuv injects a
 host set — `PATH`, `SYSTEMROOT`, `TEMP`, `USERPROFILE`, and several more — into any explicit
 environment, so an isolated child there still receives those variables from the host.
+On a POSIX host, `isolated: true` removes `PATH`, so pass an absolute file or include `PATH` in the
+overrides when the child uses a bare command name.
 
 ```ts
 import { mergeEnvironment } from '@orkestrel/process/server'
@@ -450,7 +454,7 @@ import { runSync } from '@orkestrel/process/server'
 
 const printer = 'process.stdout.write(Object.keys(process.env).sort().join(","))'
 const keys = runSync({
-	file: 'node',
+	file: process.execPath,
 	arguments: ['-e', printer],
 	environment: { TOKEN: 'a' },
 	isolated: true,

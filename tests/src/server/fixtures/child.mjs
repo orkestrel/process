@@ -50,17 +50,15 @@ if (mode === 'write') {
 		setInterval(() => undefined, 1_000)
 	}
 } else if (mode === 'chatty') {
-	// Emit far more lines than any consumer reads promptly, then exit: the eager pump must drain
-	// stdout with no consumer so exit still resolves and a late consumer receives every line.
+	// Emit far more lines than any consumer reads promptly, then let stdout flush: the eager pump
+	// must drain with no consumer so exit still resolves and a late consumer receives every line.
 	for (let index = 0; index < 4_096; index += 1) {
 		process.stdout.write(`${String(index)}:${'x'.repeat(128)}\n`)
 	}
-	process.exit(0)
 } else if (mode === 'empty') {
-	// Emit a flood of empty lines and exit. Every line carries zero payload bytes, so only a backlog
-	// that charges each retained line its own framing cost can bound this stream.
+	// Emit a flood of empty lines and let stdout flush. Every line carries zero payload bytes, so only
+	// a backlog that charges each retained line its own framing cost can bound this stream.
 	for (let index = 0; index < 50_000; index += 1) process.stdout.write('\n')
-	process.exit(0)
 } else if (mode === 'partial-line') {
 	process.stdout.write('first-line\n')
 	// The final line carries no trailing newline: readline must still flush it as the last line.
@@ -85,6 +83,7 @@ if (mode === 'write') {
 	// only an escalation to SIGKILL ends this process.
 	setInterval(() => undefined, 1_000)
 	process.on('SIGTERM', () => undefined)
+	process.stdout.write('trapped\n')
 } else if (mode === 'hang') {
 	// No SIGTERM handler: a termination signal ends the process as a signal exit, so a caller that
 	// terminates it observes a non-zero, signalled outcome rather than a graceful code 0.

@@ -430,7 +430,7 @@ describe('stopChild', () => {
 
 		const confirmed = await stopChild(
 			{
-				pid: 4_194_303,
+				pid: undefined,
 				exitCode: null,
 				signalCode: null,
 				kill: (signal) => (signals.handler(signal), true),
@@ -609,6 +609,17 @@ describe('killProcess', () => {
 		killProcess({ pid: undefined, kill: (signal) => (signals.handler(signal), true) }, 'SIGTERM')
 		expect(signals.calls).toEqual([['SIGTERM']])
 	})
+
+	it.skipIf(process.platform === 'win32')(
+		'falls back to the direct child when no process group owns its pid',
+		() => {
+			const signals = createRecorder<readonly [NodeJS.Signals]>()
+
+			killProcess({ pid: 4_194_303, kill: (signal) => (signals.handler(signal), true) }, 'SIGTERM')
+
+			expect(signals.calls).toEqual([['SIGTERM']])
+		},
+	)
 })
 
 describe('run', () => {

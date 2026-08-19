@@ -401,13 +401,13 @@ describe('flagship fences', () => {
 		expect(mergeEnvironment(false, { TOKEN: 'a' }, { TOKEN: undefined }).TOKEN).toBeUndefined()
 	})
 
-	// The host-varying half of the `isolated` claim, read off the host the suite is running on
-	// rather than off a fixture: libuv injects its own set into any explicit Windows environment,
-	// so `isolated` means the overrides alone from this package's side and nothing stronger.
+	// The host-varying half of the `isolated` claim is read from the host running the suite. An
+	// absolute executable keeps command lookup out of the claim, while libuv can still inject its
+	// own set into an explicit Windows environment.
 	it('reads the isolated environment fence back from the child', () => {
 		const printer = 'process.stdout.write(Object.keys(process.env).sort().join(","))'
 		const keys = runSync({
-			file: 'node',
+			file: process.execPath,
 			arguments: ['-e', printer],
 			environment: { TOKEN: 'a' },
 			isolated: true,
