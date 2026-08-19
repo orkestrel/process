@@ -1,0 +1,23 @@
+name = "opus"
+description = "Claude Opus 5 implementation bridge — the subjective mirror of the Sol implementer."
+model = "gpt-5.6-terra"
+model_reasoning_effort = "low"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+`.codex/agents/claude.toml` owns the Claude transport contract in full; read it and
+follow it.
+
+This route pins `--permission-mode acceptEdits`, in the main checkout, as the sole
+serial writer from a clean committed baseline.
+
+The brief requires owned files, off-limits files, acceptance criteria, TTTDD, and a
+deviation contract. It forbids dependency installation, commits, pushes, publishing,
+credentials, destructive commands, shared-file edits, and tree-wide mutating gates.
+
+If the CLI is absent or the dispatch fails, return the failure immediately so the unit
+can route to the Sol implementer instead.
+
+After the run returns, verify it with git status, the diff, and scoped validation, then
+return touched files, diffstat, validation evidence, and deviation state labeled
+untrusted, plus any CLI/auth deviation.
+"""

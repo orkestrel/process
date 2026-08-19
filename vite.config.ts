@@ -1,0 +1,157 @@
+import type { UserConfig } from 'vite'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import manifest from './package.json' with { type: 'json' }
+import tsconfig from './tsconfig.json' with { type: 'json' }
+import { environmentBoundary, outputBoundary } from './configs/helpers.js'
+import { fileURLToPath, URL } from 'node:url'
+
+export function resolveWorkspacePath(relativePath: string): string {
+	return fileURLToPath(new URL(relativePath, import.meta.url))
+}
+
+const peerDependencies = 'peerDependencies' in manifest ? manifest.peerDependencies : undefined
+if (
+	peerDependencies !== undefined &&
+	(typeof peerDependencies !== 'object' ||
+		peerDependencies === null ||
+		Array.isArray(peerDependencies))
+) {
+	throw new Error('package peerDependencies must be an object')
+}
+export const peers: readonly string[] =
+	peerDependencies === undefined ? [] : Object.keys(peerDependencies)
+
+const resolve = {
+	alias: Object.entries(tsconfig.compilerOptions.paths).reduce((aliases, [key, values]) => {
+		const [path] = values
+		if (path === undefined) throw new Error('tsconfig path alias ' + key + ' has no target')
+		return Object.assign(aliases, { [key]: resolveWorkspacePath(path) })
+	}, {}),
+}
+
+export const srcCore = (options?: UserConfig): UserConfig =>
+	mergeConfig(
+		{
+			resolve,
+			publicDir: false,
+			build: {
+				emptyOutDir: true,
+				sourcemap: true,
+				minify: false,
+			},
+			test: {
+				name: { label: 'src:core', color: 'magenta' },
+				include: ['tests/src/core/**/*.test.ts'],
+				setupFiles: ['./tests/setup.ts'],
+				environment: 'node',
+				browser: { enabled: false },
+			},
+		},
+		options ?? {},
+	)
+
+export const srcServer = (options?: UserConfig): UserConfig =>
+	mergeConfig(
+		{
+			resolve,
+			publicDir: false,
+			plugins: [outputBoundary('dist/src/server'), environmentBoundary('src/server')],
+			build: {
+				emptyOutDir: true,
+				sourcemap: true,
+				minify: false,
+				lib: {
+					entry: resolveWorkspacePath('src/server/index.ts'),
+					formats: ['es', 'cjs'],
+					fileName: (format: string) => (format === 'es' ? 'index.js' : 'index.cjs'),
+				},
+				outDir: 'dist/src/server',
+				target: 'node22',
+				rolldownOptions: {
+					platform: 'node',
+					external: (id: string) =>
+						id === '@src/core' ||
+						id.startsWith('node:') ||
+						id.startsWith('@orkestrel/') ||
+						peers.some((peer) => id === peer || id.startsWith(peer + '/')),
+					output: [
+						{
+							format: 'es',
+							entryFileNames: 'index.js',
+							paths: { '@src/core': '../core/index.js' },
+						},
+						{
+							format: 'cjs',
+							entryFileNames: 'index.cjs',
+							paths: { '@src/core': '../core/index.cjs' },
+						},
+					],
+				},
+			},
+			test: {
+				name: { label: 'src:server', color: 'red' },
+				include: ['tests/src/server/**/*.test.ts'],
+				exclude: ['tests/src/core/**/*.test.ts'],
+				setupFiles: ['./tests/setup.ts', './tests/setupServer.ts'],
+				environment: 'node',
+				browser: { enabled: false },
+			},
+		},
+		options ?? {},
+	)
+
+export const policy = (options?: UserConfig): UserConfig =>
+	mergeConfig(
+		{
+			resolve,
+			test: {
+				name: { label: 'policy', color: 'white' },
+				include: ['tests/policy.test.ts'],
+				setupFiles: ['./tests/setup.ts'],
+				environment: 'node',
+				browser: { enabled: false },
+			},
+		},
+		options ?? {},
+	)
+
+export const config = (options?: UserConfig): UserConfig =>
+	mergeConfig(
+		{
+			resolve,
+			test: {
+				name: { label: 'config', color: 'yellow' },
+				include: ['tests/config.test.ts'],
+				setupFiles: ['./tests/setup.ts'],
+				environment: 'node',
+				browser: { enabled: false },
+				// A config test validates every target wrapper and runs the real linter twice with
+				// 15-second child caps, so this budget clears both caps and reports their diagnostics.
+				testTimeout: 45_000,
+			},
+		},
+		options ?? {},
+	)
+
+// A workbench, not a proof. No gate selects this project.
+export const probe = (options?: UserConfig): UserConfig =>
+	mergeConfig(
+		{
+			resolve,
+			test: {
+				name: { label: 'probe', color: 'gray' },
+				include: ['tmp/probe/**/*.test.ts'],
+				setupFiles: ['./tests/setup.ts'],
+				environment: 'node',
+				browser: { enabled: false },
+			},
+		},
+		options ?? {},
+	)
+
+export default defineConfig({
+	resolve,
+	test: {
+		projects: [srcCore, srcServer, policy, config, probe],
+	},
+})

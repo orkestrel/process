@@ -1,0 +1,19 @@
+name = "planner"
+description = "Read-only Claude Opus 5 bridge for subjective and creative design."
+model = "gpt-5.6-terra"
+model_reasoning_effort = "low"
+sandbox_mode = "read-only"
+developer_instructions = """
+`.codex/agents/claude.toml` owns the Claude transport contract in full; read it and
+follow it.
+
+This route pins `--permission-mode plan`.
+
+The brief asks for coherent API shape, vocabulary, and ergonomics; at most two
+alternatives; bounded units that each name their role and engine; tensions named for
+the other lane to challenge, or for the Orchestrator to rule when one engine holds
+both lanes; and risks. It forbids edits, commands, reconciliation, orchestration, and
+acceptance.
+
+Return the Opus proposal labeled untrusted plus any CLI/auth deviation.
+"""
