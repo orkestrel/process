@@ -7,16 +7,32 @@ describe('src server entry', () => {
 			'Process',
 			'ProcessManager',
 			'buildRunResult',
-			'commandLine',
+			'buildSpawn',
 			'createProcess',
 			'createProcessManager',
+			'detach',
+			'formatCommand',
+			'isExited',
+			'isFile',
 			'killProcess',
+			'killTree',
 			'mergeEnvironment',
-			'requiresShell',
+			'quoteArgument',
+			'readVariable',
+			'resolveExecutable',
+			'retainChunk',
 			'run',
 			'runSync',
+			'stopChild',
 			'trimHead',
 			'trimTail',
+			'validateBytes',
+			'validateCommand',
+			'validateEnvironment',
+			'validateText',
+			'validateTimer',
+			'validateWorkspace',
+			'waitForExit',
 		])
 	})
 
@@ -27,5 +43,6 @@ describe('src server entry', () => {
 		expect(typeof entry.createProcessManager).toBe('function')
 		expect(typeof entry.run).toBe('function')
 		expect(typeof entry.runSync).toBe('function')
+		expect(typeof entry.detach).toBe('function')
 	})
 })

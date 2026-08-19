@@ -1,21 +1,38 @@
-import { join } from 'node:path'
 import { Buffer } from 'node:buffer'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { createRecorder } from '@orkestrel/test'
+import { createRecorder, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
-import { isProcessError } from '@src/core'
+import { isProcessError, ProcessError } from '@src/core'
 import {
 	buildRunResult,
-	commandLine,
+	buildSpawn,
+	detach,
+	formatCommand,
+	isExited,
+	isFile,
 	killProcess,
+	killTree,
 	mergeEnvironment,
-	requiresShell,
+	quoteArgument,
+	readVariable,
+	resolveExecutable,
+	retainChunk,
 	run,
 	runSync,
+	stopChild,
 	trimHead,
 	trimTail,
+	validateBytes,
+	validateCommand,
+	validateEnvironment,
+	validateText,
+	validateTimer,
+	validateWorkspace,
+	waitForExit,
 } from '@src/server'
-import { childCommand } from '../../setupServer.js'
+import { childCommand, resolveChildFixture } from '../../setupServer.js'
 
 describe('trimTail', () => {
 	it('returns the whole buffer when it fits the limit', () => {
@@ -43,37 +60,451 @@ describe('trimHead', () => {
 	})
 })
 
-describe('requiresShell', () => {
-	it('routes batch and bare commands through a shell only on Windows', () => {
-		// A batch shim and a bare PATHEXT name are Windows-only shell-dispatch cases; a real
-		// executable extension and every POSIX command spawn directly.
-		const windows = process.platform === 'win32'
-		expect(requiresShell('deploy.cmd')).toBe(windows)
-		expect(requiresShell('deploy.bat')).toBe(windows)
-		expect(requiresShell('git')).toBe(windows)
-		expect(requiresShell(process.execPath)).toBe(false)
-	})
-})
-
-describe('commandLine', () => {
+describe('formatCommand', () => {
 	it('joins the executable and its arguments', () => {
-		expect(commandLine({ file: 'git', arguments: ['status', '--short'] })).toBe(
+		expect(formatCommand({ file: 'git', arguments: ['status', '--short'] })).toBe(
 			'git status --short',
 		)
 	})
 })
 
+describe('readVariable', () => {
+	it('reads a differently cased key the way the host resolves it', () => {
+		// Windows resolves an environment key case-insensitively and every other host does not, so
+		// the expected answer is read from the host the test runs on.
+		const folded = process.platform === 'win32'
+
+		expect(readVariable({ PROCESS_TEST_KEY: 'exact' }, 'PROCESS_TEST_KEY')).toBe('exact')
+		expect(readVariable({ Process_Test_Key: 'folded' }, 'PROCESS_TEST_KEY')).toBe(
+			folded ? 'folded' : undefined,
+		)
+		expect(readVariable({}, 'PROCESS_TEST_KEY')).toBeUndefined()
+	})
+})
+
+describe('isFile', () => {
+	it('accepts a regular file and refuses a directory or a missing path', () => {
+		expect(isFile(process.execPath)).toBe(true)
+		expect(isFile(process.cwd())).toBe(false)
+		expect(isFile(join(process.cwd(), 'orkestrel-nonexistent-path'))).toBe(false)
+	})
+})
+
+describe('quoteArgument', () => {
+	it('quotes only a token a command line would otherwise split or interpret', () => {
+		expect(quoteArgument('status')).toBe('status')
+		expect(quoteArgument('a&b')).toBe('"a&b"')
+		expect(quoteArgument('two words')).toBe('"two words"')
+		expect(quoteArgument('')).toBe('""')
+		expect(quoteArgument('say "hi"')).toBe('"say ""hi"""')
+	})
+})
+
+describe('resolveExecutable', () => {
+	// A bare command name is resolved by the caller only on Windows, where the host appends a
+	// PATHEXT extension and searches the working directory first. Every other host resolves the
+	// file inside its own `execvp`, so there is nothing here to reproduce.
+	it.skipIf(process.platform !== 'win32')(
+		'resolves a bare name through the effective PATH and PATHEXT',
+		() => {
+			const scratch = createScratch()
+			try {
+				scratch.write('tool.cmd', '@echo off\r\necho tool-ran\r\n')
+
+				// Windows folds a path's case, and the resolved extension is spelled the way
+				// `PATHEXT` spells it rather than the way the directory entry does.
+				expect(
+					resolveExecutable('tool', { environment: { PATH: scratch.path } })?.toLowerCase(),
+				).toBe(join(scratch.path, 'tool.cmd').toLowerCase())
+				expect(
+					resolveExecutable('tool', {
+						environment: { PATH: scratch.path, PATHEXT: '.EXE' },
+					}),
+				).toBeUndefined()
+				expect(resolveExecutable('tool', { environment: {} })).toBeUndefined()
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
+
+	// Windows is the only host that applies `PATHEXT` at all, so it is the only host that can show
+	// which candidate a name carrying its own extension resolves to.
+	it.skipIf(process.platform !== 'win32')(
+		'tries an extension-bearing name literally before it applies PATHEXT to it',
+		() => {
+			const scratch = createScratch()
+			try {
+				scratch.write('report.txt', 'not an executable\r\n')
+				scratch.write('report.txt.cmd', '@echo off\r\necho appended\r\n')
+				scratch.write('notes.txt.cmd', '@echo off\r\necho appended\r\n')
+
+				// The literal name is a regular file, so it wins over every appended candidate.
+				expect(
+					resolveExecutable('report.txt', { environment: { PATH: scratch.path } })?.toLowerCase(),
+				).toBe(join(scratch.path, 'report.txt').toLowerCase())
+				// With no literal file to find, `PATHEXT` still applies to a name that carries an
+				// extension of its own.
+				expect(
+					resolveExecutable('notes.txt', { environment: { PATH: scratch.path } })?.toLowerCase(),
+				).toBe(join(scratch.path, 'notes.txt.cmd').toLowerCase())
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
+
+	it.skipIf(process.platform !== 'win32')('searches the workspace before the path', () => {
+		const scratch = createScratch()
+		try {
+			scratch.write('tool.cmd', '@echo off\r\necho workspace-ran\r\n')
+
+			expect(
+				resolveExecutable('tool', { workspace: scratch.path, environment: {} })?.toLowerCase(),
+			).toBe(join(scratch.path, 'tool.cmd').toLowerCase())
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it.skipIf(process.platform === 'win32')('leaves the lookup to a host that performs it', () => {
+		expect(resolveExecutable('node')).toBeUndefined()
+	})
+})
+
+describe('buildSpawn', () => {
+	it('spawns a resolvable executable directly and never verbatim', () => {
+		const plan = buildSpawn({ file: process.execPath, arguments: ['--version'] })
+
+		expect(plan.file).toBe(process.execPath)
+		expect(plan.arguments).toEqual(['--version'])
+		expect(plan.verbatim).toBe(false)
+	})
+
+	// Only Windows refuses to spawn a batch script directly, so only Windows needs the quoted
+	// `cmd.exe /d /s /c` command line this builds.
+	it.skipIf(process.platform !== 'win32')(
+		'routes a batch script through a quoted cmd.exe command line',
+		() => {
+			const scratch = createScratch()
+			try {
+				scratch.write('with space/greet.cmd', '@echo off\r\necho cmd-ran %1\r\n')
+				const file = join(scratch.path, 'with space', 'greet.cmd')
+
+				const plan = buildSpawn({ file, arguments: ['a&b'] })
+
+				expect(plan.file.toLowerCase()).toContain('cmd.exe')
+				expect(plan.verbatim).toBe(true)
+				expect(plan.arguments).toEqual(['/d', '/s', '/c', `""${file}" "a&b""`])
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
+
+	// `cmd.exe` is the program that expands `%NAME%`, and only Windows spawns a batch target through
+	// it, so only Windows carries the refusal that expansion makes necessary.
+	it.skipIf(process.platform !== 'win32')(
+		'refuses a percent sign in an argument bound for a batch target',
+		() => {
+			// `cmd.exe` expands `%NAME%` before it parses quotes, so no quoting can carry the literal
+			// text through to a batch script.
+			expect(() => buildSpawn({ file: 'C:\\tools\\greet.cmd', arguments: ['%PATH%'] })).toThrow(
+				ProcessError,
+			)
+			expect(() => buildSpawn({ file: 'C:\\tools\\greet.bat', arguments: ['%PATH%'] })).toThrow(
+				ProcessError,
+			)
+		},
+	)
+
+	// A POSIX host has no `cmd.exe` and no restriction on spawning a file directly, so a name ending
+	// in `.cmd` is an ordinary executable there and its extension must change nothing.
+	it.skipIf(process.platform === 'win32')(
+		'spawns a batch-named target directly and passes a percent sign literally',
+		() => {
+			const plan = buildSpawn({ file: '/opt/tools/worker.cmd', arguments: ['%s'] })
+
+			expect(plan.file).toBe('/opt/tools/worker.cmd')
+			expect(plan.arguments).toEqual(['%s'])
+			expect(plan.verbatim).toBe(false)
+		},
+	)
+
+	it('passes a percent-delimited argument literally to a target that is not batch', () => {
+		const plan = buildSpawn({ file: process.execPath, arguments: ['%s', '%PATH%'] })
+		const result = runSync(
+			{ file: process.execPath, arguments: [resolveChildFixture(), 'args', '%s', '%PATH%'] },
+			{ workspace: process.cwd(), strict: false },
+		)
+
+		expect(plan.arguments).toEqual(['%s', '%PATH%'])
+		expect(plan.verbatim).toBe(false)
+		expect(result.failed).toBe(false)
+		expect(result.stdout).toContain('args:%s|%PATH%')
+	})
+
+	// Only Windows resolves and runs a batch target, so only Windows can drive the expansion this
+	// refusal exists to prevent.
+	it.skipIf(process.platform !== 'win32')(
+		'refuses a defined percent-delimited argument a batch target would otherwise expand',
+		() => {
+			const scratch = createScratch()
+			try {
+				scratch.write('greet.cmd', '@echo off\r\necho got:%1\r\n')
+				const file = join(scratch.path, 'greet.cmd')
+
+				let thrown: unknown
+				try {
+					runSync({ file, arguments: ['%PATH%'] }, { workspace: process.cwd(), strict: false })
+				} catch (error) {
+					thrown = error
+				}
+
+				expect(isProcessError(thrown)).toBe(true)
+				expect(isProcessError(thrown) ? thrown.code : undefined).toBe('invalid')
+				expect(isProcessError(thrown) ? thrown.context?.value : undefined).toBe('%PATH%')
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
+
+	it.skipIf(process.platform !== 'win32')(
+		'runs a batch script whose directory name contains a space',
+		() => {
+			const scratch = createScratch()
+			try {
+				scratch.write('with space/greet.cmd', '@echo off\r\necho cmd-ran %1\r\n')
+				const file = join(scratch.path, 'with space', 'greet.cmd')
+
+				const result = runSync({ file, arguments: ['hello'] }, { strict: false })
+
+				expect(result.failed).toBe(false)
+				expect(result.stdout).toContain('cmd-ran hello')
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
+})
+
+describe('validateText', () => {
+	it('accepts a spawn-safe string and refuses a NUL or a missing required value', () => {
+		expect(validateText('status', 'command argument', false)).toBeUndefined()
+		expect(validateText('', 'command argument', false)).toBeUndefined()
+		expect(() => validateText('', 'command file', true)).toThrow(ProcessError)
+		expect(() => validateText(`a${String.fromCodePoint(0)}b`, 'command file', true)).toThrow(
+			ProcessError,
+		)
+		expect(() => validateText(7, 'command file', true)).toThrow(ProcessError)
+	})
+})
+
+describe('validateTimer', () => {
+	it('accepts a schedulable delay and refuses one the host would truncate', () => {
+		expect(validateTimer(undefined, "option 'grace'")).toBeUndefined()
+		expect(validateTimer(0, "option 'grace'")).toBeUndefined()
+		expect(validateTimer(2_147_483_647, "option 'grace'")).toBeUndefined()
+		expect(() => validateTimer(2_147_483_648, "option 'grace'")).toThrow(ProcessError)
+		expect(() => validateTimer(-1, "option 'grace'")).toThrow(ProcessError)
+		expect(() => validateTimer(1.5, "option 'grace'")).toThrow(ProcessError)
+		expect(() => validateTimer(Number.NaN, "option 'grace'")).toThrow(ProcessError)
+	})
+
+	it('refuses negative zero, which reads as a delay and is not a non-negative integer', () => {
+		expect(() => validateTimer(-0, "option 'grace'")).toThrow(ProcessError)
+	})
+})
+
+describe('validateBytes', () => {
+	it('accepts a byte bound at or above its minimum and refuses anything else', () => {
+		expect(validateBytes(undefined, "option 'limit'", 0)).toBeUndefined()
+		expect(validateBytes(0, "option 'limit'", 0)).toBeUndefined()
+		expect(() => validateBytes(0, "option 'backlog'", 1)).toThrow(ProcessError)
+		expect(() => validateBytes(-1, "option 'limit'", 0)).toThrow(ProcessError)
+		expect(() => validateBytes(1.5, "option 'limit'", 0)).toThrow(ProcessError)
+		expect(() => validateBytes(Number.POSITIVE_INFINITY, "option 'limit'", 0)).toThrow(ProcessError)
+	})
+})
+
+describe('validateEnvironment', () => {
+	it('accepts an override map and refuses an empty name or a NUL in either half', () => {
+		const nul = String.fromCodePoint(0)
+
+		expect(validateEnvironment(undefined)).toBeUndefined()
+		expect(
+			validateEnvironment({ PROCESS_TEST_KEY: 'value', PROCESS_UNSET_KEY: undefined }),
+		).toBeUndefined()
+		expect(() => validateEnvironment({ '': 'value' })).toThrow(ProcessError)
+		expect(() => validateEnvironment({ [`a${nul}b`]: 'value' })).toThrow(ProcessError)
+		expect(() => validateEnvironment({ PROCESS_TEST_KEY: `a${nul}b` })).toThrow(ProcessError)
+	})
+})
+
+describe('validateCommand', () => {
+	it('refuses an empty file, a NUL anywhere, and an empty environment key', () => {
+		const nul = String.fromCodePoint(0)
+
+		expect(validateCommand({ file: 'git', arguments: ['status'] })).toBeUndefined()
+		expect(() => validateCommand({ file: '', arguments: [] })).toThrow(ProcessError)
+		expect(() => validateCommand({ file: `git${nul}`, arguments: [] })).toThrow(ProcessError)
+		expect(() => validateCommand({ file: 'git', arguments: [`a${nul}b`] })).toThrow(ProcessError)
+		expect(() =>
+			validateCommand({ file: 'git', arguments: [], environment: { '': 'value' } }),
+		).toThrow(ProcessError)
+		expect(() =>
+			validateCommand({ file: 'git', arguments: [], environment: { KEY: `a${nul}b` } }),
+		).toThrow(ProcessError)
+	})
+
+	it('codes a refused command as invalid and carries the rejected value', () => {
+		let thrown: unknown
+		try {
+			validateWorkspace('')
+		} catch (error) {
+			thrown = error
+		}
+
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('invalid')
+		expect(isProcessError(thrown) ? thrown.context?.value : undefined).toBe('')
+	})
+})
+
+describe('retainChunk', () => {
+	it('retains the head up to the limit while counting everything delivered', () => {
+		const chunks: Buffer[] = []
+		const counts: number[] = [0, 0]
+
+		retainChunk(Buffer.from('hello'), chunks, counts, 3)
+		retainChunk(Buffer.from('world'), chunks, counts, 3)
+		retainChunk('not a chunk', chunks, counts, 3)
+
+		expect(Buffer.concat(chunks).toString('utf8')).toBe('hel')
+		expect(counts).toEqual([10, 3])
+	})
+})
+
+describe('isExited', () => {
+	it('reports the terminal state from the code or the signal the host recorded', () => {
+		expect(isExited({ exitCode: null, signalCode: null })).toBe(false)
+		expect(isExited({ exitCode: 0, signalCode: null })).toBe(true)
+		expect(isExited({ exitCode: null, signalCode: 'SIGKILL' })).toBe(true)
+	})
+})
+
+describe('waitForExit', () => {
+	it('returns at once for an exited child and at the deadline for a live one', async () => {
+		await waitForExit({ exitCode: 0, signalCode: null, once: () => undefined }, 60_000)
+
+		const started = performance.now()
+		await waitForExit({ exitCode: null, signalCode: null, once: () => undefined }, 50)
+
+		expect(performance.now() - started).toBeGreaterThanOrEqual(40)
+	})
+})
+
+describe('stopChild', () => {
+	it('signals nothing once the host has recorded the native exit', async () => {
+		const signals = createRecorder<readonly [NodeJS.Signals]>()
+
+		const confirmed = await stopChild(
+			{
+				pid: 4_194_303,
+				exitCode: 0,
+				signalCode: null,
+				kill: (signal) => (signals.handler(signal), true),
+				once: () => undefined,
+			},
+			20,
+			100,
+		)
+
+		expect(confirmed).toBe(true)
+		expect(signals.count).toBe(0)
+	})
+
+	it('signals a live child and reports an unconfirmed termination', async () => {
+		const signals = createRecorder<readonly [NodeJS.Signals]>()
+
+		const confirmed = await stopChild(
+			{
+				pid: 4_194_303,
+				exitCode: null,
+				signalCode: null,
+				kill: (signal) => (signals.handler(signal), true),
+				once: () => undefined,
+			},
+			20,
+			100,
+		)
+
+		expect(confirmed).toBe(false)
+		expect(signals.count).toBeGreaterThan(0)
+	})
+})
+
+describe('killTree', () => {
+	// `taskkill` is the Windows utility that ends a process tree by root id; a POSIX host reaches a
+	// tree through its process group instead, so there is no peer to drive here.
+	it.skipIf(process.platform !== 'win32')(
+		'reports failure for a tree no process id owns',
+		async () => {
+			expect(await killTree(4_194_303, 5_000)).toBe(false)
+		},
+	)
+})
+
 describe('mergeEnvironment', () => {
 	it('layers overrides over the parent environment and unsets an undefined value', () => {
-		const merged = mergeEnvironment({ PROCESS_TEST_KEY: 'base' }, { PROCESS_TEST_KEY: undefined })
+		const merged = mergeEnvironment(
+			false,
+			{ PROCESS_TEST_KEY: 'base' },
+			{ PROCESS_TEST_KEY: undefined },
+		)
 		expect(merged.PROCESS_TEST_KEY).toBeUndefined()
 		expect(merged.PATH).toBe(process.env.PATH)
+	})
+
+	it('folds a differently cased key the way the host resolves it', () => {
+		// Windows resolves an environment key case-insensitively and every other host does not, so the
+		// expected key count is read from the host the test runs on.
+		const folded = process.platform === 'win32'
+		const merged = mergeEnvironment(
+			false,
+			{ PROCESS_TEST_KEY: 'first' },
+			{ process_test_key: 'second' },
+		)
+		const keys = Object.keys(merged).filter((key) => key.toUpperCase() === 'PROCESS_TEST_KEY')
+
+		expect(keys).toHaveLength(folded ? 1 : 2)
+		expect(merged.process_test_key).toBe('second')
+	})
+
+	it('excludes the parent environment for an isolated command', () => {
+		const merged = mergeEnvironment(true, { PROCESS_TEST_KEY: 'only' })
+
+		expect(merged.PROCESS_TEST_KEY).toBe('only')
+		expect(Object.keys(merged)).toEqual(['PROCESS_TEST_KEY'])
 	})
 })
 
 describe('buildRunResult', () => {
-	it('derives failure from the exit, a signal, or a timeout', () => {
-		const ok = buildRunResult('c', Buffer.from('out'), Buffer.from('err'), 0, null, false, 1_024)
+	it('derives failure from the exit, a signal, an expiry, an abort, or a host fault', () => {
+		const empty = Buffer.alloc(0)
+		const ok = buildRunResult({
+			command: 'c',
+			stdout: Buffer.from('out'),
+			stderr: Buffer.from('err'),
+			code: 0,
+			signal: null,
+			expired: false,
+			aborted: false,
+			truncated: false,
+			limit: 1_024,
+		})
+
 		expect(ok).toEqual({
 			command: 'c',
 			stdout: 'out',
@@ -81,12 +512,94 @@ describe('buildRunResult', () => {
 			code: 0,
 			signal: null,
 			failed: false,
-			timedOut: false,
+			expired: false,
+			aborted: false,
+			truncated: false,
 		})
-		const empty = Buffer.alloc(0)
-		expect(buildRunResult('c', empty, empty, 1, null, false, 1_024).failed).toBe(true)
-		expect(buildRunResult('c', empty, empty, null, 'SIGTERM', false, 1_024).failed).toBe(true)
-		expect(buildRunResult('c', empty, empty, 0, null, true, 1_024).failed).toBe(true)
+		expect(
+			buildRunResult({
+				command: 'c',
+				stdout: empty,
+				stderr: empty,
+				code: 1,
+				signal: null,
+				expired: false,
+				aborted: false,
+				truncated: false,
+				limit: 1_024,
+			}).failed,
+		).toBe(true)
+		expect(
+			buildRunResult({
+				command: 'c',
+				stdout: empty,
+				stderr: empty,
+				code: null,
+				signal: 'SIGTERM',
+				expired: false,
+				aborted: false,
+				truncated: false,
+				limit: 1_024,
+			}).failed,
+		).toBe(true)
+		expect(
+			buildRunResult({
+				command: 'c',
+				stdout: empty,
+				stderr: empty,
+				code: 0,
+				signal: null,
+				expired: true,
+				aborted: false,
+				truncated: false,
+				limit: 1_024,
+			}).failed,
+		).toBe(true)
+		expect(
+			buildRunResult({
+				command: 'c',
+				stdout: empty,
+				stderr: empty,
+				code: 0,
+				signal: null,
+				expired: false,
+				aborted: true,
+				truncated: false,
+				limit: 1_024,
+			}).failed,
+		).toBe(true)
+		expect(
+			buildRunResult({
+				command: 'c',
+				stdout: empty,
+				stderr: empty,
+				code: 0,
+				signal: null,
+				expired: false,
+				aborted: false,
+				truncated: false,
+				limit: 1_024,
+				cause: new Error('spawn'),
+			}).failed,
+		).toBe(true)
+	})
+
+	it('keeps truncation out of the failure derivation', () => {
+		const result = buildRunResult({
+			command: 'c',
+			stdout: Buffer.from('output'),
+			stderr: Buffer.alloc(0),
+			code: 0,
+			signal: null,
+			expired: false,
+			aborted: false,
+			truncated: true,
+			limit: 3,
+		})
+
+		expect(result.failed).toBe(false)
+		expect(result.truncated).toBe(true)
+		expect(result.stdout).toBe('out')
 	})
 })
 
@@ -105,6 +618,8 @@ describe('run', () => {
 		expect(result.code).toBe(0)
 		expect(result.stdout).toContain('ran:0')
 		expect(result.stderr).toContain('diagnostic:0')
+		expect(result.truncated).toBe(false)
+		expect(result.aborted).toBe(false)
 	})
 
 	it('rejects a failed run with a process error carrying the result', async () => {
@@ -118,22 +633,53 @@ describe('run', () => {
 		expect(isProcessError(thrown) ? thrown.result?.code : undefined).toBe(3)
 	})
 
-	it('resolves a failed run with the outcome when reject is false', async () => {
-		const result = await run(childCommand('exit', '4'), { workspace: process.cwd(), reject: false })
+	it('resolves a failed run with the outcome when strict is false', async () => {
+		const result = await run(childCommand('exit', '4'), { workspace: process.cwd(), strict: false })
 		expect(result.failed).toBe(true)
 		expect(result.code).toBe(4)
-		expect(result.timedOut).toBe(false)
+		expect(result.expired).toBe(false)
 	})
 
-	it('terminates a run that outlasts its timeout and flags it timed out', async () => {
+	it('reports a run that outlasted its timeout as expired rather than aborted', async () => {
 		const result = await run(childCommand('hang'), {
 			workspace: process.cwd(),
 			timeout: 100,
 			grace: 20,
-			reject: false,
+			strict: false,
 		})
-		expect(result.timedOut).toBe(true)
+		expect(result.expired).toBe(true)
+		expect(result.aborted).toBe(false)
 		expect(result.failed).toBe(true)
+	})
+
+	it('reports an externally aborted run as aborted rather than expired', async () => {
+		const controller = new AbortController()
+		const pending = run(childCommand('sleep'), {
+			workspace: process.cwd(),
+			grace: 20,
+			signal: controller.signal,
+			strict: false,
+		})
+		controller.abort()
+		const result = await pending
+
+		expect(result.aborted).toBe(true)
+		expect(result.expired).toBe(false)
+		expect(result.failed).toBe(true)
+	})
+
+	it('caps a huge capture at the limit and reports truncation without failing', async () => {
+		const result = await run(childCommand('chatty'), {
+			workspace: process.cwd(),
+			limit: 1_024,
+			strict: false,
+		})
+
+		expect(result.truncated).toBe(true)
+		expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(1_024)
+		expect(result.stdout.startsWith('0:')).toBe(true)
+		expect(result.failed).toBe(false)
+		expect(result.code).toBe(0)
 	})
 
 	it('threads the spawn cause onto the rejected process error', async () => {
@@ -150,18 +696,20 @@ describe('run', () => {
 		expect(isProcessError(thrown) ? thrown.cause : undefined).toBeInstanceOf(Error)
 	})
 
-	it('terminates a run when its signal aborts', async () => {
-		const controller = new AbortController()
-		const pending = run(childCommand('hang'), {
-			workspace: process.cwd(),
-			grace: 20,
-			signal: controller.signal,
-			reject: false,
-		})
-		controller.abort()
-		const result = await pending
-		expect(result.failed).toBe(true)
-		expect(result.timedOut).toBe(false)
+	it('refuses a NUL in a per-run environment override before spawning', async () => {
+		const nul = String.fromCodePoint(0)
+		let thrown: unknown
+		try {
+			await run(childCommand('exit', '0'), {
+				workspace: process.cwd(),
+				environment: { PROCESS_TEST_KEY: `a${nul}b` },
+			})
+		} catch (error) {
+			thrown = error
+		}
+
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('invalid')
 	})
 })
 
@@ -172,8 +720,8 @@ describe('runSync', () => {
 		expect(result.stdout).toContain('ran:0')
 	})
 
-	it('resolves a failed synchronous run with the outcome when reject is false', () => {
-		const result = runSync(childCommand('exit', '5'), { workspace: process.cwd(), reject: false })
+	it('resolves a failed synchronous run with the outcome when strict is false', () => {
+		const result = runSync(childCommand('exit', '5'), { workspace: process.cwd(), strict: false })
 		expect(result.failed).toBe(true)
 		expect(result.code).toBe(5)
 	})
@@ -187,6 +735,28 @@ describe('runSync', () => {
 		}
 		expect(isProcessError(thrown)).toBe(true)
 		expect(isProcessError(thrown) ? thrown.result?.code : undefined).toBe(6)
+	})
+
+	it('fails a synchronous run whose output overflowed the limit', () => {
+		const result = runSync(childCommand('chatty'), {
+			workspace: process.cwd(),
+			limit: 1_024,
+			strict: false,
+		})
+
+		expect(result.truncated).toBe(true)
+		expect(result.failed).toBe(true)
+		expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(1_024)
+	})
+
+	it('passes a shell metacharacter through as one argument', () => {
+		const result = runSync(
+			{ file: 'node', arguments: [resolveChildFixture(), 'args', 'a&b'] },
+			{ workspace: process.cwd(), strict: false },
+		)
+
+		expect(result.failed).toBe(false)
+		expect(result.stdout).toContain('args:a&b')
 	})
 
 	it('threads the spawn cause onto the rejected process error', () => {
@@ -203,23 +773,49 @@ describe('runSync', () => {
 		expect(isProcessError(thrown) ? thrown.cause : undefined).toBeInstanceOf(Error)
 	})
 
-	// A `.cmd` batch file is a Windows-only construct: requiresShell returns false off win32, so the
-	// shell-dispatch path this drives cannot exist on a POSIX host. The platform-conditional result
-	// of requiresShell itself is proven unconditionally in the requiresShell suite above.
-	it.skipIf(process.platform !== 'win32')(
-		'runs a Windows batch command through the shell path',
-		() => {
-			const scratch = createScratch()
-			try {
-				scratch.write('greet.cmd', '@echo off\r\necho cmd-ran\r\n')
-				const file = join(scratch.path, 'greet.cmd')
-				expect(requiresShell(file)).toBe(true)
-				const result = runSync({ file, arguments: [] })
-				expect(result.failed).toBe(false)
-				expect(result.stdout).toContain('cmd-ran')
-			} finally {
-				scratch.destroy()
+	it('refuses a NUL in a per-run environment override before spawning', () => {
+		const nul = String.fromCodePoint(0)
+		let thrown: unknown
+		try {
+			runSync(childCommand('exit', '0'), {
+				workspace: process.cwd(),
+				environment: { PROCESS_TEST_KEY: `a${nul}b` },
+			})
+		} catch (error) {
+			thrown = error
+		}
+
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('invalid')
+	})
+})
+
+describe('detach', () => {
+	it('spawns a fire-and-forget child that runs after the call returns', async () => {
+		const scratch = createScratch()
+		try {
+			const marker = join(scratch.path, 'detached.txt')
+
+			detach(childCommand('write', marker), { workspace: process.cwd() })
+			for (let attempt = 0; attempt < 60 && !existsSync(marker); attempt += 1) {
+				await waitForDelay(50)
 			}
-		},
-	)
+
+			expect(readFileSync(marker, 'utf8')).toBe('detached')
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('refuses an invalid command before anything is spawned', () => {
+		let thrown: unknown
+		try {
+			detach({ file: '', arguments: [] })
+		} catch (error) {
+			thrown = error
+		}
+
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('invalid')
+	})
 })

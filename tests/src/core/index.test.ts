@@ -4,11 +4,17 @@ import { describe, expect, it } from 'vitest'
 describe('src core entry', () => {
 	it('exposes the process contract surface', () => {
 		expect(Object.keys(entry).sort()).toStrictEqual([
+			'PROCESS_BACKLOG',
+			'PROCESS_CONFIRMATION',
 			'PROCESS_EVIDENCE',
 			'PROCESS_GRACE',
 			'PROCESS_OUTPUT',
+			'PROCESS_PATHEXT',
+			'PROCESS_TIMER',
 			'ProcessError',
 			'createDuplicateError',
+			'createInvalidError',
+			'createProtocolError',
 			'createRunError',
 			'isProcessError',
 		])

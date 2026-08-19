@@ -1,7 +1,11 @@
 import type { ProcessExit } from '@src/core'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { holds } from '@orkestrel/contract'
 import { createRecorder, waitForDelay } from '@orkestrel/test'
-import { isProcessError } from '@src/core'
+import { createScratch } from '@orkestrel/test/server'
+import { isProcessError, ProcessError } from '@src/core'
 import { createProcessManager } from '@src/server'
 import { childCommand } from '../../setupServer.js'
 
@@ -69,15 +73,193 @@ describe('ProcessManager', () => {
 		await manager.destroy()
 	})
 
+	it('still holds the child while a listener on its own exit event runs', async () => {
+		const manager = createProcessManager()
+		const child = manager.launch('job', {
+			command: childCommand('exit', '0'),
+			workspace: process.cwd(),
+			grace: 20,
+		})
+		let registered: boolean | undefined
+		child.emitter.on('exit', () => {
+			registered = manager.process('job') === child
+		})
+
+		await child.exit
+		await waitForDelay()
+
+		expect(registered).toBe(true)
+		expect(manager.count).toBe(0)
+
+		await manager.destroy()
+	})
+
+	it('ignores a forged exit event and keeps the child registered', async () => {
+		const manager = createProcessManager()
+		const child = manager.launch('forged', {
+			command: childCommand('sleep'),
+			workspace: process.cwd(),
+			grace: 20,
+		})
+
+		child.emitter.emit('exit', { code: 0, signal: null })
+		await waitForDelay()
+
+		expect(manager.count).toBe(1)
+		expect(manager.process('forged')).toBe(child)
+
+		await manager.destroy()
+	})
+
+	it('releases a reserved id when construction refuses the options', async () => {
+		const manager = createProcessManager()
+
+		expect(() =>
+			manager.launch('slot', {
+				command: childCommand('exit', '0'),
+				workspace: process.cwd(),
+				backlog: 0,
+			}),
+		).toThrow(ProcessError)
+		const child = manager.launch('slot', {
+			command: childCommand('exit', '0'),
+			workspace: process.cwd(),
+		})
+
+		expect(manager.process('slot')).toBe(child)
+
+		await manager.destroy()
+	})
+
+	it('refuses a launch once destruction has begun', async () => {
+		const manager = createProcessManager()
+		const ending = manager.destroy()
+
+		let thrown: unknown
+		try {
+			manager.launch('late', { command: childCommand('exit', '0'), workspace: process.cwd() })
+		} catch (error) {
+			thrown = error
+		}
+		await ending
+
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('protocol')
+	})
+
+	it('refuses a launch whose own options destroyed the registry mid-construction', async () => {
+		const manager = createProcessManager()
+		const scratch = createScratch()
+		const marker = join(scratch.path, 'launched.pid')
+		const teardown: Array<Promise<void>> = []
+		let pid = 0
+
+		try {
+			let thrown: unknown
+			try {
+				manager.launch('racer', {
+					command: childCommand('announce', marker),
+					workspace: process.cwd(),
+					// Reading an option is the one point a caller's own code runs between the destroy
+					// check and the spawned child, so a getter is the narrowest form of that window.
+					get grace() {
+						if (teardown.length === 0) teardown.push(manager.destroy())
+						return 20
+					},
+				})
+			} catch (error) {
+				thrown = error
+			}
+			await Promise.all(teardown)
+			for (let attempt = 0; attempt < 60; attempt += 1) {
+				if (pid === 0 && existsSync(marker)) pid = Number.parseInt(readFileSync(marker, 'utf8'), 10)
+				if (pid > 0 && !holds(() => process.kill(pid, 0))) break
+				await waitForDelay(50)
+			}
+
+			expect(isProcessError(thrown)).toBe(true)
+			expect(isProcessError(thrown) ? thrown.code : undefined).toBe('protocol')
+			expect(manager.count).toBe(0)
+			expect(pid).toBeGreaterThan(0)
+			expect(holds(() => process.kill(pid, 0))).toBe(false)
+		} finally {
+			if (pid > 0) holds(() => process.kill(pid, 'SIGKILL'))
+			scratch.destroy()
+		}
+	})
+
+	it('strands no child when an option getter destroys the registry and then throws', async () => {
+		const manager = createProcessManager()
+		const scratch = createScratch()
+		const marker = join(scratch.path, 'stranded.pid')
+		const teardown: Array<Promise<void>> = []
+		let pid = 0
+
+		try {
+			let thrown: unknown
+			try {
+				manager.launch('thrower', {
+					command: childCommand('announce', marker),
+					workspace: process.cwd(),
+					grace: 20,
+					// A getter that tears the registry down and then refuses. Nothing can release a
+					// child spawned before this ran: the throw leaves no reference to it and the
+					// destroy barrier it started has already settled.
+					get writable(): boolean {
+						if (teardown.length === 0) teardown.push(manager.destroy())
+						throw new Error('option getter refused')
+					},
+				})
+			} catch (error) {
+				thrown = error
+			}
+			await Promise.all(teardown)
+			for (let attempt = 0; attempt < 20; attempt += 1) {
+				if (existsSync(marker)) {
+					pid = Number.parseInt(readFileSync(marker, 'utf8'), 10)
+					break
+				}
+				await waitForDelay(50)
+			}
+
+			expect(thrown).toBeInstanceOf(Error)
+			expect(isProcessError(thrown)).toBe(false)
+			expect(manager.count).toBe(0)
+			// The fixture publishes its own process id the moment it starts, so an absent marker is
+			// the proof that the refused launch spawned nothing at all.
+			expect(existsSync(marker)).toBe(false)
+			expect(pid).toBe(0)
+		} finally {
+			if (pid > 0) holds(() => process.kill(pid, 'SIGKILL'))
+			scratch.destroy()
+		}
+	})
+
 	it('stops one child, a named set, and reports liveness through the boolean overloads', async () => {
 		const manager = createProcessManager()
-		manager.launch('a', { command: childCommand('sleep'), workspace: process.cwd(), grace: 20 })
-		manager.launch('b', { command: childCommand('sleep'), workspace: process.cwd(), grace: 20 })
-		manager.launch('c', { command: childCommand('sleep'), workspace: process.cwd(), grace: 20 })
+		const first = manager.launch('a', {
+			command: childCommand('sleep'),
+			workspace: process.cwd(),
+			grace: 20,
+		})
+		const second = manager.launch('b', {
+			command: childCommand('sleep'),
+			workspace: process.cwd(),
+			grace: 20,
+		})
+		const third = manager.launch('c', {
+			command: childCommand('sleep'),
+			workspace: process.cwd(),
+			grace: 20,
+		})
 
 		const one = await manager.stop('a')
+		await first.exit
+		await waitForDelay()
 		const missing = await manager.stop('a')
 		const set = await manager.stop(['b', 'c'])
+		await Promise.all([second.exit, third.exit])
+		await waitForDelay()
 		const partial = await manager.stop(['c', 'missing'])
 
 		expect(one).toBe(true)
@@ -91,10 +273,20 @@ describe('ProcessManager', () => {
 
 	it('stops every live child on the no-argument overload', async () => {
 		const manager = createProcessManager()
-		manager.launch('a', { command: childCommand('sleep'), workspace: process.cwd(), grace: 20 })
-		manager.launch('b', { command: childCommand('sleep'), workspace: process.cwd(), grace: 20 })
+		const first = manager.launch('a', {
+			command: childCommand('sleep'),
+			workspace: process.cwd(),
+			grace: 20,
+		})
+		const second = manager.launch('b', {
+			command: childCommand('sleep'),
+			workspace: process.cwd(),
+			grace: 20,
+		})
 
 		await manager.stop()
+		await Promise.all([first.exit, second.exit])
+		await waitForDelay()
 
 		expect(manager.count).toBe(0)
 		await manager.destroy()

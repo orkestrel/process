@@ -1,18 +1,21 @@
 # @orkestrel/process
 
 A typed **child-process toolkit** in three tiers. `Process` supervises one
-child: stdout is drained eagerly and framed into lines, stderr is forwarded live
-and kept as a byte-bounded tail, stdin is a writable channel, and termination is
-a bounded `SIGTERM` → grace → `SIGKILL` sequence that awaits the real exit. `run`
-and `runSync` are the one-shot runners — they buffer a child to completion and
-settle with a `RunResult` carrying the captured output, the exit, and `failed` /
-`timedOut`, rejecting with a `ProcessError` by default or resolving the result
-when you pass `reject: false`. `ProcessManager` is a keyed registry of live
-children: `launch` spawns and registers by id, a settled child evicts itself with
-no polling, and `stop` terminates one id, a list, or every child. Every tier is
-observable through a typed `emitter`, and cancellation rides an `AbortSignal`.
-The contracts are host-independent and ship from `@orkestrel/process`; the Node
-engine ships from `@orkestrel/process/server`. Part of the `@orkestrel` line.
+child: stdout is framed into lines under a bounded backlog, stderr is forwarded
+live and kept as a byte-bounded tail, stdin is a writable channel, and
+termination is bounded and reports whether the real exit arrived — `SIGTERM` then
+`SIGKILL` after a grace window on a POSIX host, a whole-tree kill on Windows.
+`run` and `runSync` are the one-shot runners — they buffer a child to completion
+and settle with a `RunResult` carrying the captured output, the exit, and
+`failed` / `expired` / `aborted` / `truncated`, rejecting with a `ProcessError`
+by default or resolving the result when you pass `strict: false`.
+`ProcessManager` is a keyed registry of live children: `launch` spawns and
+registers by id, a settled child evicts itself with no polling, and `stop`
+terminates one id, a list, or every child. Every tier is observable through a
+typed `emitter`, cancellation rides an `AbortSignal`, and no spawn uses a shell,
+so a metacharacter in an argument is data rather than syntax. The contracts are
+host-independent and ship from `@orkestrel/process`; the Node engine ships from
+`@orkestrel/process/server`. Part of the `@orkestrel` line.
 
 ## Install
 
@@ -42,7 +45,7 @@ import { createProcess } from '@orkestrel/process/server'
 const child = createProcess({
 	command: { file: 'node', arguments: ['worker.js'] },
 	workspace: process.cwd(),
-	grace: 5_000, // milliseconds between SIGTERM and SIGKILL on stop
+	grace: 5_000, // POSIX only: milliseconds between SIGTERM and SIGKILL on stop
 })
 
 for await (const line of child.lines) console.log(line)
@@ -52,16 +55,17 @@ await child.destroy()
 
 ## Guide
 
-For the full surface — the supervised `Process`, the `run` / `runSync` runners,
-the keyed `ProcessManager`, the observable `emitter`, the `ProcessError` failure
-type, and the lower-level helpers — see [`guides/process.md`](guides/process.md).
+For the full surface — the supervised `Process`, the `run` / `runSync` / `detach`
+spawns, the keyed `ProcessManager`, the observable `emitter`, the `ProcessError`
+failure type, and the lower-level helpers — see
+[`guides/process.md`](guides/process.md).
 
 ## Package
 
 Two typed entry points per the `exports` field in `package.json`: the
 host-independent contracts, constants, errors, and `isProcessError` guard from
 `@orkestrel/process`, and the Node engine — `Process`, `run`, `runSync`,
-`ProcessManager`, and their factories and helpers — from
+`detach`, `ProcessManager`, and their factories and helpers — from
 `@orkestrel/process/server`.
 
 ## License

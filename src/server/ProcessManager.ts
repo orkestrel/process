@@ -8,7 +8,7 @@ import type {
 	ProcessOptions,
 } from '@src/core'
 import { Emitter } from '@orkestrel/emitter'
-import { createDuplicateError } from '@src/core'
+import { createDuplicateError, createProtocolError } from '@src/core'
 import { Process } from './Process.js'
 
 /**
@@ -16,9 +16,15 @@ import { Process } from './Process.js'
  *
  * @remarks
  * A child launched under an id joins the registry and emits `launch`; when it settles it removes
- * itself and emits `exit`, so `count` and `processes` reflect only live children. `launch` throws
- * a {@link createDuplicateError} when the id is already live — a spawn fault surfaces through the
- * returned child's `exit`, never from `launch`. `destroy` stops every child, then destroys the
+ * itself and emits `exit`, so `count` and `processes` reflect only live children. The id is reserved
+ * before the child is constructed and released when construction throws, so a refused launch never
+ * strands its key. Eviction follows the child's own `exit` promise, which no listener can forge, so
+ * it lands one microtask after the child's public `exit` event: a listener on that event still sees
+ * the child registered. `launch` throws a {@link createDuplicateError} when the id is already live
+ * and a {@link createProtocolError} after `destroy` has begun, including when the caller's own option
+ * getter begins that teardown mid-construction — a spawn fault surfaces through the returned child's
+ * `exit`, never from `launch`. `destroy` awaits every child's own teardown, which destroys each
+ * child's observation emitter and leaves every subscription on it silently inert, then destroys the
  * registry emitter last.
  *
  * @example
@@ -29,7 +35,6 @@ import { Process } from './Process.js'
  * const child = manager.launch('build', {
  * 	command: { file: 'node', arguments: ['build.js'] },
  * 	workspace: process.cwd(),
- * 	grace: 5000,
  * })
  * await child.exit
  * await manager.destroy()
@@ -38,6 +43,8 @@ import { Process } from './Process.js'
 export class ProcessManager implements ProcessManagerInterface {
 	readonly #emitter: Emitter<ProcessManagerEventMap>
 	readonly #children = new Map<string, ProcessInterface>()
+	readonly #ids = new Set<string>()
+	#destroying = false
 	#ending: Promise<void> | undefined
 
 	/**
@@ -86,16 +93,34 @@ export class ProcessManager implements ProcessManagerInterface {
 	/**
 	 * Spawn and register one child under `id`.
 	 *
+	 * @remarks
+	 * {@link Process} reads every option before it spawns, so a caller's own option getter runs while
+	 * nothing has started and a throw from one strands no process. A getter that begins `destroy`
+	 * without throwing is the one remaining race, and it leaves a bounded residual: the child is
+	 * already spawned, so the launch is refused with a {@link createProtocolError} and that child is
+	 * torn down asynchronously, bounded by `grace` plus the confirmation window. The `destroy` barrier
+	 * settled before the refusal, so awaiting it does not cover that teardown.
+	 *
 	 * @param id - The registry key, unique among live children
 	 * @param options - The child construction options
 	 * @returns The launched child
-	 * @throws A {@link ProcessError} coded `duplicate` when `id` is already live
+	 * @throws A {@link ProcessError} coded `duplicate` when `id` is already live, `protocol` when the registry is being destroyed, or `invalid` when an option or command string is malformed
 	 */
 	launch(id: string, options: ProcessOptions): ProcessInterface {
-		if (this.#children.has(id)) throw createDuplicateError(id)
-		const child = new Process(options)
+		if (this.#destroying) throw createProtocolError(id)
+		if (this.#ids.has(id)) throw createDuplicateError(id)
+		this.#ids.add(id)
+		const child = this.#construct(id, options)
+		// Reading an option runs the caller's own code, so teardown can begin between the check above
+		// and the child that is now spawned. A registry being destroyed adopts nothing: the child is
+		// torn down here, the reservation goes back, and the launch is refused.
+		if (this.#destroying) {
+			this.#ids.delete(id)
+			void child.destroy()
+			throw createProtocolError(id)
+		}
 		this.#children.set(id, child)
-		child.emitter.on('exit', (exit) => this.#evict(id, child, exit))
+		void child.exit.then((exit) => this.#evict(id, child, exit))
 		this.#emitter.emit('launch', id)
 		return child
 	}
@@ -104,20 +129,20 @@ export class ProcessManager implements ProcessManagerInterface {
 	 * Terminate the named children and await their exit.
 	 *
 	 * @param ids - The registry keys to stop
-	 * @returns True when every named child stopped, false when any id was not live
+	 * @returns True when every named child was live and its exit was confirmed; false otherwise
 	 */
 	stop(ids: readonly string[]): Promise<boolean>
 	/**
 	 * Terminate one child and await its exit.
 	 *
 	 * @param id - The registry key to stop
-	 * @returns True when the child was live and stopped, false when the id was not live
+	 * @returns True when the child was live and its exit was confirmed; false when the id was not live or the confirmation deadline elapsed
 	 */
 	stop(id: string): Promise<boolean>
 	/**
 	 * Terminate every live child and await their exit.
 	 *
-	 * @returns A promise that resolves after all children stop
+	 * @returns A promise that resolves after every child stops
 	 */
 	stop(): Promise<void>
 	stop(target?: string | readonly string[]): Promise<boolean | void> {
@@ -129,25 +154,41 @@ export class ProcessManager implements ProcessManagerInterface {
 	/**
 	 * Stop every child, then destroy the registry emitter last.
 	 *
+	 * @remarks
+	 * Always resolves, and refuses a later `launch` with a {@link createProtocolError}. Each child is
+	 * destroyed rather than merely stopped, so its own observation emitter is destroyed too and every
+	 * subscription on it goes silently inert.
+	 *
 	 * @returns The stable barrier shared by every call
 	 */
 	destroy(): Promise<void> {
 		if (this.#ending !== undefined) return this.#ending
+		this.#destroying = true
 		this.#ending = this.#teardown()
 		return this.#ending
+	}
+
+	// Releases the reservation when construction throws, so a refused launch strands no id.
+	#construct(id: string, options: ProcessOptions): ProcessInterface {
+		try {
+			return new Process(options)
+		} catch (error) {
+			this.#ids.delete(id)
+			throw error
+		}
 	}
 
 	#evict(id: string, child: ProcessInterface, exit: ProcessExit): void {
 		if (this.#children.get(id) !== child) return
 		this.#children.delete(id)
+		this.#ids.delete(id)
 		this.#emitter.emit('exit', id, exit)
 	}
 
 	async #stopOne(id: string): Promise<boolean> {
 		const child = this.#children.get(id)
 		if (child === undefined) return false
-		await child.stop()
-		return true
+		return child.stop()
 	}
 
 	async #stopMany(ids: readonly string[]): Promise<boolean> {
@@ -156,11 +197,15 @@ export class ProcessManager implements ProcessManagerInterface {
 	}
 
 	async #stopAll(): Promise<void> {
-		await Promise.all([...this.#children.values()].map((child) => child.stop()))
+		await Promise.allSettled([...this.#children.values()].map((child) => child.stop()))
 	}
 
 	async #teardown(): Promise<void> {
-		await Promise.all([...this.#children.values()].map((child) => child.destroy()))
+		await Promise.allSettled([...this.#children.values()].map((child) => child.destroy()))
+		// A destroyed registry holds nothing: a child whose stdio a descendant still holds would
+		// otherwise linger here until a close event that may never arrive.
+		this.#children.clear()
+		this.#ids.clear()
 		this.#emitter.destroy()
 	}
 }
