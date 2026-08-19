@@ -140,6 +140,7 @@ export const guides = (options?: UserConfig): UserConfig =>
 			test: {
 				name: { label: 'guides', color: 'green' },
 				include: ['tests/guides.test.ts'],
+				exclude: ['tests/src/**/*.test.ts', 'tests/app/**/*.test.ts', 'tests/setup.test.ts'],
 				setupFiles: ['./tests/setup.ts'],
 				environment: 'node',
 				browser: { enabled: false },
