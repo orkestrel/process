@@ -62,9 +62,10 @@ export function createDuplicateError(id: string): ProcessError {
  * Creates the failure raised when a run does not complete successfully and rejection is requested.
  *
  * @param result - The buffered run outcome that failed
+ * @param cause - The underlying spawn error, when one ended the run
  * @returns A typed run failure carrying its {@link RunResult}
  */
-export function createRunError(result: RunResult): ProcessError {
+export function createRunError(result: RunResult, cause?: unknown): ProcessError {
 	const reason = result.timedOut
 		? 'timed out'
 		: result.signal !== null
@@ -73,6 +74,7 @@ export function createRunError(result: RunResult): ProcessError {
 	return new ProcessError(`Command '${result.command}' ${reason}`, {
 		code: result.timedOut ? 'timeout' : 'spawn',
 		context: { command: result.command, code: result.code, signal: result.signal },
+		...(cause === undefined ? {} : { cause }),
 		result,
 	})
 }

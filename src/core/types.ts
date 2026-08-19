@@ -47,12 +47,16 @@ export interface ProcessExit {
  * observer subscribes to, alongside the `lines` stream and the `exit` promise.
  *
  * @remarks
- * Declared as a `type` alias so it satisfies the emitter's `EventMap` constraint structurally. A
- * listener throw is isolated by the emitter and routed to its `error` handler, never onto this map.
+ * Declared as a `type` alias so it satisfies the emitter's `EventMap` constraint structurally. The
+ * `error` event carries a child fault — a failure to spawn or a process-level error. It is distinct
+ * from the `error` handler in {@link ProcessOptions}: a listener throw is isolated by the emitter and
+ * routed to that handler, never emitted as this `error` event.
  */
 export type ProcessEventMap = {
 	/** A decoded standard-error chunk arrived. */
 	readonly stderr: readonly [chunk: string]
+	/** The child emitted an error — a spawn fault or process-level failure — carrying its cause. */
+	readonly error: readonly [error: unknown]
 	/** The child settled — its terminal state, delivered once. */
 	readonly exit: readonly [exit: ProcessExit]
 }
@@ -89,8 +93,8 @@ export interface ProcessOptions {
  * `lines` is pumped eagerly: stdout is drained whether or not a consumer iterates, so `exit`
  * resolves and a late consumer still receives every line. `evidence` is the decoded, byte-bounded
  * stderr tail — the diagnostic to attach to a failed exit. The typed `emitter` carries the live
- * `stderr` chunks and the terminal `exit`, alongside the `exit` promise. `send` never throws; it
- * returns whether the line reached an open channel. `stop` is idempotent.
+ * `stderr` chunks, the child `error` cause, and the terminal `exit`, alongside the `exit` promise.
+ * `send` never throws; it returns whether the line reached an open channel. `stop` is idempotent.
  */
 export interface ProcessInterface {
 	/** The typed lifecycle observation surface. */

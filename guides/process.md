@@ -106,7 +106,7 @@ The contracts and options, all from `@orkestrel/process`.
 | ------------------------- | --------- | ------------------------------------------------------------------------------------------ |
 | `ProcessCommand`          | interface | One spawnable command — `file`, `arguments`, optional `environment` and `input`.           |
 | `ProcessExit`             | interface | The terminal state — an exit `code`, or the `signal` that ended the child.                 |
-| `ProcessEventMap`         | type      | A `Process`'s events — `stderr(chunk)` and `exit(exit)`.                                   |
+| `ProcessEventMap`         | type      | A `Process`'s events — `stderr(chunk)`, `error(cause)`, and `exit(exit)`.                  |
 | `ProcessOptions`          | interface | `Process` construction — `command`, `workspace`, `grace`, and optional settings.           |
 | `ProcessInterface`        | interface | The supervised-child surface — `emitter` / `lines` / `evidence` / `exit` + methods.        |
 | `RunResult`               | interface | A one-shot outcome — buffered `stdout` / `stderr`, the exit, `failed`, `timedOut`.         |
@@ -161,8 +161,8 @@ name ids and `void` when you stop every child.
 `readline` whether or not you iterate `lines`, so `exit` resolves and a late consumer still receives
 every framed line, including a final line written without a trailing newline. Standard error is
 decoded and forwarded live as the `stderr` event, while a byte-bounded raw tail is retained as
-`evidence` — the diagnostic to attach to a failed exit. The typed `emitter` also carries the
-terminal `exit`, alongside the `exit` promise.
+`evidence` — the diagnostic to attach to a failed exit. The typed `emitter` also carries the child
+`error` cause on a spawn fault and the terminal `exit`, alongside the `exit` promise.
 
 `ProcessOptions` requires `command`, `workspace`, and `grace`; the rest are optional:
 
@@ -174,7 +174,7 @@ terminal `exit`, alongside the `exit` promise.
 | `evidence`  | `number`                        | no       | Maximum retained stderr tail in bytes. Default: `PROCESS_EVIDENCE` (`2_048`).                              |
 | `writable`  | `boolean`                       | no       | When `true`, stdin stays open for `send`; when `false` or omitted, stdin closes after any initial `input`. |
 | `signal`    | `AbortSignal`                   | no       | Aborting this signal terminates the child through the same bounded `stop`.                                 |
-| `on`        | `EmitterHooks<ProcessEventMap>` | no       | Initial `stderr` and `exit` listeners installed at construction.                                           |
+| `on`        | `EmitterHooks<ProcessEventMap>` | no       | Initial `stderr`, `error`, and `exit` listeners installed at construction.                                 |
 | `error`     | `EmitterErrorHandler`           | no       | Receives a listener's throw, isolated from the engine.                                                     |
 
 `stop` terminates the child and awaits its exit. It sends `SIGTERM`, waits up to `grace`
@@ -352,18 +352,21 @@ try {
 Both `Process` and `ProcessManager` expose a typed `emitter` for fire-and-forget observers —
 logging, metrics, tracing. Subscribe through `child.emitter.on(...)` or `manager.emitter.on(...)`,
 or wire initial listeners through the `on` option; supply an `error` handler to receive a listener's
-throw. Emitting is observation-only: every event fires after the transition it reports, and a
-throwing listener is isolated and routed to the `error` handler, never onto a domain event, so a
-buggy observer cannot corrupt the engine.
+throw. The `error` handler and the `Process` `error` event are distinct: the handler receives a
+listener's own throw, while the `error` event carries a child fault. Emitting is observation-only:
+every event fires after the transition it reports, and a throwing listener is isolated and routed to
+the `error` handler, never onto a domain event, so a buggy observer cannot corrupt the engine.
 
-| Event map                | Events                          |
-| ------------------------ | ------------------------------- |
-| `ProcessEventMap`        | `stderr(chunk)` · `exit(exit)`  |
-| `ProcessManagerEventMap` | `launch(id)` · `exit(id, exit)` |
+| Event map                | Events                                          |
+| ------------------------ | ----------------------------------------------- |
+| `ProcessEventMap`        | `stderr(chunk)` · `error(cause)` · `exit(exit)` |
+| `ProcessManagerEventMap` | `launch(id)` · `exit(id, exit)`                 |
 
-A `Process` emits `stderr` for each decoded standard-error chunk and `exit` once, with the terminal
-`ProcessExit`, when the child settles. A `ProcessManager` emits `launch` when a child joins the
-registry and `exit`, with the child's id and terminal state, when it settles and leaves.
+A `Process` emits `stderr` for each decoded standard-error chunk, `error` with its cause when the
+child fails to spawn or errors, and `exit` once, with the terminal `ProcessExit`, when the child
+settles. A spawn fault emits `error` and then still resolves `exit`. A `ProcessManager` emits
+`launch` when a child joins the registry and `exit`, with the child's id and terminal state, when it
+settles and leaves.
 
 ```ts
 import { createProcess } from '@orkestrel/process/server'

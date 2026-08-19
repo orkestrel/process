@@ -17,8 +17,9 @@ import { killProcess, mergeEnvironment, trimTail } from './helpers.js'
  * Standard output is drained eagerly through `readline`, so `exit` resolves and a late consumer of
  * `lines` still receives every framed line, including a final line written without a trailing
  * newline. Standard error is decoded and forwarded live as the `stderr` event while a byte-bounded
- * raw tail is retained as `evidence`. The typed `emitter` also carries the terminal `exit`,
- * alongside the `exit` promise. `stop` terminates the child through `SIGTERM`, then `SIGKILL` after
+ * raw tail is retained as `evidence`. The typed `emitter` also carries the child `error` cause on a
+ * spawn fault and the terminal `exit`, alongside the `exit` promise. `stop` terminates the child
+ * through `SIGTERM`, then `SIGKILL` after
  * `grace`, and is idempotent; `destroy` stops the child and destroys the emitter last.
  *
  * @example
@@ -79,7 +80,7 @@ export class Process implements ProcessInterface {
 		this.#reader = createInterface({ input: this.#child.stdout, crlfDelay: Infinity })
 		this.#reader.on('line', this.#push.bind(this))
 		this.#reader.once('close', this.#finish.bind(this))
-		this.#child.once('error', () => undefined)
+		this.#child.once('error', (cause: unknown) => this.#emitter.emit('error', cause))
 		this.#child.once('close', this.#close.bind(this))
 		this.#child.stdin.on('error', () => undefined)
 		this.#child.stderr.on('data', this.#retain.bind(this))

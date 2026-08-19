@@ -137,6 +137,37 @@ describe('Process', () => {
 		expect(again).toEqual(once)
 	})
 
+	it('emits the error cause on a spawn fault while still resolving exit', async () => {
+		const errors = createRecorder<readonly [unknown]>()
+		const child = createProcess({
+			command: { file: 'orkestrel-nonexistent-binary', arguments: [] },
+			workspace: process.cwd(),
+			grace: 20,
+			on: { error: errors.handler },
+		})
+
+		const exit = await child.exit
+
+		expect(errors.count).toBe(1)
+		expect(errors.calls[0]?.[0]).toBeInstanceOf(Error)
+		expect(exit.code).not.toBe(0)
+	})
+
+	it('emits no error event when the child exits cleanly', async () => {
+		const errors = createRecorder<readonly [unknown]>()
+		const child = createProcess({
+			command: childCommand('exit', '0'),
+			workspace: process.cwd(),
+			grace: 20,
+			on: { error: errors.handler },
+		})
+
+		const exit = await child.exit
+
+		expect(exit).toEqual({ code: 0, signal: null })
+		expect(errors.count).toBe(0)
+	})
+
 	it('destroys the observation emitter after stopping the child', async () => {
 		const child = createProcess({
 			command: childCommand('exit', '0'),

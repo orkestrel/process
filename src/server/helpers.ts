@@ -234,6 +234,7 @@ export async function run(command: ProcessCommand, options?: RunOptions): Promis
 	let stdout: Buffer = Buffer.alloc(0)
 	let stderr: Buffer = Buffer.alloc(0)
 	let timedOut = false
+	let launchCause: unknown
 	let killTimer: ReturnType<typeof setTimeout> | undefined
 	let timeoutTimer: ReturnType<typeof setTimeout> | undefined
 	let done = false
@@ -263,9 +264,10 @@ export async function run(command: ProcessCommand, options?: RunOptions): Promis
 	child.stderr.on('data', (chunk: unknown) => {
 		if (Buffer.isBuffer(chunk)) stderr = trimHead(Buffer.concat([stderr, chunk]), limit)
 	})
-	child.once('error', () => {
+	child.once('error', (cause: unknown) => {
 		if (done) return
 		done = true
+		launchCause = cause
 		cleanup.abort()
 		clearTimeout(killTimer)
 		clearTimeout(timeoutTimer)
@@ -298,7 +300,7 @@ export async function run(command: ProcessCommand, options?: RunOptions): Promis
 	}
 
 	const result = await settled.promise
-	if (result.failed && reject) throw createRunError(result)
+	if (result.failed && reject) throw createRunError(result, launchCause)
 	return result
 }
 
@@ -353,6 +355,6 @@ export function runSync(command: ProcessCommand, options?: RunOptions): RunResul
 		timedOut,
 		limit,
 	)
-	if (result.failed && reject) throw createRunError(result)
+	if (result.failed && reject) throw createRunError(result, outcome.error)
 	return result
 }

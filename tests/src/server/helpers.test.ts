@@ -136,6 +136,20 @@ describe('run', () => {
 		expect(result.failed).toBe(true)
 	})
 
+	it('threads the spawn cause onto the rejected process error', async () => {
+		let thrown: unknown
+		try {
+			await run(
+				{ file: 'orkestrel-nonexistent-binary.exe', arguments: [] },
+				{ workspace: process.cwd() },
+			)
+		} catch (error) {
+			thrown = error
+		}
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.cause : undefined).toBeInstanceOf(Error)
+	})
+
 	it('terminates a run when its signal aborts', async () => {
 		const controller = new AbortController()
 		const pending = run(childCommand('hang'), {
@@ -173,6 +187,20 @@ describe('runSync', () => {
 		}
 		expect(isProcessError(thrown)).toBe(true)
 		expect(isProcessError(thrown) ? thrown.result?.code : undefined).toBe(6)
+	})
+
+	it('threads the spawn cause onto the rejected process error', () => {
+		let thrown: unknown
+		try {
+			runSync(
+				{ file: 'orkestrel-nonexistent-binary.exe', arguments: [] },
+				{ workspace: process.cwd() },
+			)
+		} catch (error) {
+			thrown = error
+		}
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.cause : undefined).toBeInstanceOf(Error)
 	})
 
 	// A `.cmd` batch file is a Windows-only construct: requiresShell returns false off win32, so the
