@@ -165,3 +165,79 @@ meaning each, every one a piece a public entry point composes.
 `tests/guides.test.ts` (59↔59 export parity both directions + 12 executed fences),
 `tests/src/core/index.test.ts` + `tests/src/server/index.test.ts` (barrel membership).
 Gates: `format:check` → `lint:check` → `check` → `build` → `npm test` (src, policy, config, guides).
+
+## Upstream adopters — the 0.0.3 consumers, their republish state, and what to look for
+
+Four repos adopted this package. supervisor consumes it directly at runtime; mcp and sea gained it as
+a runtime dependency; scaffold gained it as a RUNTIME dependency of the fleet's tooling package, which
+has fleet-wide consequences (see the scaffold entry). All three upstream repos were release-prepped
+against the published 0.0.3 (registry-resolved installs, versions bumped from what the registry
+serves, own gates green) and the owner republishes them.
+
+### supervisor (committed in its own repo; not republished in this pass)
+
+`ProviderExecutionInterface.send` is now `Promise<boolean>` (the package's delivery confirmation
+propagated up); `ProviderExecution.stop()` keeps its `Promise<void>` bounded-termination contract by
+awaiting and discarding the package boolean; `ProviderExecutor` awaits the confirmation so an
+undelivered steer answers `PROTOCOL` instead of success; `CLIProvider` needed no change (proven, not
+assumed). Supervisor pins `@orkestrel/process ^0.0.3`, registry-resolved.
+
+### mcp — prepared as 0.0.19 (was 0.0.18)
+
+- The one behavioral change: `StdioClientTransport.send` now AWAITS the package `send` and rejects
+  with its established not-connected error when the answer is `false`. The unawaited 0.0.2 form was a
+  floating promise that resolved before delivery — the compiler does not catch this pattern, so any
+  future consumer of `Process.send` inside an `async (): Promise<void>` deserves the same scrutiny.
+- A red-first test pins it: a 256 KiB payload to a never-reading child stays pending, then rejects
+  when `close()` destroys the channel. Probe fact worth keeping: on Windows, a child closing its own
+  stdin read handle does NOT fault the parent's write — only channel death under an undelivered write
+  produces `false` with a live-then-dead peer.
+- CARRIED DEBT (not this release): `guides/mcp.md` prose near line 4187 still describes the pre-0.0.2
+  `node:child_process` transport (replace-env, kill-on-close). Guide parity passes because it proves
+  names, not prose. Refresh it in mcp's next documentation pass.
+- Consumer ripple: supervisor lists mcp in `devDependencies` (`^0.0.18`) — re-pin to `^0.0.19` on
+  supervisor's next dependency pass.
+
+### sea — prepared as 0.0.9 (was 0.0.8)
+
+- `result.timedOut` → `result.expired`; both `reject: false` sites → `strict: false`; `openBrowser`
+  now launches through the package `detach` (detached, unref'd, output-discarded — the semantics its
+  old `void run(...)` could not express; the `invalid` throw path is provably unreachable from its
+  validated URLs).
+- RECORDED SUCCESSOR UNIT (sea's, not this package's): `SEAOptions` exposes no `timeout`, so its
+  `runShell` sites cannot bound a signing tool that spawns stdio-inheriting descendants. Measured
+  inert on Windows (`runSync` returns at child exit and drops later grandchild bytes) — a POSIX host
+  may read to EOF differently. Adding `SEAOptions.timeout` is the fix if it ever bites.
+- Consumer ripple: supervisor lists sea in `devDependencies` (`^0.0.8`) — re-pin to `^0.0.9`;
+  supervisor's `ApplicationServerRunner` binds sea's `openBrowser` as its default opener, so it
+  inherits the corrected detach semantics with no code change.
+
+### scaffold — prepared as 0.0.44 (was 0.0.43) — THE FLEET-WIDE ONE
+
+- The one code change: its git inventory (`src/bin/CLI.ts`) runs through `runSync` with
+  `strict: false`; bare `git` resolves through PATH+PATHEXT with NO shell (measured: `git.EXE`, no
+  `DEP0190`).
+- scaffold now carries `@orkestrel/process` in runtime `dependencies`. scaffold is a devDependency of
+  EVERY fleet package, so: (a) scaffold's own publish is obligatory (a runtime-dep addition moves the
+  published surface), and (b) the next scaffold propagation wave re-pins `@orkestrel/scaffold` to
+  `^0.0.44` across ALL packages — on-disk and off-disk — which pulls this package transitively into
+  every dev tree. The deferred release-wave runbook
+  (`supervisor/.orkestrel/scaffold-0.0.42-propagation.md`) was written for 0.0.43 and was never
+  executed: SUPERSEDE it — the wave now targets 0.0.44 directly, same procedure.
+- The version-coupled cascade was reset for 0.0.44 (the self-pin in `src/core/constants.ts`, the
+  golden digest in `tests/src/core/compilers.test.ts`, the fixture pin in
+  `tests/src/core/fixtures/setup-false-manifest.txt`). Any future scaffold bump repeats exactly that
+  three-file reset.
+- scaffold's `guides/process.md` MIRROR still documents the 0.0.2 surface (shared `RunOptions`,
+  synchronous boolean `send`, no `truncated`, four error codes, `requiresShell`). Refresh the mirror
+  from this package's canonical guide during the propagation wave.
+
+### Post-republish verification recipe (for whoever runs it)
+
+1. `npm view @orkestrel/{mcp,sea,scaffold} version` serves 0.0.19 / 0.0.9 / 0.0.44 (a first-publish or
+   bump can lag on the CDN — re-read before calling a failure).
+2. In each repo: `npm ls @orkestrel/process` exits 0 and resolves 0.0.3 from the registry.
+3. supervisor's later dependency pass: re-pin mcp `^0.0.19` and sea `^0.0.9` in `devDependencies`.
+4. The scaffold 0.0.44 propagation wave is its own owner-driven campaign (the superseded runbook has
+   the per-target visit procedure); it is NOT part of this package's 0.0.4 work — but 0.0.4's
+   publish, if it happens first, changes the pin the wave re-declares, so coordinate the order.
