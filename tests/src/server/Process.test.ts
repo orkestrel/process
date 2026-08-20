@@ -380,7 +380,12 @@ describe('Process', () => {
 
 		expect(errors.count).toBe(1)
 		expect(errors.calls[0]?.[0]).toBeInstanceOf(Error)
-		expect(exit.code).not.toBe(0)
+		// The documented outcome is the host's negative errno rather than any non-zero code, and
+		// `null` satisfies "not zero" while carrying none of it. The errno is the host's, so its sign
+		// is the property a caller can act on.
+		const code = exit.code
+		if (code === null) throw new Error('the spawn fault reported no code')
+		expect(code).toBeLessThan(0)
 	})
 
 	it('emits no error event when the child exits cleanly', async () => {

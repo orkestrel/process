@@ -15,12 +15,11 @@ import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
 import * as ts from 'typescript'
 
-it('refuses a deliberately absent public export path', () => {
-	const require = createRequire(import.meta.url)
-	expect(() => require.resolve('@orkestrel/process/absent')).toThrow(/Package subpath/u)
-})
-
-it('loads the packed artifact through every public runtime entry', () => {
+// The consumer this proof builds is the only subject that answers for the published artifact. A
+// specifier resolved from this repository reaches the repository's own manifest, or the copy of an
+// earlier release installed under `node_modules`, so every assertion below is rooted in the
+// temporary consumer instead.
+it('installs the packed artifact and drives its entries, declarations, and resolution modes', () => {
 	const root = fileURLToPath(new URL('../', import.meta.url))
 	const scratch = mkdtempSync(join(tmpdir(), 'orkestrel-process-distribution-'))
 
@@ -59,7 +58,12 @@ it('loads the packed artifact through every public runtime entry', () => {
 				install.error === undefined
 					? undefined
 					: Object.getOwnPropertyDescriptor(install.error, 'code')?.value
-			if (code !== 'EPERM' && !install.stderr.includes('EPERM')) {
+			const denied = code === 'EPERM' || install.stderr.includes('EPERM')
+			// `--mode release` is how the publish gate runs this file. An install that never happened
+			// is a failure there rather than a fallback: extracting the tarball proves that it unpacks
+			// and says nothing about whether a consumer can install it. An ordinary local run inside a
+			// sandbox that denies a nested install still falls back.
+			if (!denied || import.meta.env.MODE === 'release') {
 				throw new Error(`npm install failed: ${install.error?.message ?? install.stderr}`)
 			}
 			const extraction = join(scratch, 'extraction')
@@ -193,6 +197,105 @@ it('loads the packed artifact through every public runtime entry', () => {
 			expect(coreCall).toBe(false)
 			expect(serverCall).toBe('node --version')
 		}
+
+		// The guard recognizes an error the other module format constructed. Both copies are the
+		// installed package's own, so this reads the shipped brand rather than the source's.
+		writeFileSync(
+			join(consumer, 'brand.mjs'),
+			[
+				"import { createRequire } from 'node:module'",
+				"import { isProcessError } from '@orkestrel/process'",
+				'const require = createRequire(import.meta.url)',
+				"const commonJS = require('@orkestrel/process')",
+				"const branded = new commonJS.ProcessError('invalid command', { code: 'invalid' })",
+				'console.log(JSON.stringify({recognized:isProcessError(branded),plain:isProcessError(new Error("invalid command"))}))',
+			].join('\n'),
+		)
+		const branded = spawnSync(process.execPath, [join(consumer, 'brand.mjs')], {
+			cwd: consumer,
+			encoding: 'utf8',
+		})
+		if (branded.error !== undefined || branded.status !== 0) {
+			throw new Error(`brand.mjs failed: ${branded.error?.message ?? branded.stderr}`)
+		}
+		const brand: unknown = JSON.parse(branded.stdout)
+		if (typeof brand !== 'object' || brand === null) {
+			throw new Error('brand.mjs returned no result record')
+		}
+		expect(Object.getOwnPropertyDescriptor(brand, 'recognized')?.value).toBe(true)
+		expect(Object.getOwnPropertyDescriptor(brand, 'plain')?.value).toBe(false)
+
+		// The `moduleResolution` floor `README.md` states, compiled rather than asserted as a sentence.
+		// Each mode builds a program over one consumer file importing both faces, with library checking
+		// on so the package's own declarations are read instead of skipped.
+		const consumerSource = join(consumer, 'consumer.ts')
+		writeFileSync(
+			consumerSource,
+			[
+				"import { isProcessError, type ProcessExit } from '@orkestrel/process'",
+				"import { formatCommand } from '@orkestrel/process/server'",
+				"export const recognized: boolean = isProcessError(new Error('plain'))",
+				"export const line: string = formatCommand({ file: 'node', arguments: ['--version'] })",
+				'export const settled: ProcessExit = { code: 0, signal: null }',
+			].join('\n'),
+		)
+		const modes = [
+			{
+				name: 'node16',
+				module: ts.ModuleKind.Node16,
+				resolution: ts.ModuleResolutionKind.Node16,
+				supported: true,
+			},
+			{
+				name: 'nodenext',
+				module: ts.ModuleKind.NodeNext,
+				resolution: ts.ModuleResolutionKind.NodeNext,
+				supported: true,
+			},
+			{
+				name: 'bundler',
+				module: ts.ModuleKind.Preserve,
+				resolution: ts.ModuleResolutionKind.Bundler,
+				supported: true,
+			},
+			// The firing control is the one named mode the requirement excludes: the published manifest
+			// carries no `typesVersions`, so `/server` resolves no declarations under classic Node
+			// resolution and the same consumer source stops compiling.
+			{
+				name: 'node10',
+				module: ts.ModuleKind.CommonJS,
+				resolution: ts.ModuleResolutionKind.Node10,
+				supported: false,
+			},
+		]
+		const diagnosed: string[] = []
+		const compiled: string[] = []
+		for (const mode of modes) {
+			const program = ts.createProgram([consumerSource], {
+				module: mode.module,
+				moduleResolution: mode.resolution,
+				target: ts.ScriptTarget.ESNext,
+				strict: true,
+				skipLibCheck: false,
+				noEmit: true,
+				types: ['node'],
+				typeRoots: [join(root, 'node_modules', '@types')],
+			})
+			const diagnostics = program
+				.getSemanticDiagnostics()
+				.concat(program.getSyntacticDiagnostics(), program.getOptionsDiagnostics())
+			if (diagnostics.length > 0) {
+				diagnosed.push(
+					`${mode.name}: ${diagnostics
+						.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, ' '))
+						.join(' | ')}`,
+				)
+				continue
+			}
+			compiled.push(mode.name)
+		}
+		expect(compiled).toEqual(modes.filter((mode) => mode.supported).map((mode) => mode.name))
+		expect(diagnosed).toHaveLength(modes.filter((mode) => !mode.supported).length)
 	} finally {
 		rmSync(scratch, { recursive: true, force: true })
 	}

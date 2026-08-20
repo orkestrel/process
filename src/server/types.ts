@@ -16,6 +16,10 @@
  * takes the slice of this contract it reads: `exitCode` and `signalCode` are the host's
  * authoritative liveness answer, `pid` addresses a POSIX process group, `kill` delivers one signal,
  * and `once` reports the native exit.
+ *
+ * A non-detached child stays in its caller's process group, so no group carries its pid. `kill` is
+ * the route that reaches it: `killProcess` signals the negated `pid` first and falls back to `kill`
+ * when the host reports that no group owns that pid.
  */
 export interface ProcessChild {
 	/** The process id the host assigned, or `undefined` when the spawn never produced one. */

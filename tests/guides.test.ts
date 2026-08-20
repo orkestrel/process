@@ -4,7 +4,9 @@
 // proof, so a fence documenting a value the code contradicts is exactly what the transcriptions
 // catch. Change a fence, change its transcription.
 
-import { readFileSync } from 'node:fs'
+import { Buffer } from 'node:buffer'
+import { existsSync, readFileSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
 	createGuide,
@@ -38,15 +40,31 @@ import {
 	PROCESS_TIMER,
 } from '@src/core'
 import {
+	buildExecutableCandidates,
+	buildPlatformSpawn,
 	buildRunResult,
 	buildSpawn,
 	createProcess,
 	createProcessManager,
 	formatCommand,
+	isFile,
 	mergeEnvironment,
+	mergePlatformEnvironment,
 	quoteArgument,
+	readPlatformVariable,
+	readVariable,
+	resolveExecutable,
+	retainChunk,
 	run,
 	runSync,
+	trimHead,
+	trimTail,
+	validateBytes,
+	validateCommand,
+	validateEnvironment,
+	validateText,
+	validateTimer,
+	validateWorkspace,
 } from '@src/server'
 
 /** Every fence language this package's guides are allowed to use. */
@@ -495,6 +513,22 @@ describe('flagship fences', () => {
 		expect(keys.includes('SYSTEMROOT')).toBe(process.platform === 'win32')
 	})
 
+	// The absence of `PATH` is the half a consumer acts on: it is why an isolated command needs an
+	// absolute `file`. Windows is excluded because libuv injects its own set into an explicit
+	// environment there, so what that host leaves behind is a separate claim this one cannot settle.
+	it.skipIf(process.platform === 'win32')('leaves an isolated POSIX child no PATH', () => {
+		const printer = 'process.stdout.write(Object.keys(process.env).sort().join(","))'
+		const keys = runSync({
+			file: process.execPath,
+			arguments: ['-e', printer],
+			environment: { TOKEN: 'a' },
+			isolated: true,
+		}).stdout.split(',')
+
+		expect(keys.includes('TOKEN')).toBe(true)
+		expect(keys.includes('PATH')).toBe(false)
+	})
+
 	it('settles the run fence in both its rejecting and inspecting forms', async () => {
 		const version = await run({ file: 'node', arguments: ['--version'] })
 		expect(version.failed).toBe(false)
@@ -596,5 +630,171 @@ describe('flagship fences', () => {
 		expect(result.failed).toBe(true)
 		expect(createRunError(result).code).toBe('spawn')
 		expect(createRunError(result).result).toBe(result)
+	})
+})
+
+// ── Unfenced TSDoc example transcriptions ────────────────────────────────────
+//
+// Sixteen exports appear in no `guides/process.md` fence, so the example gate accepts their TSDoc
+// `@example` block in place of one. A block satisfies that gate by existing, which leaves the value
+// its comment claims unasserted. Each row below runs one such block against the real barrel and
+// asserts that value, so a changed return value fails this gate. Change an `@example`, change its row.
+const EXAMPLES = Object.freeze([
+	{
+		name: 'buildPlatformSpawn',
+		value: buildPlatformSpawn({ file: 'node', arguments: ['--version'] }, 'node', {}, 'linux')
+			.verbatim,
+		claim: false,
+	},
+	{
+		name: 'buildExecutableCandidates',
+		value: buildExecutableCandidates('git', 'C:\\work', { PATH: 'C:\\bin' }, 'win32'),
+		claim: [
+			'C:\\work\\git',
+			'C:\\work\\git.COM',
+			'C:\\work\\git.EXE',
+			'C:\\work\\git.BAT',
+			'C:\\work\\git.CMD',
+			'C:\\bin\\git',
+			'C:\\bin\\git.COM',
+			'C:\\bin\\git.EXE',
+			'C:\\bin\\git.BAT',
+			'C:\\bin\\git.CMD',
+		],
+	},
+	{ name: 'isFile', value: isFile(process.execPath), claim: true },
+	{
+		name: 'mergePlatformEnvironment',
+		value: mergePlatformEnvironment('linux', {}, false, { TOKEN: 'a' }, { TOKEN: undefined }),
+		claim: {},
+	},
+	{
+		name: 'readPlatformVariable',
+		value: readPlatformVariable({ Path: 'C:\\Windows' }, 'PATH', 'win32'),
+		claim: 'C:\\Windows',
+	},
+	{ name: 'readVariable', value: readVariable({ PATH: '/usr/bin' }, 'PATH'), claim: '/usr/bin' },
+	{ name: 'trimHead', value: trimHead(Buffer.from('hello'), 3), claim: Buffer.from('hel') },
+	{ name: 'trimTail', value: trimTail(Buffer.from('hello'), 3), claim: Buffer.from('llo') },
+	{ name: 'validateBytes', value: validateBytes(1_024, "option 'limit'", 0), claim: undefined },
+	{
+		name: 'validateCommand',
+		value: validateCommand({ file: 'git', arguments: ['status'] }),
+		claim: undefined,
+	},
+	{ name: 'validateEnvironment', value: validateEnvironment({ TOKEN: 'a' }), claim: undefined },
+	{
+		name: 'validateText',
+		value: validateText('status', 'command argument', false),
+		claim: undefined,
+	},
+	{ name: 'validateTimer', value: validateTimer(5_000, "option 'grace'"), claim: undefined },
+	{ name: 'validateWorkspace', value: validateWorkspace(process.cwd()), claim: undefined },
+])
+
+describe('unfenced TSDoc examples', () => {
+	for (const row of EXAMPLES) {
+		it(`returns what ${row.name}'s example claims`, () => {
+			expect(row.value).toStrictEqual(row.claim)
+		})
+	}
+
+	it('retains the byte count retainChunk\u2019s example claims', () => {
+		const chunks: Buffer[] = []
+		const counts = [0, 0]
+		retainChunk(Buffer.from('hello'), chunks, counts, 3)
+
+		expect(counts[1]).toBe(3)
+	})
+
+	// The example claims one value per host, so each host's claim is its own case. Off Windows
+	// `buildExecutableCandidates` returns an empty list, because command lookup belongs to the host's
+	// own spawn there, so the helper reports nothing and the caller keeps the bare name.
+	it.skipIf(process.platform === 'win32')(
+		'keeps the bare name its example claims off Windows',
+		() => {
+			expect(resolveExecutable('git', {}) ?? 'git').toBe('git')
+		},
+	)
+
+	it.skipIf(process.platform !== 'win32')(
+		'resolves the absolute path its example claims on Windows',
+		() => {
+			expect(isAbsolute(resolveExecutable('git', {}) ?? 'git')).toBe(true)
+		},
+	)
+})
+
+// ── README parity ────────────────────────────────────────────────────────────
+//
+// `README.md` ships inside the published package, so it carries the two assertions the guide
+// carries: every backticked name resolves, and every relative link exists.
+
+/**
+ * Backticked `README.md` tokens that name a TypeScript setting, the package line, or a file rather
+ * than a package export.
+ *
+ * Naming one here is what makes it deliberate, and the second assertion over this list fails when a
+ * name here becomes an export, so the list cannot rot.
+ */
+const README_FOREIGN: readonly string[] = Object.freeze([
+	'@orkestrel',
+	'bundler',
+	'exports',
+	'guides/process.md',
+	'moduleResolution',
+	'node16',
+	'nodenext',
+	'package.json',
+])
+
+describe('README', () => {
+	const readme = requireValue(files['README.md'], 'Missing file: README.md')
+	const guide = requireValue(files['guides/process.md'], 'Missing file: guides/process.md')
+	const published = FACES.flatMap((face) =>
+		requireValue(SOURCES.get(face.specifier), `Unmapped specifier: ${face.specifier}`)
+			.surface()
+			.map((symbol) => symbol.name),
+	)
+	const documented = new Set(
+		Array.from(
+			guide.replace(/```[\s\S]*?```/gu, '').matchAll(/`([^`\n]+)`/gu),
+			(match) => match[1] ?? '',
+		),
+	)
+	const tokens = Array.from(
+		new Set(
+			Array.from(
+				readme.replace(/```[\s\S]*?```/gu, '').matchAll(/`([^`\n]+)`/gu),
+				(match) => match[1] ?? '',
+			),
+		),
+	)
+
+	it('backticks only published exports, documented guide names, and listed foreign tokens', () => {
+		expect(tokens.length).toBeGreaterThan(0)
+		expect(tokens.filter((token) => published.includes(token)).length).toBeGreaterThan(0)
+		expect(
+			tokens.filter(
+				(token) =>
+					!published.includes(token) && !documented.has(token) && !README_FOREIGN.includes(token),
+			),
+		).toEqual([])
+	})
+
+	it('names no foreign token that the package publishes', () => {
+		expect(README_FOREIGN.filter((token) => published.includes(token))).toEqual([])
+	})
+
+	it('resolves every relative link', () => {
+		const links = createGuide(readme)
+			.links()
+			.filter((href) => !isExternalLink(href))
+		expect(links.length).toBeGreaterThan(0)
+		expect(
+			links
+				.map((href) => resolveLink('README.md', href))
+				.filter((path) => !existsSync(new URL(path, root))),
+		).toEqual([])
 	})
 })

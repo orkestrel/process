@@ -1,4 +1,3 @@
-import { createRequire } from 'node:module'
 import * as entry from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { isConstructor, isFunction, isRecord } from '@orkestrel/contract'
@@ -30,7 +29,10 @@ describe('src core entry', () => {
 		expect(entry.isProcessError(new Error('spawn failed'))).toBe(false)
 	})
 
-	it('recognizes genuine errors across package copies and module formats', () => {
+	// The same recognition across the two built module formats is proved in
+	// `tests/distribution.test.ts`, against the artifact a consumer installs. This project reads
+	// source alone, so it runs on a tree that was never built.
+	it('recognizes genuine errors across package copies', () => {
 		const firstModules = import.meta.glob('../../../src/core/errors.ts', {
 			eager: true,
 			query: '?copy=first',
@@ -66,21 +68,5 @@ describe('src core entry', () => {
 		expect(firstGuard(other)).toBe(true)
 		expect(firstGuard(new Error('invalid command'))).toBe(false)
 		expect(firstGuard(lookalike)).toBe(false)
-
-		const builtModules = import.meta.glob('../../../dist/src/core/index.js', { eager: true })
-		const esm: unknown = Object.values(builtModules)[0]
-		const commonJS: unknown = createRequire(import.meta.url)('../../../dist/src/core/index.cjs')
-		if (!isRecord(esm) || !isRecord(commonJS)) throw new Error('built core entries did not load')
-		const guard = esm.isProcessError
-		const Constructor = commonJS.ProcessError
-		if (!isFunction(guard) || !isConstructor(Constructor)) {
-			throw new Error('built core error exports did not load')
-		}
-		const commonJSError: unknown = Reflect.construct(Constructor, [
-			'invalid command',
-			{ code: 'invalid' },
-		])
-
-		expect(guard(commonJSError)).toBe(true)
 	})
 })

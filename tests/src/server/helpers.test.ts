@@ -1,8 +1,10 @@
 import { Buffer } from 'node:buffer'
+import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { holds } from '@orkestrel/contract'
 import { createRecorder, waitForDelay } from '@orkestrel/test'
 import { waitForCondition } from '../../setup.js'
 import { createScratch } from '@orkestrel/test/server'
@@ -673,6 +675,42 @@ describe('killProcess', () => {
 			expect(signals.calls).toEqual([['SIGTERM']])
 		},
 	)
+
+	// A non-detached child stays in the runner's own process group, so no group carries its pid and
+	// the group route alone never reaches it. Windows implements no process group: `process.kill`
+	// refuses a negative pid there, so only a POSIX host can run this.
+	it.skipIf(process.platform === 'win32')(
+		'kills a real non-detached child the group route cannot reach',
+		async () => {
+			const child = spawn(process.execPath, [resolveChildFixture(), 'sleep'], { stdio: 'ignore' })
+			const pid = child.pid
+			if (pid === undefined) throw new Error('The fixture child reported no pid')
+			try {
+				// The control is the pre-repair route run on its own: signalling the negated pid reports
+				// ESRCH, and the helper swallowed that before the fallback existed, so this child stays
+				// alive. Everything the repair added is what happens next.
+				let refusal: unknown
+				try {
+					process.kill(-pid, 'SIGKILL')
+				} catch (error) {
+					refusal = error
+				}
+				expect(refusal instanceof Error && 'code' in refusal ? refusal.code : undefined).toBe(
+					'ESRCH',
+				)
+				await waitForDelay(50)
+				expect(isExited(child)).toBe(false)
+
+				killProcess(child, 'SIGKILL')
+				await waitForExit(child, 2_000)
+
+				expect(child.signalCode).toBe('SIGKILL')
+				expect(child.exitCode).toBe(null)
+			} finally {
+				holds(() => child.kill('SIGKILL'))
+			}
+		},
+	)
 })
 
 describe('run', () => {
@@ -749,6 +787,66 @@ describe('run', () => {
 		expect(result.failed).toBe(true)
 	})
 
+	// Both mechanisms armed on one run. The first to fire terminates the child and disarms the other,
+	// so exactly one of `expired` and `aborted` is ever true.
+	it('reports the timeout when it fires before an armed abort', async () => {
+		const controller = new AbortController()
+		const late = setTimeout(() => controller.abort(), 2_000)
+		try {
+			const result = await run(childCommand('hang'), {
+				workspace: process.cwd(),
+				timeout: 100,
+				grace: 20,
+				signal: controller.signal,
+				strict: false,
+			})
+
+			expect(result.expired).toBe(true)
+			expect(result.aborted).toBe(false)
+			expect(result.failed).toBe(true)
+		} finally {
+			clearTimeout(late)
+		}
+	})
+
+	it('reports the abort when it fires before an armed timeout', async () => {
+		const controller = new AbortController()
+		const pending = run(childCommand('hang'), {
+			workspace: process.cwd(),
+			timeout: 5_000,
+			grace: 20,
+			signal: controller.signal,
+			strict: false,
+		})
+		controller.abort()
+		const result = await pending
+
+		expect(result.aborted).toBe(true)
+		expect(result.expired).toBe(false)
+		expect(result.failed).toBe(true)
+	})
+
+	// Both deadlines are set to the same delay, so which one the host's timer queue delivers first is
+	// not fixed. Exclusivity is the property that must hold whichever wins, so that is what is asserted.
+	it('reports exactly one outcome when the timeout and the abort share a deadline', async () => {
+		const controller = new AbortController()
+		const together = setTimeout(() => controller.abort(), 100)
+		try {
+			const result = await run(childCommand('hang'), {
+				workspace: process.cwd(),
+				timeout: 100,
+				grace: 20,
+				signal: controller.signal,
+				strict: false,
+			})
+
+			expect(result.expired).not.toBe(result.aborted)
+			expect(result.failed).toBe(true)
+		} finally {
+			clearTimeout(together)
+		}
+	})
+
 	it('caps a huge capture at the limit and reports truncation without failing', async () => {
 		const result = await run(childCommand('chatty'), {
 			workspace: process.cwd(),
@@ -775,6 +873,20 @@ describe('run', () => {
 		}
 		expect(isProcessError(thrown)).toBe(true)
 		expect(isProcessError(thrown) ? thrown.cause : undefined).toBeInstanceOf(Error)
+	})
+
+	// The documented difference between the two runners on a spawn fault. The errno itself is the
+	// host's, so its sign is the property a caller can act on and the property asserted.
+	it('reports the host negative errno when the command cannot be spawned', async () => {
+		const result = await run(
+			{ file: 'orkestrel-nonexistent-binary.exe', arguments: [] },
+			{ workspace: process.cwd(), strict: false },
+		)
+
+		expect(result.failed).toBe(true)
+		const code = result.code
+		if (code === null) throw new Error('run reported no code for a spawn fault')
+		expect(code).toBeLessThan(0)
 	})
 
 	it('refuses a NUL in a per-run environment override before spawning', async () => {
@@ -823,13 +935,22 @@ describe('runSync', () => {
 				await waitForCondition(() => existsSync(blockingMarker), 6_000)
 				expect(existsSync(blockingMarker)).toBe(true)
 
+				// The root deadline has to clear the grandchild's own bootstrap and still fall inside the
+				// fixture's 250 ms write delay. The grandchild announces readiness 91-105 ms after the
+				// call on this host and writes ~250 ms after that, so 200 ms sits between the two with
+				// margin at both ends, where the former 50 ms sat inside the bootstrap window.
 				const streamed = await run(childCommand('tree-write', streamedMarker), {
 					workspace: process.cwd(),
-					timeout: 50,
+					timeout: 200,
 					grace: 20,
 					strict: false,
 				})
 				expect(streamed.expired).toBe(true)
+
+				// The readiness marker is what separates "termination reached an established grandchild"
+				// from "the grandchild never started". Without it the negative below passes for either
+				// reason; with it, a grandchild killed during bootstrap rejects here instead.
+				await waitForCondition(() => existsSync(`${streamedMarker}.ready`), 6_000)
 
 				// Tree termination reaches the grandchild, so its marker never appears. A fixed wait is the
 				// right instrument for a negative: it bounds how long absence must hold, sized above the
@@ -953,6 +1074,16 @@ describe('runSync', () => {
 		expect(isProcessError(thrown) ? thrown.cause : undefined).toBeInstanceOf(Error)
 	})
 
+	it('reports null rather than an errno when the command cannot be spawned', () => {
+		const result = runSync(
+			{ file: 'orkestrel-nonexistent-binary.exe', arguments: [] },
+			{ workspace: process.cwd(), strict: false },
+		)
+
+		expect(result.failed).toBe(true)
+		expect(result.code).toBe(null)
+	})
+
 	it('refuses a NUL in a per-run environment override before spawning', () => {
 		const nul = String.fromCodePoint(0)
 		let thrown: unknown
@@ -1012,6 +1143,98 @@ describe('detach', () => {
 			scratch.destroy()
 		}
 	})
+
+	// The two host claims the guide makes about a detached child, driven through one supervisor that
+	// holds both children: one left in the supervisor's process group and one detached into its own.
+	// A terminal delivers SIGINT to its foreground group and a supervisor is ended by a signal to its
+	// group, so a group-directed signal is what both claims are about. Windows has no process group
+	// for `process.kill` to address, so only a POSIX host can drive this.
+	it.skipIf(process.platform === 'win32')(
+		'leaves a detached child beating and uninterrupted after the supervisor group is signalled',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch()
+			try {
+				// Each child records that it received SIGINT and touches a heartbeat file while it lives,
+				// so liveness is read from work the child performs rather than from a pid, which a
+				// reaped-but-unwaited process answers for too.
+				scratch.write(
+					'child.mjs',
+					[
+						"import { writeFileSync } from 'node:fs'",
+						'const [marker] = process.argv.slice(2)',
+						"process.on('SIGINT', () => writeFileSync(marker + '.sigint', 'interrupted'))",
+						"writeFileSync(marker + '.pid', String(process.pid))",
+						"setInterval(() => writeFileSync(marker + '.beat', 'alive'), 25)",
+					].join('\n'),
+				)
+				scratch.write(
+					'supervisor.mjs',
+					[
+						"import { spawn } from 'node:child_process'",
+						"import { writeFileSync } from 'node:fs'",
+						'const [directory] = process.argv.slice(2)',
+						"process.on('SIGINT', () => undefined)",
+						"for (const name of ['grouped', 'detached']) {",
+						"\tconst child = spawn(process.argv[0], [directory + '/child.mjs', directory + '/' + name], {",
+						"\t\tdetached: name === 'detached',",
+						"\t\tstdio: 'ignore',",
+						'\t})',
+						'\tchild.unref()',
+						'}',
+						"writeFileSync(directory + '/supervisor.pid', String(process.pid))",
+						'setInterval(() => undefined, 1_000)',
+					].join('\n'),
+				)
+				const grouped = join(scratch.path, 'grouped')
+				const detached = join(scratch.path, 'detached')
+				const supervisorPid = join(scratch.path, 'supervisor.pid')
+
+				detach(
+					{
+						file: process.execPath,
+						arguments: [join(scratch.path, 'supervisor.mjs'), scratch.path],
+					},
+					{ workspace: process.cwd() },
+				)
+				await waitForCondition(
+					() =>
+						existsSync(supervisorPid) &&
+						existsSync(`${grouped}.beat`) &&
+						existsSync(`${detached}.beat`),
+					10_000,
+				)
+				const supervisor = Number.parseInt(readFileSync(supervisorPid, 'utf8'), 10)
+				const survivor = Number.parseInt(readFileSync(`${detached}.pid`, 'utf8'), 10)
+				const member = Number.parseInt(readFileSync(`${grouped}.pid`, 'utf8'), 10)
+
+				try {
+					process.kill(-supervisor, 'SIGINT')
+
+					// The control fires first: the child still in the group receives the interrupt.
+					await waitForCondition(() => existsSync(`${grouped}.sigint`), 10_000)
+					await waitForDelay(200)
+					expect(existsSync(`${detached}.sigint`)).toBe(false)
+
+					process.kill(-supervisor, 'SIGKILL')
+					await waitForDelay(300)
+					const stopped = statSync(`${grouped}.beat`).mtimeMs
+					const running = statSync(`${detached}.beat`).mtimeMs
+					await waitForDelay(400)
+
+					expect(statSync(`${grouped}.beat`).mtimeMs).toBe(stopped)
+					expect(statSync(`${detached}.beat`).mtimeMs).toBeGreaterThan(running)
+					expect(existsSync(`${detached}.sigint`)).toBe(false)
+				} finally {
+					holds(() => process.kill(survivor, 'SIGKILL'))
+					holds(() => process.kill(member, 'SIGKILL'))
+					holds(() => process.kill(supervisor, 'SIGKILL'))
+				}
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
 
 	it('refuses an invalid command before anything is spawned', () => {
 		let thrown: unknown

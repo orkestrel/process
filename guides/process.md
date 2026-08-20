@@ -352,10 +352,10 @@ terminate the child tree.
 
 The two hosts terminate differently, and only one of them has a cooperative phase.
 
-| Host    | Sequence                                                                      | `grace`  |
-| ------- | ----------------------------------------------------------------------------- | -------- |
-| POSIX   | `SIGTERM` to the process group, wait `grace`, then `SIGKILL` to the group.    | used     |
-| Windows | `taskkill /F /T` on the whole tree at once, with a direct kill as a fallback. | not used |
+| Host    | Sequence                                                                                                                                        | `grace`  |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| POSIX   | `SIGTERM` to the process group, wait `grace`, then `SIGKILL` to the group — each signal reaching the child directly when no group owns its pid. | used     |
+| Windows | `taskkill /F /T` on the whole tree at once, with a direct kill as a fallback.                                                                   | not used |
 
 Windows has no signal a process group can receive, so `killTree` ends the tree through the
 `taskkill.exe` utility addressed by its absolute `System32` path, which stops a `PATH` override
