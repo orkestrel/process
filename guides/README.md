@@ -1,6 +1,6 @@
 # Guides
 
-A dual-axis index into this repository's guides — by concept, and by directory.
+An index into this repository's guides — by concept, and by directory.
 
 ## By concept
 

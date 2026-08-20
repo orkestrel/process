@@ -1,6 +1,6 @@
 # Process
 
-> A typed child-process toolkit in three tiers. `Process` supervises one child with framed stdout
+> A typed child-process toolkit in tiers. `Process` supervises one child with framed stdout
 > lines under a bounded backlog, a byte-bounded stderr tail, a live `stderr` event, a writable stdin
 > channel, a typed lifecycle emitter, and bounded termination. `execute` and `executeSync` buffer a
 > child to completion and settle with an `ExecuteResult`; `detach` is the fire-and-forget spawn that
@@ -35,7 +35,7 @@ exit.code // 0
 await child.destroy()
 ```
 
-The three tiers divide by lifetime. Reach for `Process` when you need the live stream, the stdin
+The tiers divide by lifetime. Reach for `Process` when you need the live stream, the stdin
 channel, or the lifecycle events. Reach for `execute` or `executeSync` when you want the buffered
 output and the exit in one call. Reach for `ProcessManager` when you supervise several children by
 id.
@@ -160,7 +160,7 @@ The defaults and host bounds, from `@orkestrel/process`.
 | `PROCESS_OUTPUT`       | const | `10_485_760`            | Default maximum captured bytes for a run's stdout and stderr, each. |
 | `PROCESS_TIMER`        | const | `2_147_483_647`         | The largest delay in milliseconds the host schedules as written.    |
 | `PROCESS_PATHEXT`      | const | `'.COM;.EXE;.BAT;.CMD'` | The extensions a Windows lookup applies when `PATHEXT` is unset.    |
-| `PROCESS_ERROR_CODES`  | const | the five codes          | The declared `ProcessErrorCode` categories, in declaration order.   |
+| `PROCESS_ERROR_CODES`  | const | the code tuple          | The declared `ProcessErrorCode` categories, in declaration order.   |
 
 ### Types
 
@@ -175,7 +175,7 @@ The contracts and options, all from `@orkestrel/process`.
 | `ProcessEventMap`         | type      | A `Process`'s events — `stderr(chunk)`, `error(cause)`, and `exit(exit)`.                            |
 | `ProcessOptions`          | interface | `Process` construction — `command`, `workspace`, and the optional settings.                          |
 | `ProcessInterface`        | interface | The supervised-child surface — `emitter` / `lines` / `evidence` / `truncated` / `exit` plus methods. |
-| `ExecuteResult`           | interface | A one-shot outcome — the captured output, the exit, and the four state flags.                        |
+| `ExecuteResult`           | interface | A one-shot outcome — the captured output, the exit, and the state flags.                             |
 | `ExecuteInput`            | interface | The captured bytes and terminal facts one settled `ExecuteResult` is built from.                     |
 | `ExecuteOptions`          | interface | `execute` options — workspace, environment, input, timeout, grace, signal, strict, limit.            |
 | `ExecuteSyncOptions`      | interface | `executeSync` options — the same set without `grace` and without `signal`.                           |
@@ -211,7 +211,7 @@ instance-method surface.
 #### `ProcessInterface`
 
 `send` writes one line to the child's stdin; `stop` and `destroy` are the lifecycle verbs. None of
-the three rejects. `stop` shares one termination across every call, and `destroy` returns one stable
+them rejects. `stop` shares one termination across every call, and `destroy` returns one stable
 barrier shared by every call.
 
 | Method    | Returns            | Behavior                                                                                     |
@@ -222,8 +222,8 @@ barrier shared by every call.
 
 #### `ProcessManagerInterface`
 
-`process` and `processes` query the live registry; `launch` spawns and registers; `stop` is a
-three-overload terminator; `destroy` tears the registry down. `stop` returns a `boolean` when you
+`process` and `processes` query the live registry; `launch` spawns and registers; `stop` is an
+overloaded terminator; `destroy` tears the registry down. `stop` returns a `boolean` when you
 name ids and `void` when you stop every child.
 
 | Method      | Returns                         | Behavior                                                                                 |
@@ -271,7 +271,7 @@ leaving a live child nobody holds: a getter that throws does so while nothing ha
 
 ### The line backlog
 
-`lines` is a single-consumer stream. Each line goes to exactly one waiting iterator, so two
+`lines` is a single-consumer stream. Each line goes to exactly one waiting iterator, so concurrent
 iterators over the same child split the output between them rather than each receiving all of it.
 Iterate it once, and fan out from that loop when several readers need the same lines.
 
@@ -359,7 +359,7 @@ the `taskkill` call is bounded by `PROCESS_CONFIRMATION` and the wait that follo
 because the synchronous host exposes no tree-termination phase. Use `execute` or `Process` when the
 timeout must terminate the child tree.
 
-The two hosts terminate differently, and only one of them has a cooperative phase.
+POSIX and Windows terminate differently, and only POSIX has a cooperative phase.
 
 | Host    | Sequence                                                                                                                                        | `grace`  |
 | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
@@ -415,7 +415,7 @@ A POSIX platform input leaves the file lookup to `execvp`, so `resolveExecutable
 `undefined` and the command file is spawned as written. A Windows platform input needs the lookup,
 because the host searches the working directory before `PATH` and applies `PATHEXT`, and Node
 reproduces neither for a direct spawn. `buildExecutableCandidates` makes that decision and the
-ordered candidate list pure, so both platform inputs execute on every test host.
+ordered candidate list pure, so every platform input executes on every test host.
 Within each searched directory the literal name is tried first and each `PATHEXT` candidate after
 it, whether or not the name already carries an extension: `report.txt` resolves to a `report.txt`
 file where one exists, and to `report.txt.cmd` where none does. The lookup reads the child's
@@ -474,8 +474,8 @@ buildSpawn({ file: 'node', arguments: ['--version'] }).verbatim // false
 `undefined` value unsets a key, and on Windows the keys fold case-insensitively with the last writer
 winning, so `PATH` followed by `Path` yields one variable rather than two the host would resolve
 unpredictably. `readVariable` reads one variable back under the same folding rule. Their
-`mergePlatformEnvironment` and `readPlatformVariable` leaves accept an explicit platform, so both
-folding decisions execute on every test host.
+`mergePlatformEnvironment` and `readPlatformVariable` leaves accept an explicit platform, so every
+folding decision executes on every test host.
 
 `ProcessCommand.isolated` decides whether the parent environment is a layer at all. Omitted or
 `false`, the overrides merge over the parent environment; `true`, the child environment is the
@@ -554,8 +554,8 @@ section describes applies to a terminated run and cannot rescue one that was nev
 
 ### The result family
 
-`ExecuteResult` reports the outcome through four booleans. `failed` is derived from the rest of the
-result, and the other three each report one specific thing that happened.
+`ExecuteResult` reports the outcome through booleans. `failed` is derived from the rest of the
+result, and `expired`, `aborted`, and `truncated` each report one specific thing that happened.
 
 | Field       | True when                                                                  |
 | ----------- | -------------------------------------------------------------------------- |
@@ -567,8 +567,8 @@ result, and the other three each report one specific thing that happened.
 `failed` is derived: a run failed when it expired, was aborted, ended on a host fault, was ended by a
 signal, or exited with a code other than `0`. A `null` code from a spawn fault is therefore a
 failure, an abort is a failure, and a synchronous overflow is a failure. `expired` and `aborted` are
-the two ways the run ended the child rather than the child ending itself, and only the first of them
-observed is recorded, so they are never both `true`.
+the ways the run ended the child rather than the child ending itself, and only the earliest observed
+is recorded, so they are never both `true`.
 
 A spawn fault reports the host's negative errno in `ProcessExit.code` and an asynchronous
 `ExecuteResult.code`. The synchronous `executeSync` result reports `null` instead.
@@ -719,14 +719,14 @@ manager.count // 0 — the settled child evicted itself
 await manager.destroy()
 ```
 
-`launch` refuses in three ways, and a spawn fault is none of them: a child that fails to spawn is
+`launch` refuses in these ways, and a spawn fault is none of them: a child that fails to spawn is
 returned, and its fault surfaces through its own `exit` and `error` event rather than from `launch`.
 
 - A `duplicate`-coded `ProcessError` when the id is already live.
 - A `protocol`-coded `ProcessError` after `destroy` has begun. The check runs again after the child
   exists, because reading an option runs your own code and that code can start the teardown; a
   registry being destroyed adopts nothing, so the child it has already spawned is destroyed and the
-  launch is still refused. That second refusal carries a bounded residual: the child is torn down
+  launch is still refused. That later refusal carries a bounded residual: the child is torn down
   asynchronously, within `grace` plus the confirmation window, and the `destroy` barrier settled
   before the refusal, so awaiting it does not cover that teardown.
 - An `invalid`-coded `ProcessError` when an option or command string is malformed. The id is
@@ -756,7 +756,7 @@ global own-property brand rather than `instanceof`, so a duplicate installation 
 module copy both narrow, where a prototype check would refuse both. Recognition holds across copies
 at 0.0.4 or later: a copy earlier than 0.0.4 stamps no brand, so an error it throws stays outside the
 type. The guard admits exactly the codes `PROCESS_ERROR_CODES` declares, so a code added there is
-admitted with no second edit.
+admitted with no further edit.
 
 A run failure carries its `ExecuteResult` on `error.result`, and its command line, exit `code`, and
 `signal` on `error.context`. A duplicate-id and a protocol failure carry the offending `id` on
@@ -948,8 +948,8 @@ isExited(reporter) // whether the native exit arrived
   dropped without pausing, and `truncated` reports the gap.
 - **Attach a consumer before the child speaks, or accept the gap** — a `lines` iterator requested
   after the mark was exceeded receives the retained head, a gap, then the live stream.
-- **Iterate `lines` once and fan out from that loop** — the stream is single-consumer, so a second
-  iterator takes lines away from the first rather than repeating them.
+- **Iterate `lines` once and fan out from that loop** — the stream is single-consumer, so another
+  iterator takes lines away from the one already iterating rather than repeating them.
 - **Give `execute` a `timeout` when the command can start a descendant** — an unbounded run waits on
   stdio completion, and a descendant that inherited the child's pipes holds it open past the child's
   own exit.
@@ -967,7 +967,7 @@ Each name on this surface that reads against a house rule is settled here rather
 | `execute`, `executeSync` | Use the fixed lifecycle verb for primary work to completion. `executeSync` keeps the ecosystem `Sync` suffix.                                                                                                                    |
 | `process`, `processes`   | Retained. A registry exposes its contents as accessors named for what they hold, so the manager reads `manager.process(id)` and `manager.processes()`.                                                                           |
 | `strict`                 | Replaces `reject`. A boolean reads as an adjective asserting a state, and `reject` named the reaction rather than the mode. `strict: false` resolves with the failed result.                                                     |
-| `evidence`, `backlog`    | Byte bounds are named for their subject where an entity has several, so a `Process` carries `evidence` and `backlog` rather than two flavours of `limit`. A run has one bound, so it is named for the bound: `limit`.            |
+| `evidence`, `backlog`    | Byte bounds are named for their subject where an entity has several, so a `Process` carries `evidence` and `backlog` rather than flavours of `limit`. A run has one bound, so it is named for the bound: `limit`.                |
 | `truncated`              | One name on both surfaces, because it reports one fact: the surface omitted output. Each entity names its own bound — a `Process` omits `lines` past a retention bound, and an `ExecuteResult` omits captured text past `limit`. |
 | `run`                    | Kept as the English noun for one invocation — a terminated run, a run that stays pending. It never names a function; `execute` and `executeSync` are named by their identifiers, so the concept carries one term.                |
 
@@ -992,9 +992,9 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
 - [`tests/src/core/errors.test.ts`](../tests/src/core/errors.test.ts) — the error surface:
   `isProcessError` narrowing its own error and refusing a plain `Error`, the codes the guard admits
   compared against the declared `PROCESS_ERROR_CODES` tuple with a refusal control drawn from
-  outside it, and recognition of an error constructed by a second source copy of the module.
+  outside it, and recognition of an error constructed by another source copy of the module.
 - [`tests/src/server/Process.test.ts`](../tests/src/server/Process.test.ts) — the supervised child:
-  line framing including a trailing partial line, the bounded backlog under both consumer policies
+  line framing including a trailing partial line, the bounded backlog under each consumer policy
   and under a flood of empty lines, the byte-bounded `evidence` tail and live `stderr` event, `send`
   over an open and a closed channel, bounded termination and its confirmation, the POSIX escalation
   from a trapped `SIGTERM` to `SIGKILL`, abort-signal termination, the isolated environment, the
@@ -1002,17 +1002,17 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
 - [`tests/src/server/ProcessManager.test.ts`](../tests/src/server/ProcessManager.test.ts) — the
   registry: `launch` registration and its `duplicate`, `protocol`, and `invalid` refusals, including
   a teardown started from inside the caller's own option getter, the unforgeable eviction and its
-  ordering, the query surface, the three `stop` overloads, and emitter-last `destroy`.
+  ordering, the query surface, the `stop` overloads, and emitter-last `destroy`.
 - [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the building blocks:
   `execute`, `executeSync`, and `detach` outcomes, the resolver under `PATHEXT` and an
-  extension-bearing name, both platform inputs to the quoted batch builder and its percent-sign
-  refusal, the environment merge under both platform inputs, the UTF-8-safe byte bounds, the
+  extension-bearing name, each platform input to the quoted batch builder and its percent-sign
+  refusal, the environment merge under each platform input, the UTF-8-safe byte bounds, the
   validators, and the termination helpers.
 - [`tests/guides.test.ts`](../tests/guides.test.ts) — this guide: every documented name resolves,
   every public export is documented, and every flagship fence returns what its comments claim.
 - [`tests/distribution.test.ts`](../tests/distribution.test.ts) — the artifact a consumer installs:
   it packs the package, installs the tarball into a directory outside this repository, and compares
-  the runtime exports of both built formats against the declarations the compiler parses, under each
+  the runtime exports of each built format against the declarations the compiler parses, under each
   supported `moduleResolution` mode.
 - [`tests/setup.test.ts`](../tests/setup.test.ts) — `waitForCondition`, the polled wait this suite
   uses in place of a fixed delay: when it returns, when it rejects, and the budget it names.

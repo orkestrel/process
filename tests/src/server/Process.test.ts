@@ -184,7 +184,7 @@ describe('Process', () => {
 		expect(await delivery).toBe(false)
 	})
 
-	it('collapses a double stop and a concurrent abort onto one termination', async () => {
+	it('collapses repeated stops and a concurrent abort onto one termination', async () => {
 		const controller = new AbortController()
 		const child = createProcess({
 			command: childCommand('sleep'),

@@ -1003,7 +1003,7 @@ describe('executeSync', () => {
 
 				// The root deadline has to clear the grandchild's own bootstrap and still fall inside the
 				// fixture's 250 ms write delay. The grandchild announces readiness 91-105 ms after the
-				// call on this host and writes ~250 ms after that, so 200 ms sits between the two with
+				// call on this host and writes ~250 ms after that, so 200 ms sits between them with
 				// margin at both ends, where the former 50 ms sat inside the bootstrap window.
 				const streamed = await execute(childCommand('tree-write', streamedMarker), {
 					workspace: process.cwd(),
@@ -1213,7 +1213,7 @@ describe('detach', () => {
 		}
 	})
 
-	// The two host claims the guide makes about a detached child, driven through one supervisor that
+	// The host claims the guide makes about a detached child, driven through one supervisor that
 	// holds both children: one left in the supervisor's process group and one detached into its own.
 	// A terminal delivers SIGINT to its foreground group and a supervisor is ended by a signal to its
 	// group, so a group-directed signal is what both claims are about. Windows has no process group

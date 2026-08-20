@@ -11,7 +11,7 @@
  * The child boundary the termination helpers drive.
  *
  * @remarks
- * A `ChildProcess` satisfies this structurally, and so does any object carrying the same six
+ * A `ChildProcess` satisfies this structurally, and so does any object carrying the same
  * members, which is what lets a caller drive `stopChild` over a child it spawned itself. Each helper
  * takes the slice of this contract it reads: `exitCode` and `signalCode` are the host's
  * authoritative liveness answer, `pid` addresses a POSIX process group, `kill` delivers one signal,

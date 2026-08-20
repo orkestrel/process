@@ -198,7 +198,7 @@ it('installs the packed artifact and drives its entries, declarations, and resol
 			expect(serverCall).toBe('node --version')
 		}
 
-		// The guard recognizes an error the other module format constructed. Both copies are the
+		// The guard recognizes an error the other module format constructed. Each copy is the
 		// installed package's own, so this reads the shipped brand rather than the source's.
 		writeFileSync(
 			join(consumer, 'brand.mjs'),
@@ -226,7 +226,7 @@ it('installs the packed artifact and drives its entries, declarations, and resol
 		expect(Object.getOwnPropertyDescriptor(brand, 'plain')?.value).toBe(false)
 
 		// The `moduleResolution` floor `README.md` states, compiled rather than asserted as a sentence.
-		// Each mode builds a program over one consumer file importing both faces, with library checking
+		// Each mode builds a program over one consumer file importing each face, with library checking
 		// on so the package's own declarations are read instead of skipped.
 		const consumerSource = join(consumer, 'consumer.ts')
 		writeFileSync(

@@ -84,16 +84,16 @@ const MODULES = Object.freeze({
 /**
  * Declarations deliberately kept out of a barrel, as `symbolKey` strings.
  *
- * Naming one here is what makes it intentional rather than forgotten, and the second assertion
- * over this list fails when a name here stops being stranded, so the list cannot rot.
+ * Naming one here is what makes it intentional rather than forgotten, and the assertion over
+ * this list fails when a name here stops being stranded, so the list cannot rot.
  */
 const INTERNAL: readonly string[] = Object.freeze([])
 /**
  * Test files no guide's Tests section lists, as repository-relative paths.
  *
- * Both are vendored fleet-wide proofs whose subject is the workspace rather than this package's
- * public surface. Naming one here is what makes the omission deliberate, and the second assertion
- * over this list fails when a name here stops being omitted, so the list cannot rot.
+ * Each is a vendored fleet-wide proof whose subject is the workspace rather than this package's
+ * public surface. Naming one here is what makes the omission deliberate, and the assertion over
+ * this list fails when a name here stops being omitted, so the list cannot rot.
  */
 const UNLISTED_TESTS: readonly string[] = Object.freeze([
 	'tests/config.test.ts',
@@ -113,7 +113,7 @@ const manifest = parseManifest(
 )
 const sourceManager = createSourceManager({ files, modules: MODULES })
 
-// The two published faces in one table. `SOURCES`, the refusal rows, and the live population rows
+// The published faces in one table. `SOURCES`, the refusal rows, and the live population rows
 // all read it, so a face's scope and its export key have one place to be stated.
 const FACES = Object.freeze(
 	Object.entries(MODULES).map(([specifier, module]) => ({ specifier, module })),
@@ -176,8 +176,8 @@ describe('public package faces', () => {
 	})
 })
 
-// Two faces declaring the same class, where only the core barrel re-exports it: the server face
-// strands `Process`, and reading both faces as one scope hides that. The fixture rows are the
+// Faces declaring the same class, where only the core barrel re-exports it: the server face
+// strands `Process`, and reading them as one scope hides that. The fixture rows are the
 // instrument's negative control; the live rows cannot play that part, because a union of
 // internally complete barrels is itself internally complete.
 const FIXTURE_FILES: Readonly<Record<string, string>> = Object.freeze({
@@ -322,7 +322,7 @@ for (const entry of manifest) {
 		// The membership rule is `fenceImports`'s own grammar read off Guide's comment-aware source
 		// projection, not "named-brace imports": every statement it surfaces is checked and nothing
 		// else is. A mapped specifier's bindings compare against that face's barrel surface; a
-		// repository alias and an unmapped true subpath of the root are refused, the first because a
+		// repository alias and an unmapped true subpath of the root are refused, the alias because a
 		// public guide example must import through a published specifier; a foreign package stays
 		// external and is compared against no face.
 		it('imports only real exports through published specifiers in every ts fence', () => {
@@ -412,7 +412,7 @@ const CONSTANTS: Readonly<Record<string, number | string | readonly string[]>> =
 /**
  * Constants whose `Value` cell is prose rather than a literal, as `API` cell names.
  *
- * `PROCESS_ERROR_CODES` prints as `the five codes`, so no cell text compares against the tuple; the
+ * `PROCESS_ERROR_CODES` prints as `the code tuple`, so no cell text compares against the tuple; the
  * codes themselves are gated by `tables exactly the error codes the tuple declares`. Naming one
  * here is what makes the omission deliberate, and the assertion over this list fails when such a
  * cell becomes a literal, so the list cannot rot.
@@ -420,7 +420,7 @@ const CONSTANTS: Readonly<Record<string, number | string | readonly string[]>> =
 const PROSE_CONSTANTS: readonly string[] = Object.freeze(['PROCESS_ERROR_CODES'])
 
 describe('flagship fences', () => {
-	it('states the numeric teardown backlog cap on both public contracts', () => {
+	it('states the numeric teardown backlog cap on every public contract', () => {
 		const guide = requireValue(files['guides/process.md'], 'Missing file: guides/process.md')
 		const types = requireValue(files['src/core/types.ts'], 'Missing file: src/core/types.ts')
 
@@ -454,7 +454,7 @@ describe('flagship fences', () => {
 		expect(child.truncated).toBe(true)
 	})
 
-	// The Vocabulary ruling that one name carries one fact on two surfaces. The sentence is only
+	// The Vocabulary ruling that one name carries one fact on both surfaces. The sentence is only
 	// worth asserting if both surfaces report that fact, so both are driven here: a supervised child
 	// against its retention bound, and a one-shot run against its capture `limit`.
 	it('reports omitted output under one name on both public surfaces', async () => {
@@ -492,12 +492,12 @@ describe('flagship fences', () => {
 	// streams are trimmed to the cap. This drives the exact case that refuted it — one stream
 	// stopping at the cap, the other running past it — so the false advice cannot return unnoticed.
 	// The result's exact member set is pinned beside it, because the sentence is a claim about the
-	// whole result rather than about three of its fields: any added `ExecuteResult` member fails
+	// whole result rather than about a subset of its fields: any added `ExecuteResult` member fails
 	// this row, and that failure is a prompt to rule on the sentence, not a list to extend.
 	//
 	// The guide's remedy is driven too. Re-running at a `limit` neither stream reaches is what
-	// recovers the per-stream lengths, so the closing assertions read the two lengths the first
-	// call could not tell apart.
+	// recovers the per-stream lengths, so the closing assertions read the lengths the bounded call
+	// could not tell apart.
 	it('reports no way to tell which stream overflowed, and recovers the lengths above the bound', () => {
 		const guide = requireValue(
 			files['guides/process.md'],
@@ -559,7 +559,8 @@ describe('flagship fences', () => {
 	// The Value column read off the guide itself, so editing a cell fails this row. Comparing the
 	// imported constants against literals written here would leave that column guarded by nothing,
 	// under a name that claims to guard exactly it. A cell drops its digit separators and its
-	// quotes before the comparison, which is the whole difference between the two notations.
+	// quotes before the comparison, which is the whole difference between the guide's notation and
+	// the source literal.
 	it('documents the constant values its Surface table prints', () => {
 		const guide = requireValue(files['guides/process.md'], 'Missing file: guides/process.md')
 		const section = guide.slice(guide.indexOf('### Constants'))
@@ -668,7 +669,7 @@ describe('flagship fences', () => {
 		expect(types).toContain('A consumer must call `stop` or `destroy` during an orderly shutdown.')
 	})
 
-	// The four contracts the guide states about what a consumer meets. Each row binds the sentence
+	// The contracts the guide states about what a consumer meets. Each row binds the sentence
 	// and then drives the behaviour it claims, because a sentence about behaviour passes every
 	// parity assertion whether or not it is true.
 	it('reads each command property once, so the object validated is the object spawned', () => {
@@ -771,7 +772,7 @@ describe('flagship fences', () => {
 		)
 	})
 
-	it('merges the environment fence both ways', () => {
+	it('merges the environment fence in its isolated and merged forms', () => {
 		expect(mergeEnvironment(true, { TOKEN: 'a' })).toEqual({ TOKEN: 'a' })
 		expect(mergeEnvironment(false, { TOKEN: 'a' }, { TOKEN: undefined }).TOKEN).toBeUndefined()
 	})
@@ -1006,15 +1007,15 @@ describe('unfenced TSDoc examples', () => {
 
 // ── README parity ────────────────────────────────────────────────────────────
 //
-// `README.md` ships inside the published package, so it carries the two assertions the guide
+// `README.md` ships inside the published package, so it carries the assertions the guide
 // carries: every backticked name resolves, and every relative link exists.
 
 /**
  * Backticked `README.md` tokens that name a TypeScript setting, the package line, or a file rather
  * than a package export.
  *
- * Naming one here is what makes it deliberate, and the second assertion over this list fails when a
- * name here becomes an export, so the list cannot rot.
+ * Naming one here is what makes it deliberate, and the assertion over this list fails when a name
+ * here becomes an export, so the list cannot rot.
  */
 const README_FOREIGN: readonly string[] = Object.freeze([
 	'@orkestrel',

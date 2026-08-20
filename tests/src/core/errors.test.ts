@@ -12,7 +12,7 @@ describe('process error', () => {
 	})
 
 	// The guard's admitted set is compared against the declared tuple, and the refusal control is
-	// drawn from outside it, so the pair pins the exact set rather than re-deriving it.
+	// drawn from outside it, so together they pin the exact set rather than re-deriving it.
 	it('admits every declared code and refuses one the tuple does not declare', () => {
 		for (const code of PROCESS_ERROR_CODES) {
 			expect(isProcessError(new ProcessError('declared', { code }))).toBe(true)
@@ -25,7 +25,7 @@ describe('process error', () => {
 		expect(isProcessError(undeclared)).toBe(false)
 	})
 
-	// The same recognition across the two built module formats is proved in
+	// The same recognition across the built module formats is proved in
 	// `tests/distribution.test.ts`, against the artifact a consumer installs. This project reads
 	// source alone, so it runs on a tree that was never built.
 	it('recognizes genuine errors across package copies', () => {

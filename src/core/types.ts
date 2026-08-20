@@ -5,7 +5,7 @@ import type { PROCESS_ERROR_CODES } from './constants.js'
  * The public contracts for `@orkestrel/process`: a typed child-process toolkit.
  *
  * @remarks
- * Three tiers, divided by lifetime:
+ * The tiers divide by lifetime:
  *
  * - **{@link ProcessInterface}** — one supervised child with framed stdout lines under a bounded
  *   backlog, a byte-bounded stderr tail, a live stderr event, a writable stdin channel, a typed
@@ -141,18 +141,17 @@ export interface ProcessOptions {
  *
  * @remarks
  * `lines` is pumped as soon as the child writes, and it is a single-consumer stream: each line goes
- * to exactly one waiting iterator, so two iterators split the output between them rather than each
- * receiving all of it. The policy for an unconsumed backlog follows
- * consumer intent. After an iterator has been requested, stdout pauses at the `backlog` mark and
+ * to exactly one waiting iterator, so concurrent iterators split the output between them rather
+ * than each receiving all of it. The policy for an unconsumed backlog follows consumer intent. After an iterator has been requested, stdout pauses at the `backlog` mark and
  * resumes at half of it, so the consumer loses nothing before termination and the child feels real
  * backpressure. Termination never reapplies the pause, so from the moment a stop begins retention is
  * capped at twice `backlog` and later lines are dropped. While
  * no iterator has ever been requested, stdout keeps draining so `exit` still resolves, and retention
  * stops at the mark: a consumer attaching after that point receives the retained head, a gap, then
  * the live stream. `evidence` is the decoded, byte-bounded stderr tail — the diagnostic to attach to
- * a failed exit. `truncated` reports that the `lines` stream omitted output, because one of its two
- * retention bounds was reached; the one-shot `ExecuteResult` carries the same name for the same fact
- * against its own capture `limit`. The typed `emitter` carries the live `stderr` chunks, the child `error` cause, and the
+ * a failed exit. `truncated` reports that the `lines` stream omitted output, because a retention
+ * bound was reached; the one-shot `ExecuteResult` carries the same name for the same fact against
+ * its own capture `limit`. The typed `emitter` carries the live `stderr` chunks, the child `error` cause, and the
  * terminal `exit`, alongside the `exit` promise. `stop` and `destroy` are idempotent and never reject.
  */
 export interface ProcessInterface {
@@ -209,8 +208,8 @@ export interface ProcessInterface {
  *
  * @remarks
  * `failed` is `true` when the child exited non-zero, was killed by a signal, expired, was aborted, or
- * failed to spawn. `expired` and `aborted` are the two ways the run ended the child rather than the
- * child ending itself, and only the first of them observed is recorded. `truncated` is independent of
+ * failed to spawn. `expired` and `aborted` name the ways the run ended the child rather than the
+ * child ending itself, and only the earliest observed is recorded. `truncated` is independent of
  * both: it reports that a captured stream omitted output because it exceeded `limit`, which fails a
  * synchronous run and does not fail an asynchronous one. `ProcessInterface` carries the same name for
  * the same fact against a supervised child's retention bounds. A spawn fault reports the host's negative errno for `execute`. A spawn fault reports
@@ -240,7 +239,7 @@ export interface ExecuteResult {
  * The captured bytes and terminal facts one settled {@link ExecuteResult} is built from.
  *
  * @remarks
- * Both byte fields are trimmed to `limit` on a code-point boundary when the result is built, so a
+ * Each byte field is trimmed to `limit` on a code-point boundary when the result is built, so a
  * caller passes the raw retained head and never a decoded string. `cause` carries the host fault
  * that ended the run, when one did; its presence alone marks the run failed.
  */
@@ -257,7 +256,7 @@ export interface ExecuteInput {
 	readonly expired: boolean
 	/** If `true`, the caller's signal aborted the run; if `false`, it did not. */
 	readonly aborted: boolean
-	/** If `true`, a stream exceeded `limit`; if `false`, both fit. */
+	/** If `true`, a stream exceeded `limit`; if `false`, neither did. */
 	readonly truncated: boolean
 	/** The maximum retained bytes for each stream. */
 	readonly limit: number

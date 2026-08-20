@@ -25,9 +25,9 @@ import {
  *
  * @remarks
  * Standard output is framed through `readline` into a single-consumer stream: each line goes to
- * exactly one waiting iterator, so two iterators split the output rather than each receiving all of
- * it. While no consumer has ever requested an iterator,
- * stdout keeps draining so `exit` still resolves, and retention stops at the `backlog` mark: a
+ * exactly one waiting iterator, so concurrent iterators split the output rather than each receiving
+ * all of it. While no consumer has ever requested an iterator, stdout keeps draining so `exit` still
+ * resolves, and retention stops at the `backlog` mark: a
  * consumer attaching later receives the retained head, a gap, then the live stream. After an iterator
  * has been requested, stdout pauses at the mark and resumes at half of it, so that consumer loses
  * nothing before termination and the child feels real backpressure. The mark is soft — the ordinary backlog can

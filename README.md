@@ -1,6 +1,6 @@
 # @orkestrel/process
 
-A typed **child-process toolkit** in three tiers. `Process` supervises one
+A typed **child-process toolkit** in tiers. `Process` supervises one
 child: stdout is framed into lines under a bounded backlog, stderr is forwarded
 live and kept as a byte-bounded tail, stdin is a writable channel, and
 termination is bounded and reports whether the real exit arrived — `SIGTERM` then
@@ -63,7 +63,7 @@ For the full surface — the supervised `Process`, the `execute` / `executeSync`
 
 ## Package
 
-Two typed entry points per the `exports` field in `package.json`: the
+Typed entry points per the `exports` field in `package.json`: the
 host-independent contracts, constants, errors, and `isProcessError` guard from
 `@orkestrel/process`, and the Node engine — `Process`, `execute`, `executeSync`,
 `detach`, `ProcessManager`, and their factories and helpers — from

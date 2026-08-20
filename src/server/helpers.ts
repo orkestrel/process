@@ -96,7 +96,7 @@ export function trimHead(bytes: Uint8Array, limit: number): Buffer {
  * @remarks
  * Every public entry point snapshots before it validates, so the object validated is the object
  * spawned. Each property is read exactly once, because reading one runs the caller's own getter: a
- * command whose `file` changes between two reads would otherwise validate one executable and spawn
+ * command whose `file` changes between reads would otherwise validate one executable and spawn
  * another. The argument vector and the environment record are copied and frozen, so a caller
  * mutating either after the call cannot reach the spawn. An absent optional stays absent rather than
  * becoming an explicit `undefined`.
@@ -584,9 +584,9 @@ export function validateWorkspace(workspace: string | undefined): void {
  *
  * @remarks
  * The retained head is kept as chunk slices and joined once, so a long stream never repeatedly
- * concatenates a growing buffer. `counts` is a two-slot tally: slot `0` counts every delivered byte
- * and slot `1` counts the retained bytes, so a caller compares slot `0` against `limit` to learn
- * whether the capture was truncated.
+ * concatenates a growing buffer. `counts` is a delivered-and-retained tally: slot `0` counts every
+ * delivered byte and slot `1` counts the retained bytes, so a caller compares slot `0` against
+ * `limit` to learn whether the capture was truncated.
  *
  * @param chunk - The delivered chunk, ignored when it is not a buffer
  * @param chunks - The retained head, appended to in place
@@ -784,7 +784,7 @@ export async function stopChild(
  * @remarks
  * `failed` is derived: a run failed when it timed out, was aborted, ended on a host fault, was ended
  * by a signal, or exited with a code other than `0` — a `null` code from a spawn fault is therefore
- * a failure. Both byte fields are bounded by `limit` on a code-point boundary here, which is the one
+ * a failure. Each byte field is bounded by `limit` on a code-point boundary here, which is the one
  * place the captured bytes are decoded.
  *
  * @param input - The captured bytes, terminal state, and capture limit
@@ -832,7 +832,7 @@ export function buildExecuteResult(input: ExecuteInput): ExecuteResult {
  * child is detached, which is what lets its whole process group be terminated. Standard output and
  * error are each byte-bounded by `limit` (default {@link PROCESS_OUTPUT}) and `truncated` reports
  * whether either stream exceeded it. A positive `timeout` and an aborting `signal` both terminate the
- * child through the same bounded stop, and only the first of them is recorded: a timeout reports
+ * child through the same bounded stop, and only the earliest is recorded: a timeout reports
  * `expired` and an abort reports `aborted`, never both. After termination the outcome is awaited for
  * a bounded window, so a descendant holding the child's stdio cannot keep the run pending. That bound
  * covers a terminated run alone: a run with no `timeout` and no `signal` settles on stdio completion
