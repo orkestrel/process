@@ -64,11 +64,12 @@ The one-shot and fire-and-forget spawns, from `@orkestrel/process/server`.
 The classes each factory constructs, from `@orkestrel/process/server`, and the error type from
 `@orkestrel/process`.
 
-| API              | Kind  | Summary                                                             |
-| ---------------- | ----- | ------------------------------------------------------------------- |
-| `Process`        | class | The supervised child engine — framed lines under a bounded backlog. |
-| `ProcessManager` | class | The keyed registry of live children with auto-eviction on exit.     |
-| `ProcessError`   | class | A child-process failure with a stable machine-readable `code`.      |
+| API              | Kind  | Summary                                                                 |
+| ---------------- | ----- | ----------------------------------------------------------------------- |
+| `Process`        | class | The supervised child engine — framed lines under a bounded backlog.     |
+| `ProcessManager` | class | The keyed registry of live children with auto-eviction on exit.         |
+| `ProcessError`   | class | A child-process failure with a stable machine-readable `code`.          |
+| `Retention`      | class | The bounded stream-head accumulator with delivered and retained totals. |
 
 ### Guards
 
@@ -109,7 +110,7 @@ The resolution and environment building blocks every spawn composes, from
 | `mergeEnvironment`          | function | Merge environment overrides into the environment one child receives.      |
 | `mergePlatformEnvironment`  | function | Merge explicit environment layers under one platform's key rules.         |
 
-### Capture helpers
+### Retention helpers
 
 The byte-bounding and result-assembly building blocks, from `@orkestrel/process/server`.
 
@@ -117,7 +118,6 @@ The byte-bounding and result-assembly building blocks, from `@orkestrel/process/
 | -------------------- | -------- | --------------------------------------------------------------------------- |
 | `trimHead`           | function | Keep at most `limit` leading bytes without splitting a UTF-8 sequence.      |
 | `trimTail`           | function | Keep at most `limit` trailing bytes without splitting a UTF-8 sequence.     |
-| `retainChunk`        | function | Retain one delivered chunk up to a limit and tally what the stream sent.    |
 | `buildExecuteResult` | function | Assemble one frozen `ExecuteResult` from captured bytes and terminal facts. |
 
 ### Termination helpers
@@ -192,10 +192,10 @@ The contracts and options, all from `@orkestrel/process`.
 The Node-side contracts, from `@orkestrel/process/server`. They support the Node child boundary and
 capture helper, so they stay out of the host-independent face.
 
-| API             | Kind      | Summary                                                                                                    |
-| --------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
-| `ProcessChild`  | interface | The child boundary the termination helpers drive — `pid`, `exitCode`, `signalCode`, `kill`, `once`, `off`. |
-| `CaptureCounts` | interface | Mutable delivered and retained byte totals for capture without per-chunk allocation.                       |
+| API                  | Kind      | Summary                                                                                                    |
+| -------------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
+| `ProcessChild`       | interface | The child boundary the termination helpers drive — `pid`, `exitCode`, `signalCode`, `kill`, `once`, `off`. |
+| `RetentionInterface` | interface | The retention surface — readonly `delivered` and `retained` totals plus `retain(chunk, limit)`.            |
 
 ### Surface notes
 
@@ -208,6 +208,25 @@ stay Surface rows. Their call-signature methods are documented under [Methods](#
 The public methods of each behavioral interface. `Process` implements `ProcessInterface` exactly, and
 `ProcessManager` implements `ProcessManagerInterface` exactly, so each table doubles as the class's
 instance-method surface.
+
+#### `RetentionInterface`
+
+`Retention` implements `RetentionInterface` exactly. The `retain` method records each delivered buffer
+and returns the retained head slice while room remains under the limit.
+
+| Method   | Returns               | Behavior                                                                 |
+| -------- | --------------------- | ------------------------------------------------------------------------ |
+| `retain` | `Buffer \| undefined` | Record a delivered buffer and return its retained slice, or `undefined`. |
+
+```ts
+import { Buffer } from 'node:buffer'
+import { Retention } from '@orkestrel/process/server'
+
+const retention = new Retention()
+retention.retain(Buffer.from('hello'), 3)?.toString('utf8') // 'hel'
+retention.delivered // 5
+retention.retained // 3
+```
 
 #### `ProcessInterface`
 
@@ -727,9 +746,8 @@ returned, and its fault surfaces through its own `exit` and `error` event rather
 - A `protocol`-coded `ProcessError` after `destroy` has begun. The check runs again after the child
   exists, because reading an option runs your own code and that code can start the teardown; a
   registry being destroyed adopts nothing, so the child it has already spawned is destroyed and the
-  launch is still refused. That later refusal carries a bounded residual. The `protocol` refusal
-  throws synchronously before the `destroy` barrier settles. The barrier does not cover the child's
-  asynchronous teardown, which finishes within `grace` plus the confirmation window.
+  launch is still refused. The `protocol` refusal throws synchronously before the `destroy` barrier
+  settles. The barrier does not cover the child's asynchronous teardown.
 - An `invalid`-coded `ProcessError` when an option or command string is malformed. The id is
   reserved before the child is constructed and released when construction throws, so a refused launch
   strands no key.
@@ -1006,6 +1024,8 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   over an open and a closed channel, bounded termination and its confirmation, the POSIX escalation
   from a trapped `SIGTERM` to `SIGKILL`, abort-signal termination, the isolated environment, the
   `invalid` refusals, and `destroy`.
+- [`tests/src/server/Retention.test.ts`](../tests/src/server/Retention.test.ts) — the stream-head
+  accumulator: delivered and retained totals across a truncating stream.
 - [`tests/src/server/ProcessManager.test.ts`](../tests/src/server/ProcessManager.test.ts) — the
   registry: `launch` registration and its `duplicate`, `protocol`, and `invalid` refusals, including
   a teardown started from inside the caller's own option getter, the unforgeable eviction and its

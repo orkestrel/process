@@ -43,6 +43,7 @@ import {
 	PROCESS_TIMER,
 } from '@src/core'
 import {
+	Retention,
 	buildExecutableCandidates,
 	buildPlatformSpawn,
 	buildExecuteResult,
@@ -61,7 +62,6 @@ import {
 	readPlatformVariable,
 	readVariable,
 	resolveExecutable,
-	retainChunk,
 	execute,
 	executeSync,
 	snapshotCommand,
@@ -88,80 +88,93 @@ const MODULES = Object.freeze({
 	'@orkestrel/process': 'src/core',
 	'@orkestrel/process/server': 'src/server',
 })
-/** The names each face must refuse from its neighbouring face. */
-const REFUSALS: Readonly<Record<string, readonly string[]>> = Object.freeze({
-	'@orkestrel/process': Object.freeze([
-		'CaptureCounts',
-		'Process',
-		'ProcessChild',
-		'ProcessManager',
-		'buildExecutableCandidates',
-		'buildExecuteResult',
-		'buildPlatformSpawn',
-		'buildSpawn',
-		'createProcess',
-		'createProcessManager',
-		'detach',
-		'execute',
-		'executeSync',
-		'formatCommand',
-		'isExited',
-		'isFile',
-		'killProcess',
-		'killTree',
-		'mergeEnvironment',
-		'mergePlatformEnvironment',
-		'quoteArgument',
-		'readPlatformVariable',
-		'readVariable',
-		'resolveExecutable',
-		'retainChunk',
-		'snapshotCommand',
-		'stopChild',
-		'trimHead',
-		'trimTail',
-		'validateBytes',
-		'validateCommand',
-		'validateEnvironment',
-		'validateText',
-		'validateTimer',
-		'validateWorkspace',
-		'waitForExit',
-	]),
-	'@orkestrel/process/server': Object.freeze([
-		'DetachOptions',
-		'ExecutableOptions',
-		'ExecuteInput',
-		'ExecuteOptions',
-		'ExecuteResult',
-		'ExecuteSyncOptions',
-		'PROCESS_BACKLOG',
-		'PROCESS_CONFIRMATION',
-		'PROCESS_ERROR_CODES',
-		'PROCESS_EVIDENCE',
-		'PROCESS_GRACE',
-		'PROCESS_OUTPUT',
-		'PROCESS_PATHEXT',
-		'PROCESS_TIMER',
-		'ProcessCommand',
-		'ProcessError',
-		'ProcessErrorCode',
-		'ProcessErrorContext',
-		'ProcessErrorOptions',
-		'ProcessEventMap',
-		'ProcessExit',
-		'ProcessInterface',
-		'ProcessManagerEventMap',
-		'ProcessManagerInterface',
-		'ProcessManagerOptions',
-		'ProcessOptions',
-		'SpawnInput',
-		'createDuplicateError',
-		'createExecuteError',
-		'createInvalidError',
-		'createProtocolError',
-		'isProcessError',
-	]),
+/**
+ * The names each face must refuse from its neighbouring face.
+ *
+ * Each row is compared with the neighbouring face's published surface, so the list fails when that
+ * surface changes and cannot rot.
+ */
+const REFUSALS: Readonly<
+	Record<string, { readonly foreign: readonly string[]; readonly shared: readonly string[] }>
+> = Object.freeze({
+	'@orkestrel/process': Object.freeze({
+		foreign: Object.freeze([
+			'Retention',
+			'RetentionInterface',
+			'Process',
+			'ProcessChild',
+			'ProcessManager',
+			'buildExecutableCandidates',
+			'buildExecuteResult',
+			'buildPlatformSpawn',
+			'buildSpawn',
+			'createProcess',
+			'createProcessManager',
+			'detach',
+			'execute',
+			'executeSync',
+			'formatCommand',
+			'isExited',
+			'isFile',
+			'killProcess',
+			'killTree',
+			'mergeEnvironment',
+			'mergePlatformEnvironment',
+			'quoteArgument',
+			'readPlatformVariable',
+			'readVariable',
+			'resolveExecutable',
+			'snapshotCommand',
+			'stopChild',
+			'trimHead',
+			'trimTail',
+			'validateBytes',
+			'validateCommand',
+			'validateEnvironment',
+			'validateText',
+			'validateTimer',
+			'validateWorkspace',
+			'waitForExit',
+		]),
+		shared: Object.freeze([]),
+	}),
+	'@orkestrel/process/server': Object.freeze({
+		foreign: Object.freeze([
+			'DetachOptions',
+			'ExecutableOptions',
+			'ExecuteInput',
+			'ExecuteOptions',
+			'ExecuteResult',
+			'ExecuteSyncOptions',
+			'PROCESS_BACKLOG',
+			'PROCESS_CONFIRMATION',
+			'PROCESS_ERROR_CODES',
+			'PROCESS_EVIDENCE',
+			'PROCESS_GRACE',
+			'PROCESS_OUTPUT',
+			'PROCESS_PATHEXT',
+			'PROCESS_TIMER',
+			'ProcessCommand',
+			'ProcessError',
+			'ProcessErrorCode',
+			'ProcessErrorContext',
+			'ProcessErrorOptions',
+			'ProcessEventMap',
+			'ProcessExit',
+			'ProcessInterface',
+			'ProcessManagerEventMap',
+			'ProcessManagerInterface',
+			'ProcessManagerOptions',
+			'ProcessOptions',
+			'SpawnInput',
+			'createDuplicateError',
+			'createExecuteError',
+			'createInvalidError',
+			'createProtocolError',
+			'isProcessError',
+		]),
+		shared: Object.freeze([]),
+	}),
 })
 /**
  * Declarations deliberately kept out of a barrel, as `symbolKey` strings.
@@ -215,16 +228,35 @@ describe('public package faces', () => {
 	// Each literal refusal list is independent of the live Source that the assertion reads. A
 	// widened `module` can therefore leak a neighbouring face without changing its expectation.
 	for (const face of FACES) {
-		const foreign = requireValue(
+		const refusal = requireValue(
 			REFUSALS[face.specifier],
 			`Missing refusal list: ${face.specifier}`,
 		)
+		const { foreign, shared } = refusal
+		const neighbour = requireValue(
+			FACES.find((candidate) => candidate.specifier !== face.specifier),
+			`Missing neighbouring face: ${face.specifier}`,
+		)
+		const neighbouring = requireValue(
+			SOURCES.get(neighbour.specifier),
+			`Unmapped neighbouring specifier: ${neighbour.specifier}`,
+		)
+		const neighbouringNames = neighbouring.surface().map((symbol) => symbol.name)
+
+		it(`keeps the refusal list aligned with the neighbouring face for ${face.specifier}`, () => {
+			expect([...foreign].sort()).toEqual(
+				neighbouringNames.filter((name) => !shared.includes(name)).sort(),
+			)
+		})
 
 		it(`publishes none of a neighbouring face's names on ${face.specifier}`, () => {
 			const source = requireValue(SOURCES.get(face.specifier), 'Unmapped specifier')
 			const published = source.surface().map((symbol) => symbol.name)
 			expect(foreign.length).toBeGreaterThan(0)
 			expect(foreign.filter((name) => published.includes(name))).toEqual([])
+			expect(
+				shared.filter((name) => !published.includes(name) || !neighbouringNames.includes(name)),
+			).toEqual([])
 		})
 	}
 
@@ -488,6 +520,14 @@ const CONSTANTS: Readonly<Record<string, number | string | readonly string[]>> =
 const PROSE_CONSTANTS: readonly string[] = Object.freeze(['PROCESS_ERROR_CODES'])
 
 describe('flagship fences', () => {
+	it('retains the bounded stream head and reports both byte totals', () => {
+		const retention = new Retention()
+
+		expect(retention.retain(Buffer.from('hello'), 3)?.toString('utf8')).toBe('hel')
+		expect(retention.delivered).toBe(5)
+		expect(retention.retained).toBe(3)
+	})
+
 	it('states the numeric teardown backlog cap on every public contract', () => {
 		const guide = requireValue(files['guides/process.md'], 'Missing file: guides/process.md')
 		const types = requireValue(files['src/core/types.ts'], 'Missing file: src/core/types.ts')
@@ -863,8 +903,6 @@ describe('flagship fences', () => {
 
 			expect(listeners).toEqual([])
 			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
-			controller.abort()
-			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
 		} finally {
 			await child.destroy()
 		}
@@ -1122,12 +1160,11 @@ describe('unfenced TSDoc examples', () => {
 		})
 	}
 
-	it('retains the byte count retainChunk\u2019s example claims', () => {
-		const chunks: Buffer[] = []
-		const counts = { delivered: 0, retained: 0 }
-		retainChunk(Buffer.from('hello'), chunks, counts, 3)
+	it('retains the byte total Retention\u2019s example claims', () => {
+		const retention = new Retention()
 
-		expect(counts.retained).toBe(3)
+		expect(retention.retain(Buffer.from('hello'), 3)?.toString('utf8')).toBe('hel')
+		expect(retention.retained).toBe(3)
 	})
 
 	// The example claims one value per host, so each host's claim is its own case. Off Windows

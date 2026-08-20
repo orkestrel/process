@@ -20,6 +20,7 @@ import * as ts from 'typescript'
 // earlier release installed under `node_modules`, so every assertion below is rooted in the
 // temporary consumer instead.
 it('installs the packed artifact and drives its entries, declarations, and resolution modes', () => {
+	expect(import.meta.env.MODE).toBe('release')
 	const root = fileURLToPath(new URL('../', import.meta.url))
 	const scratch = mkdtempSync(join(tmpdir(), 'orkestrel-process-distribution-'))
 

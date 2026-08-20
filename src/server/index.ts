@@ -1,5 +1,6 @@
 export * from './types.js'
 export * from './helpers.js'
 export * from './factories.js'
+export * from './Retention.js'
 export * from './Process.js'
 export * from './ProcessManager.js'

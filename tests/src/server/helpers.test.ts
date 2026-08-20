@@ -27,7 +27,6 @@ import {
 	readPlatformVariable,
 	readVariable,
 	resolveExecutable,
-	retainChunk,
 	execute,
 	executeSync,
 	snapshotCommand,
@@ -436,20 +435,6 @@ describe('validateWorkspace', () => {
 		expect(isProcessError(thrown)).toBe(true)
 		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('invalid')
 		expect(isProcessError(thrown) ? thrown.context?.value : undefined).toBe('')
-	})
-})
-
-describe('retainChunk', () => {
-	it('retains the head up to the limit while counting everything delivered', () => {
-		const chunks: Buffer[] = []
-		const counts = { delivered: 0, retained: 0 }
-
-		retainChunk(Buffer.from('hello'), chunks, counts, 3)
-		retainChunk(Buffer.from('world'), chunks, counts, 3)
-		retainChunk('not a chunk', chunks, counts, 3)
-
-		expect(Buffer.concat(chunks).toString('utf8')).toBe('hel')
-		expect(counts).toEqual({ delivered: 10, retained: 3 })
 	})
 })
 

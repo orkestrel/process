@@ -9,7 +9,7 @@ import type {
 	ExecuteSyncOptions,
 	SpawnInput,
 } from '@src/core'
-import type { CaptureCounts, ProcessChild } from './types.js'
+import type { ProcessChild } from './types.js'
 import { Buffer } from 'node:buffer'
 import { spawn, spawnSync } from 'node:child_process'
 import { statSync } from 'node:fs'
@@ -31,6 +31,7 @@ import {
 	PROCESS_PATHEXT,
 	PROCESS_TIMER,
 } from '@src/core'
+import { Retention } from './Retention.js'
 
 /**
  * Trims a buffer to at most `limit` trailing bytes without splitting a UTF-8 sequence.
@@ -580,44 +581,6 @@ export function validateWorkspace(workspace: string | undefined): void {
 }
 
 /**
- * Retains one delivered chunk up to a byte limit and records what the stream delivered.
- *
- * @remarks
- * The retained head is kept as chunk slices and joined once, so a long stream never repeatedly
- * concatenates a growing buffer. `counts.delivered` records every delivered byte and
- * `counts.retained` records the retained bytes, so a caller compares `counts.delivered` against
- * `limit` to learn whether the capture was truncated.
- *
- * @param chunk - The delivered chunk, ignored when it is not a buffer
- * @param chunks - The retained head, appended to in place
- * @param counts - The delivered and retained byte totals, updated in place
- * @param limit - The maximum retained byte count
- * @returns Nothing
- *
- * @example
- * ```ts
- * const chunks: Buffer[] = []
- * const counts = { delivered: 0, retained: 0 }
- * retainChunk(Buffer.from('hello'), chunks, counts, 3)
- * counts.retained // 3
- * ```
- */
-export function retainChunk(
-	chunk: unknown,
-	chunks: Buffer[],
-	counts: CaptureCounts,
-	limit: number,
-): void {
-	if (!Buffer.isBuffer(chunk)) return
-	counts.delivered += chunk.byteLength
-	const room = limit - counts.retained
-	if (room <= 0) return
-	const slice = chunk.byteLength <= room ? chunk : Buffer.from(chunk.subarray(0, room))
-	chunks.push(slice)
-	counts.retained += slice.byteLength
-}
-
-/**
  * Checks whether a child process has reached its native exit.
  *
  * @remarks
@@ -881,8 +844,8 @@ export async function execute(
 	const finish = new AbortController()
 	const outChunks: Buffer[] = []
 	const errChunks: Buffer[] = []
-	const outCounts: CaptureCounts = { delivered: 0, retained: 0 }
-	const errCounts: CaptureCounts = { delivered: 0, retained: 0 }
+	const outRetention = new Retention()
+	const errRetention = new Retention()
 	let spawned = false
 	let expired = false
 	let aborted = false
@@ -914,7 +877,7 @@ export async function execute(
 					signal: child.signalCode,
 					expired,
 					aborted,
-					truncated: outCounts.delivered > limit || errCounts.delivered > limit,
+					truncated: outRetention.delivered > limit || errRetention.delivered > limit,
 					limit,
 					...(cause === undefined ? {} : { cause }),
 				}),
@@ -937,8 +900,14 @@ export async function execute(
 	)
 
 	child.stdin.on('error', () => undefined)
-	child.stdout.on('data', (chunk: unknown) => retainChunk(chunk, outChunks, outCounts, limit))
-	child.stderr.on('data', (chunk: unknown) => retainChunk(chunk, errChunks, errCounts, limit))
+	child.stdout.on('data', (chunk: unknown) => {
+		const retained = outRetention.retain(chunk, limit)
+		if (retained !== undefined) outChunks.push(retained)
+	})
+	child.stderr.on('data', (chunk: unknown) => {
+		const retained = errRetention.retain(chunk, limit)
+		if (retained !== undefined) errChunks.push(retained)
+	})
 	child.once('spawn', () => {
 		spawned = true
 	})
