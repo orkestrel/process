@@ -2,7 +2,7 @@ import type { UserConfig } from 'vite'
 import { defineConfig, mergeConfig } from 'vitest/config'
 import manifest from './package.json' with { type: 'json' }
 import tsconfig from './tsconfig.json' with { type: 'json' }
-import { environmentBoundary, outputBoundary } from './configs/helpers.js'
+import { enforceBuildLog, environmentBoundary, outputBoundary } from './configs/helpers.js'
 import { fileURLToPath, URL } from 'node:url'
 
 export function resolveWorkspacePath(relativePath: string): string {
@@ -38,6 +38,7 @@ export const srcCore = (options?: UserConfig): UserConfig =>
 				emptyOutDir: true,
 				sourcemap: true,
 				minify: false,
+				rolldownOptions: { onLog: enforceBuildLog },
 			},
 			test: {
 				name: { label: 'src:core', color: 'magenta' },
@@ -68,6 +69,7 @@ export const srcServer = (options?: UserConfig): UserConfig =>
 				outDir: 'dist/src/server',
 				target: 'node22',
 				rolldownOptions: {
+					onLog: enforceBuildLog,
 					platform: 'node',
 					external: (id: string) =>
 						id === '@src/core' ||
