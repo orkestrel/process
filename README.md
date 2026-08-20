@@ -27,6 +27,7 @@ npm install @orkestrel/process
 
 - Node.js >= 22.12.0
 - ESM and CommonJS builds
+- TypeScript `moduleResolution` set to `node16`, `nodenext`, or `bundler`
 
 ## Usage
 

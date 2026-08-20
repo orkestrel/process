@@ -68,7 +68,7 @@ const MODULES = Object.freeze({
  */
 const INTERNAL: readonly string[] = Object.freeze([])
 /** Root-level files this package's guides link to. `readInventory` walks directories only. */
-const ROOT_FILES = Object.freeze(['AGENTS.md'])
+const ROOT_FILES = Object.freeze(['AGENTS.md', 'README.md'])
 
 const root = new URL('../', import.meta.url)
 const files: Record<string, string> = {
@@ -417,7 +417,61 @@ describe('flagship fences', () => {
 		expect(formatCommand({ file: 'git', arguments: ['status'] })).toBe('git status')
 		expect(quoteArgument('status')).toBe('status')
 		expect(quoteArgument('a&b')).toBe('"a&b"')
+		expect(quoteArgument('%1')).toBe('"%1"')
 		expect(buildSpawn({ file: 'node', arguments: ['--version'] }).verbatim).toBe(false)
+	})
+
+	it('binds the command and supervision host qualifications', () => {
+		const guide = requireValue(
+			files['guides/process.md'],
+			'Missing file: guides/process.md',
+		).replace(/\s+/gu, ' ')
+		const types = requireValue(files['src/core/types.ts'], 'Missing file: src/core/types.ts')
+			.replaceAll('*', '')
+			.replace(/\s+/gu, ' ')
+
+		expect(guide).toContain(
+			'`quoteArgument` includes `%` in the quoted set, so `quoteArgument(\'%1\')` returns `"%1"`.',
+		)
+		expect(types).toContain(
+			'On a POSIX host, `isolated: true` leaves no `PATH`, so pass an absolute `file` or include `PATH` in `environment`.',
+		)
+		expect(types).toContain(
+			'On Windows, libuv injects a host environment set even when `isolated` is `true`.',
+		)
+		expect(guide).toContain(
+			'POSIX detachment creates the process group that tree termination signals.',
+		)
+		expect(guide).toContain(
+			"The child therefore survives the supervisor's `SIGKILL` and does not receive the terminal's `SIGINT`.",
+		)
+		expect(guide).toContain('Call `stop` or `destroy` during an orderly shutdown.')
+		expect(types).toContain('A consumer must call `stop` or `destroy` during an orderly shutdown.')
+	})
+
+	it('records the spawn-fault code difference', () => {
+		const guide = requireValue(
+			files['guides/process.md'],
+			'Missing file: guides/process.md',
+		).replace(/\s+/gu, ' ')
+		const types = requireValue(files['src/core/types.ts'], 'Missing file: src/core/types.ts')
+			.replaceAll('*', '')
+			.replace(/\s+/gu, ' ')
+		expect(guide).toContain(
+			"A spawn fault reports the host's negative errno in `ProcessExit.code` and an asynchronous `RunResult.code`.",
+		)
+		expect(guide).toContain('The synchronous `runSync` result reports `null` instead.')
+		expect(types).toContain(
+			"A spawn fault reports the host's negative errno for `Process` and `run`.",
+		)
+		expect(types).toContain('A spawn fault reports `null` for `runSync`.')
+	})
+
+	it('states the supported TypeScript module-resolution floor', () => {
+		const readme = requireValue(files['README.md'], 'Missing file: README.md')
+		expect(readme).toContain(
+			'TypeScript `moduleResolution` set to `node16`, `nodenext`, or `bundler`',
+		)
 	})
 
 	it('merges the environment fence both ways', () => {

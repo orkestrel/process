@@ -29,20 +29,22 @@ import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkes
  * wins, matching how the host resolves an environment variable. `input` is standard-input payload
  * written immediately after spawn, so it carries no NUL restriction. Every spawn-bound string here
  * is validated: an empty `file`, or a NUL character in `file`, `arguments`, or `environment`, is
- * refused with a {@link ProcessError} coded `invalid`.
+ * refused with a {@link ProcessError} coded `invalid`. On a POSIX host, `isolated: true` leaves no
+ * `PATH`, so pass an absolute `file` or include `PATH` in `environment`. On Windows, libuv injects a
+ * host environment set even when `isolated` is `true`.
  */
 export interface ProcessCommand {
 	readonly file: string
 	readonly arguments: readonly string[]
 	readonly environment?: Readonly<Record<string, string | undefined>>
 	readonly input?: string
-	/** If `true`, the child environment is `environment` alone; if `false` or omitted, it merges over the parent environment. */
+	/** If `true`, exclude the parent environment; on POSIX this leaves no `PATH`, while Windows libuv still injects a host set. */
 	readonly isolated?: boolean
 }
 
 /** The observed terminal state of a child process: its exit code, or the signal that ended it. */
 export interface ProcessExit {
-	/** The exit code, or `null` when a signal ended the process. */
+	/** The exit code, or `null` when a signal ended the process. A spawn fault reports the host's negative errno for `Process` and `run`. */
 	readonly code: number | null
 	/** The terminating signal name, or `null` when the process exited on its own. */
 	readonly signal: string | null
@@ -111,7 +113,9 @@ export type ProcessEventMap = {
  * {@link ProcessEventMap} listeners and `error` receives isolated listener failures. Every numeric
  * option is validated at construction: a timer value outside
  * `[0, PROCESS_TIMER]`, a negative or fractional byte value, or a `backlog` below `1` throws a
- * {@link ProcessError} coded `invalid`.
+ * {@link ProcessError} coded `invalid`. POSIX detachment creates the process group used for tree
+ * termination, so the child survives the supervisor's `SIGKILL` and does not receive the terminal's
+ * `SIGINT`. A consumer must call `stop` or `destroy` during an orderly shutdown.
  */
 export interface ProcessOptions {
 	readonly on?: EmitterHooks<ProcessEventMap>
@@ -204,7 +208,8 @@ export interface ProcessInterface {
  * failed to spawn. `expired` and `aborted` are the two ways the run ended the child rather than the
  * child ending itself, and only the first of them observed is recorded. `truncated` is independent of
  * both: it reports that a stream exceeded `limit`, which fails a synchronous run and does not fail an
- * asynchronous one.
+ * asynchronous one. A spawn fault reports the host's negative errno for `run`. A spawn fault reports
+ * `null` for `runSync`.
  */
 export interface RunResult {
 	/** The command line that was run, for diagnostics. */
@@ -213,6 +218,7 @@ export interface RunResult {
 	readonly stdout: string
 	/** The captured standard error, byte-bounded by `limit`. */
 	readonly stderr: string
+	/** The exit code. A spawn fault reports the host's negative errno for `run` and `null` for `runSync`. */
 	readonly code: number | null
 	readonly signal: string | null
 	/** True if the run did not complete successfully. */

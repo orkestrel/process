@@ -326,8 +326,9 @@ export function resolveExecutable(file: string, options?: ExecutableOptions): st
  * @remarks
  * A token carrying whitespace or a shell metacharacter is wrapped in double quotes so `cmd.exe`
  * passes it as one literal argument; an embedded double quote is doubled, which is how `cmd.exe`
- * reads a literal quote inside a quoted token. Every other token is left exactly as written, so a
- * batch script still receives `%1` without added quotes.
+ * reads a literal quote inside a quoted token. The quoted set includes `%`, although quoting cannot
+ * stop `cmd.exe` expansion; {@link buildSpawn} therefore refuses `%` in an argument to a Windows
+ * batch target.
  *
  * @param value - The token to quote
  * @returns The token, quoted only when `cmd.exe` would otherwise split or interpret it

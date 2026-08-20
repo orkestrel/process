@@ -337,6 +337,10 @@ child's stdio holds the pipe open after the child itself is gone, so the close e
 and the `exit` promise and the `lines` stream can both stay outstanding past the barrier. A caller
 that must not wait on either arms its own timer around them.
 
+POSIX detachment creates the process group that tree termination signals. The child therefore
+survives the supervisor's `SIGKILL` and does not receive the terminal's `SIGINT`. Call `stop` or
+`destroy` during an orderly shutdown.
+
 `PROCESS_CONFIRMATION` bounds each awaited step of a stop rather than the stop as a whole, so a
 worst-case termination spends more than one of them. On a POSIX host the cooperative wait after
 `SIGTERM` is bounded by `grace` and the wait after `SIGKILL` by `PROCESS_CONFIRMATION`. On Windows
@@ -413,8 +417,9 @@ candidate only when `isFile` reports a regular file.
 A resolved `.cmd` or `.bat` script cannot be spawned directly. `buildSpawn` runs it through an
 explicitly quoted `cmd.exe /d /s /c` command line and sets `verbatim`, so the host receives that line
 as written. `quoteArgument` wraps a token carrying whitespace or a metacharacter in double quotes and
-doubles an embedded quote, and leaves every other token exactly as written so a batch script still
-receives `%1` unquoted.
+doubles an embedded quote. `quoteArgument` includes `%` in the quoted set, so `quoteArgument('%1')`
+returns `"%1"`. Quoting does not prevent percent expansion, which is why the batch path refuses that
+argument before spawning.
 
 One argument cannot survive that command line: `cmd.exe` expands `%NAME%` before it parses quotes,
 so no quoting carries a percent sign through to a batch target. On Windows, `buildSpawn` refuses an
@@ -434,6 +439,7 @@ import { buildSpawn, formatCommand, quoteArgument } from '@orkestrel/process/ser
 formatCommand({ file: 'git', arguments: ['status'] }) // 'git status'
 quoteArgument('status') // 'status'
 quoteArgument('a&b') // '"a&b"'
+quoteArgument('%1') // '"%1"'
 buildSpawn({ file: 'node', arguments: ['--version'] }).verbatim // false
 ```
 
@@ -538,6 +544,9 @@ failure, an abort is a failure, and a synchronous overflow is a failure. `expire
 the two ways the run ended the child rather than the child ending itself, and only the first of them
 observed is recorded, so they are never both `true`.
 
+A spawn fault reports the host's negative errno in `ProcessExit.code` and an asynchronous
+`RunResult.code`. The synchronous `runSync` result reports `null` instead.
+
 By default a failed run rejects with a `ProcessError` carrying the `RunResult` on its `result`
 property. An expired run carries code `timeout`; every other failure carries code `spawn`. Passing
 `strict: false` settles with the result even on failure, so you inspect `failed` yourself.
@@ -595,6 +604,7 @@ other.
 | Descendants     | A timeout or abort terminates the child tree.             | A timeout can leave descendants running.             |
 | Cancellation    | An `AbortSignal` terminates the run and sets `aborted`.   | None; the host offers no in-flight cancellation.     |
 | Overflow        | Reports `truncated` and keeps the run successful.         | Reports `truncated` and `failed`, killing the child. |
+| Spawn fault     | Reports the host's negative errno in `code`.              | Reports `null` in `code`.                            |
 | Refusal         | Rejects before spawning, because it is an async function. | Throws before spawning.                              |
 
 Both share the rest: the same resolver and no implicit shell, the same environment merge, the same
