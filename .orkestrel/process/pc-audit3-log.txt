@@ -1,0 +1,8 @@
+1668b62 Delete the test files that only enumerated a barrel
+b004a67 Rename the execution primitive to the verb the canon reserves
+327e356 Brief PC7: rename run to execute, on the owner's ruling
+a6a30b7 Recover the unit reports that were never captured
+e79ae0d Close the second audit round: a false claim, a wrong count, and a wrong count
+254fa8b Brief the second process audit round, on Sol
+?? .orkestrel/process/pc-audit3-diff.txt
+?? .orkestrel/process/pc-audit3-log.txt
