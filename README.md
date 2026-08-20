@@ -5,16 +5,16 @@ child: stdout is framed into lines under a bounded backlog, stderr is forwarded
 live and kept as a byte-bounded tail, stdin is a writable channel, and
 termination is bounded and reports whether the real exit arrived — `SIGTERM` then
 `SIGKILL` after a grace window on a POSIX host, a whole-tree kill on Windows.
-`execute` and `executeSync` are the one-shot runners — they buffer a child to completion
-and settle with an `ExecuteResult` carrying the captured output, the exit, and
-`failed` / `expired` / `aborted` / `truncated`, rejecting with a `ProcessError`
-by default or resolving the result when you pass `strict: false`.
-`ProcessManager` is a keyed registry of live children: `launch` spawns and
-registers by id, a settled child evicts itself with no polling, and `stop`
-terminates one id, a list, or every child. Every tier is observable through a
-typed `emitter`, cancellation rides an `AbortSignal`, and no spawn uses a shell,
-so a metacharacter in an argument is data rather than syntax. The contracts are
-host-independent and ship from `@orkestrel/process`; the Node engine ships from
+`execute` and `executeSync` buffer a child to completion and settle with an
+`ExecuteResult` carrying the captured output, the exit, and `failed` /
+`expired` / `aborted` / `truncated`, rejecting with a `ProcessError` by default
+or resolving the result when you pass `strict: false`. `ProcessManager` is a
+keyed registry of live children: `launch` spawns and registers by id, a settled
+child evicts itself with no polling, and `stop` terminates one id, a list, or
+every child. Every tier is observable through a typed `emitter`, cancellation
+rides an `AbortSignal`, and no spawn uses a shell, so a metacharacter in an
+argument is data rather than syntax. The contracts are host-independent and
+ship from `@orkestrel/process`; the Node engine ships from
 `@orkestrel/process/server`. Part of the `@orkestrel` line.
 
 ## Install
@@ -56,9 +56,9 @@ await child.destroy()
 
 ## Guide
 
-For the full surface — the supervised `Process`, the `execute` / `executeSync` / `detach`
-spawns, the keyed `ProcessManager`, the observable `emitter`, the `ProcessError`
-failure type, and the lower-level helpers — see
+For the full surface — the supervised `Process`, the `execute` / `executeSync` /
+`detach` spawns, the keyed `ProcessManager`, the observable `emitter`, the
+`ProcessError` failure type, and the lower-level helpers — see
 [`guides/process.md`](guides/process.md).
 
 ## Package

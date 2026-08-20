@@ -2,11 +2,19 @@ Renamed the execution primitive and every owned consumer without compatibility a
 
 ## Counts
 
-Counts were measured across `src/`.
+Every cell is a word-boundary occurrence count over `src/`, measured with
+`git grep -ohE "\b<token>\b" <revision> -- src/ | wc -l`. `Before` reads `b004a67~1`, the revision
+preceding this rename; each `After` reads `b004a67`, this rename's own tip. That pattern admits
+neither `runner` nor `runners`, so the `run` row rules on neither word.
+
+The whole table was re-measured on 2026-08-20 and every cell held. The `run` row's `After` cell
+previously read `44 English uses`, which was 55 minus 11 rather than a reading of the tree; the
+number now beside it is what the instrument returns. The residual grep output that follows opens
+with the 41 `src/` lines those 44 occurrences sit on, three of which carry two each.
 
 | Original | Before | After | Replacement | After |
 | --- | ---: | ---: | --- | ---: |
-| `run` | 55 | 44 English uses | `execute` | 11 |
+| `run` | 55 | 44 | `execute` | 11 |
 | `RunResult` | 23 | 0 | `ExecuteResult` | 23 |
 | `createRunError` | 6 | 0 | `createExecuteError` | 6 |
 | `runSync` | 4 | 0 | `executeSync` | 4 |

@@ -5,13 +5,13 @@ import type { PROCESS_ERROR_CODES } from './constants.js'
  * The public contracts for `@orkestrel/process`: a typed child-process toolkit.
  *
  * @remarks
- * Three tiers, smallest to largest:
+ * Three tiers, divided by lifetime:
  *
  * - **{@link ProcessInterface}** — one supervised child with framed stdout lines under a bounded
  *   backlog, a byte-bounded stderr tail, a live stderr event, a writable stdin channel, a typed
  *   lifecycle {@link ProcessEventMap} emitter, and bounded termination. The low-level streaming
  *   primitive.
- * - **{@link ExecuteResult} / execute** — a one-shot runner that buffers a child to completion and settles
+ * - **{@link ExecuteResult} / execute** — a one-shot spawn that buffers a child to completion and settles
  *   with its output and exit, the ergonomic layer for fire-and-collect commands.
  * - **{@link ProcessManagerInterface}** — a keyed registry of live {@link ProcessInterface}
  *   children, launched and stopped by id, observed through its own {@link ProcessManagerEventMap}.
@@ -143,7 +143,7 @@ export interface ProcessOptions {
  * `lines` is pumped as soon as the child writes, and it is a single-consumer stream: each line goes
  * to exactly one waiting iterator, so two iterators split the output between them rather than each
  * receiving all of it. The policy for an unconsumed backlog follows
- * consumer intent. Once an iterator has been requested, stdout pauses at the `backlog` mark and
+ * consumer intent. After an iterator has been requested, stdout pauses at the `backlog` mark and
  * resumes at half of it, so the consumer loses nothing before termination and the child feels real
  * backpressure. Termination never reapplies the pause, so from the moment a stop begins retention is
  * capped at twice `backlog` and later lines are dropped. While
@@ -305,8 +305,8 @@ export interface ExecuteOptions {
  * so this contract carries no `grace` and no `signal`. A `timeout` ends only the root process and can
  * leave descendants running; use `execute` or {@link ProcessInterface} when timeout must terminate the
  * tree. A `timeout` and an output overflow both end the root with `SIGKILL`; an overflow reports
- * `truncated` and `failed` together, which is where the synchronous and asynchronous runners
- * genuinely differ. `input` is standard-input payload and carries no NUL restriction.
+ * `truncated` and `failed` together, which is where `execute` and `executeSync` genuinely differ.
+ * `input` is standard-input payload and carries no NUL restriction.
  */
 export interface ExecuteSyncOptions {
 	/** The working directory. Default: the current working directory. */

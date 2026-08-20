@@ -393,6 +393,32 @@ for (const entry of manifest) {
 // value its comment claims. A child is spawned through `process.execPath`'s own runtime name so
 // the transcription exercises the same no-shell resolver a reader's `node` reaches.
 
+/**
+ * Every constant the guide's Constants table documents, keyed by the name its `API` cell prints.
+ *
+ * The row set is compared against these keys, so a constant the barrel gained with no row, and a
+ * row naming a constant that does not exist, each fail.
+ */
+const CONSTANTS: Readonly<Record<string, number | string | readonly string[]>> = Object.freeze({
+	PROCESS_GRACE,
+	PROCESS_CONFIRMATION,
+	PROCESS_EVIDENCE,
+	PROCESS_BACKLOG,
+	PROCESS_OUTPUT,
+	PROCESS_TIMER,
+	PROCESS_PATHEXT,
+	PROCESS_ERROR_CODES,
+})
+/**
+ * Constants whose `Value` cell is prose rather than a literal, as `API` cell names.
+ *
+ * `PROCESS_ERROR_CODES` prints as `the five codes`, so no cell text compares against the tuple; the
+ * codes themselves are gated by `tables exactly the error codes the tuple declares`. Naming one
+ * here is what makes the omission deliberate, and the assertion over this list fails when such a
+ * cell becomes a literal, so the list cannot rot.
+ */
+const PROSE_CONSTANTS: readonly string[] = Object.freeze(['PROCESS_ERROR_CODES'])
+
 describe('flagship fences', () => {
 	it('states the numeric teardown backlog cap on both public contracts', () => {
 		const guide = requireValue(files['guides/process.md'], 'Missing file: guides/process.md')
@@ -464,30 +490,54 @@ describe('flagship fences', () => {
 	// The guide states that nothing in the result recovers which stream overflowed. That sentence
 	// replaced advice to compare each captured length against `limit`, which cannot work: both
 	// streams are trimmed to the cap. This drives the exact case that refuted it — one stream
-	// stopping at the cap, the other running past it — so the false advice cannot return unnoticed,
-	// and so a later per-stream field breaks this test rather than leaving the sentence stale.
-	it('reports no way to tell which stream overflowed', () => {
+	// stopping at the cap, the other running past it — so the false advice cannot return unnoticed.
+	// The result's exact member set is pinned beside it, because the sentence is a claim about the
+	// whole result rather than about three of its fields: any added `ExecuteResult` member fails
+	// this row, and that failure is a prompt to rule on the sentence, not a list to extend.
+	//
+	// The guide's remedy is driven too. Re-running at a `limit` neither stream reaches is what
+	// recovers the per-stream lengths, so the closing assertions read the two lengths the first
+	// call could not tell apart.
+	it('reports no way to tell which stream overflowed, and recovers the lengths above the bound', () => {
 		const guide = requireValue(
 			files['guides/process.md'],
 			'Missing file: guides/process.md',
 		).replace(/\s+/gu, ' ')
 		expect(guide).toContain('both captured strings are trimmed to `limit`')
+		expect(guide).toContain(
+			're-run with a `limit` high enough that `truncated` is `false`, then compare each captured length against the original bound',
+		)
 
 		const limit = 16
-		const written = executeSync(
-			{
-				file: process.execPath,
-				arguments: [
-					'-e',
-					`process.stdout.write('x'.repeat(${limit})); process.stderr.write('y'.repeat(${limit + 1}))`,
-				],
-			},
-			{ limit, strict: false },
-		)
+		const command = {
+			file: process.execPath,
+			arguments: [
+				'-e',
+				`process.stdout.write('x'.repeat(${limit})); process.stderr.write('y'.repeat(${limit + 1}))`,
+			],
+		}
+		const written = executeSync(command, { limit, strict: false })
 
 		expect(written.truncated).toBe(true)
 		expect(Buffer.byteLength(written.stdout)).toBe(limit)
 		expect(Buffer.byteLength(written.stderr)).toBe(limit)
+		expect(Object.keys(written).sort()).toEqual([
+			'aborted',
+			'code',
+			'command',
+			'expired',
+			'failed',
+			'signal',
+			'stderr',
+			'stdout',
+			'truncated',
+		])
+
+		const recovered = executeSync(command, { limit: limit * 4 })
+
+		expect(recovered.truncated).toBe(false)
+		expect(Buffer.byteLength(recovered.stdout)).toBe(limit)
+		expect(Buffer.byteLength(recovered.stderr)).toBe(limit + 1)
 	})
 
 	it('states the root-only synchronous timeout boundary in the guide and types', () => {
@@ -506,15 +556,31 @@ describe('flagship fences', () => {
 		expect(types).toContain('standard-input payload and carries no NUL restriction')
 	})
 
+	// The Value column read off the guide itself, so editing a cell fails this row. Comparing the
+	// imported constants against literals written here would leave that column guarded by nothing,
+	// under a name that claims to guard exactly it. A cell drops its digit separators and its
+	// quotes before the comparison, which is the whole difference between the two notations.
 	it('documents the constant values its Surface table prints', () => {
-		expect(PROCESS_GRACE).toBe(5_000)
-		expect(PROCESS_CONFIRMATION).toBe(5_000)
-		expect(PROCESS_EVIDENCE).toBe(2_048)
-		expect(PROCESS_BACKLOG).toBe(10_485_760)
-		expect(PROCESS_OUTPUT).toBe(10_485_760)
-		expect(PROCESS_TIMER).toBe(2_147_483_647)
-		expect(PROCESS_PATHEXT).toBe('.COM;.EXE;.BAT;.CMD')
-		expect(PROCESS_ERROR_CODES).toEqual(['spawn', 'timeout', 'duplicate', 'protocol', 'invalid'])
+		const guide = requireValue(files['guides/process.md'], 'Missing file: guides/process.md')
+		const section = guide.slice(guide.indexOf('### Constants'))
+		const table = section.slice(0, section.indexOf('\n\n', section.indexOf('| API')))
+		const rows = Array.from(
+			table.matchAll(/^\| `(\w+)` +\| const +\| ([^|]+?) +\|/gmu),
+			(match) => ({ name: match[1] ?? '', cell: match[2] ?? '' }),
+		)
+
+		const prose = rows.filter((row) => PROSE_CONSTANTS.includes(row.name))
+		const printed = rows.filter((row) => !PROSE_CONSTANTS.includes(row.name))
+
+		expect(rows.map((row) => row.name).sort()).toEqual(Object.keys(CONSTANTS).sort())
+		expect(prose.map((row) => row.name)).toEqual([...PROSE_CONSTANTS])
+		expect(prose.filter((row) => row.cell.startsWith('`')).map((row) => row.name)).toEqual([])
+		expect(printed.map((row) => `${row.name} ${row.cell.replace(/[`_']/gu, '')}`)).toEqual(
+			printed.map(
+				(row) =>
+					`${row.name} ${String(requireValue(CONSTANTS[row.name], `Undeclared constant row: ${row.name}`))}`,
+			),
+		)
 	})
 
 	// The guide's error table lists one row per declared code, so the table and the tuple are one
@@ -765,7 +831,7 @@ describe('flagship fences', () => {
 		expect(result.stdout).toBe(input)
 	})
 
-	it('splits the output-bound fence exactly where the guide says the runners differ', async () => {
+	it('splits the output-bound fence exactly where the guide says `execute` and `executeSync` differ', async () => {
 		const script = 'process.stdout.write("x".repeat(4096))'
 
 		const streamed = await execute(

@@ -40,7 +40,7 @@ export interface ProcessChild {
 	 * Register a one-shot listener for the native exit.
 	 *
 	 * @param event - The `exit` event name
-	 * @param listener - The listener invoked once the process exits
+	 * @param listener - The listener invoked after the process exits
 	 * @returns Whatever the emitter returns, which the helpers ignore
 	 */
 	once(event: 'exit', listener: () => void): unknown

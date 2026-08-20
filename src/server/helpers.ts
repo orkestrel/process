@@ -743,8 +743,8 @@ export function waitForExit(
  * Windows ends the tree at once through {@link killTree}, falling back to a direct kill when the
  * utility fails, because the host has no cooperative termination to offer. A POSIX host signals the
  * process group `SIGTERM`, falls back to the direct child when no group owns its pid, waits `grace`,
- * then sends `SIGKILL` through the same route. No signal is initiated once the native exit is
- * observed; the window between initiating a signal and the host delivering it belongs to the
+ * then sends `SIGKILL` through the same route. No signal is initiated after the child's native exit
+ * is observed; the window between initiating a signal and the host delivering it belongs to the
  * operating system. `confirm` bounds each awaited step rather than the call as a whole: on Windows
  * it bounds the `taskkill` call and then the final wait, and on a POSIX host `grace` bounds the
  * cooperative wait and `confirm` the final one. Never rejects.

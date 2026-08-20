@@ -940,8 +940,9 @@ describe('execute', () => {
 		expect(isProcessError(thrown) ? thrown.cause : undefined).toBeInstanceOf(Error)
 	})
 
-	// The documented difference between the two runners on a spawn fault. The errno itself is the
-	// host's, so its sign is the property a caller can act on and the property asserted.
+	// The documented difference between `execute` and `executeSync` on a spawn fault. The errno
+	// itself is the host's, so its sign is the property a caller can act on and the property
+	// asserted.
 	it('reports the host negative errno when the command cannot be spawned', async () => {
 		const result = await execute(
 			{ file: 'orkestrel-nonexistent-binary.exe', arguments: [] },
