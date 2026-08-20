@@ -1054,13 +1054,19 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   registry: `launch` registration and its `duplicate`, `protocol`, and `invalid` refusals, including
   a teardown started from inside the caller's own option getter, the unforgeable eviction and its
   ordering, the query surface, the `stop` overloads, and emitter-last `destroy`.
-- [`tests/src/server/handlers.test.ts`](../tests/src/server/handlers.test.ts) — the execution entry
-  handlers: a throwing `signal` getter rejects before a child is spawned.
 - [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the building blocks:
-  `execute`, `executeSync`, and `detach` outcomes, the resolver under `PATHEXT` and an
-  extension-bearing name, each platform input to the quoted batch builder and its percent-sign
-  refusal, the environment merge under each platform input, the UTF-8-safe byte bounds, the
-  validators, and the termination helpers.
+  the resolver under `PATHEXT` and an extension-bearing name, each platform input to the quoted
+  batch builder and its percent-sign refusal, the environment merge under each platform input, the
+  UTF-8-safe byte bounds, the validators, and the termination helpers.
+- [`tests/src/server/execution/execute.test.ts`](../tests/src/server/execution/execute.test.ts) —
+  the asynchronous one-shot run: owned inputs, buffered outcomes, failure delivery, cancellation,
+  timeout, capture bounds, spawn faults, and pre-spawn refusal.
+- [`tests/src/server/execution/executeSync.test.ts`](../tests/src/server/execution/executeSync.test.ts)
+  — the blocking one-shot run: owned inputs, root-only timeout, buffered outcomes, failure delivery,
+  capture bounds, argument integrity, spawn faults, and pre-spawn refusal.
+- [`tests/src/server/execution/detach.test.ts`](../tests/src/server/execution/detach.test.ts) — the
+  fire-and-forget spawn: owned inputs, detached process-group behavior, invalid-input refusal, and
+  the validated working directory.
 - [`tests/guides.test.ts`](../tests/guides.test.ts) — this guide: every documented name resolves,
   every public export is documented, and every flagship fence returns what its comments claim.
 - [`tests/distribution.test.ts`](../tests/distribution.test.ts) — the artifact a consumer installs:
