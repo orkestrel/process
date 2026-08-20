@@ -461,6 +461,35 @@ describe('flagship fences', () => {
 		expect(bounded.truncated).toBe(true)
 	})
 
+	// The guide states that nothing in the result recovers which stream overflowed. That sentence
+	// replaced advice to compare each captured length against `limit`, which cannot work: both
+	// streams are trimmed to the cap. This drives the exact case that refuted it — one stream
+	// stopping at the cap, the other running past it — so the false advice cannot return unnoticed,
+	// and so a later per-stream field breaks this test rather than leaving the sentence stale.
+	it('reports no way to tell which stream overflowed', () => {
+		const guide = requireValue(
+			files['guides/process.md'],
+			'Missing file: guides/process.md',
+		).replace(/\s+/gu, ' ')
+		expect(guide).toContain('both captured strings are trimmed to `limit`')
+
+		const limit = 16
+		const written = runSync(
+			{
+				file: process.execPath,
+				arguments: [
+					'-e',
+					`process.stdout.write('x'.repeat(${limit})); process.stderr.write('y'.repeat(${limit + 1}))`,
+				],
+			},
+			{ limit, strict: false },
+		)
+
+		expect(written.truncated).toBe(true)
+		expect(Buffer.byteLength(written.stdout)).toBe(limit)
+		expect(Buffer.byteLength(written.stderr)).toBe(limit)
+	})
+
 	it('states the root-only synchronous timeout boundary in the guide and types', () => {
 		const guide = requireValue(files['guides/process.md'], 'Missing file: guides/process.md')
 		const types = requireValue(files['src/core/types.ts'], 'Missing file: src/core/types.ts')

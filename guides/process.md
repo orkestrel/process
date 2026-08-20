@@ -596,8 +596,10 @@ splitting a UTF-8 sequence. `truncated` reports that a cap was reached, and the 
 what they do about it.
 
 One `truncated` flag covers both streams, so a consumer that parses `stdout` structurally cannot tell
-from the result which stream overflowed. Compare each captured string's byte length against `limit`
-where that distinction matters.
+from the result which stream overflowed. Nothing in the result recovers that: both captured strings
+are trimmed to `limit`, so a stream that stopped exactly at the cap and a stream that ran past it read
+the same length. Where the distinction matters, bound the two streams separately by running the
+command twice, or capture the child's output yourself.
 
 `run` keeps reading past the cap, discards the excess, and reports `truncated` without failing the
 run. `runSync` hands `limit` to the host as its buffer ceiling, so an overflow ends the child with
