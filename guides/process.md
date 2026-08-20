@@ -384,7 +384,7 @@ POSIX and Windows terminate differently, and only POSIX has a cooperative phase.
 | Host    | Sequence                                                                                                                                        | `grace`  |
 | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
 | POSIX   | `SIGTERM` to the process group, wait `grace`, then `SIGKILL` to the group — each signal reaching the child directly when no group owns its pid. | used     |
-| Windows | `taskkill /F /T` on the whole tree at once, with a direct kill as a fallback.                                                                   | not used |
+| Windows | `taskkill /F /T` on the whole tree, with a direct kill after the utility reports failure.                                                       | not used |
 
 Windows has no signal a process group can receive, so `killTree` ends the tree through the
 `taskkill.exe` utility addressed by its absolute `System32` path, which stops a `PATH` override
@@ -453,9 +453,9 @@ argument before spawning.
 One argument cannot survive that command line: `cmd.exe` expands `%NAME%` before it parses quotes,
 so no quoting carries a percent sign through to a batch target. On Windows, `buildSpawn` refuses an
 argument carrying `%` when the resolved target is `.cmd` or `.bat`, with a `ProcessError` coded
-`invalid` carrying the argument on `context.value`. Refusing it is what keeps the arguments-are-data
-guarantee whole: an argument either reaches the child as written or the call fails, and no path
-rewrites one. Off the batch path a percent sign is ordinary text and passes untouched.
+`invalid` carrying the argument on `context.value`. The batch path has two outcomes: an argument
+reaches the child as written or the call fails. No path rewrites one. Off the batch path a percent
+sign is ordinary text and passes untouched.
 
 Because no spawn passes `shell: true`, Node's `DEP0190` deprecation warning — which fires when a
 `.bat` or `.cmd` file is spawned through a shell with arguments — cannot come from this package.
@@ -685,7 +685,7 @@ carries only the directory the child starts in.
 
 `detach` returns nothing, not a process id. Fire-and-forget is the whole contract: an id you cannot
 observe an exit for invites a supervision you would have to build yourself. Use `Process` when you
-need the pid, the streams, the events, or a bounded stop.
+need the streams, the events, or a bounded stop.
 
 `detach` validates first, so a malformed working directory or command string throws a `ProcessError`
 coded `invalid` before anything is spawned. After the spawn, a host fault is swallowed rather than
@@ -933,8 +933,8 @@ confirmed // true when the native exit arrived
 
 Drive the pieces yourself only when you want a different sequence — a shorter cooperative window, an
 extra warning signal, a step of your own between them. Guard each step with `isExited`, and drive a
-child `stopChild` has not been called on: a child `stopChild` already confirmed dead is a pid the
-host may have reused, and signalling it reaches whatever holds that pid now.
+child `stopChild` has not been called on: after the host reuses a dead child's process id, signalling
+that id reaches its new process.
 
 ```ts
 import { spawn } from 'node:child_process'
@@ -1030,6 +1030,8 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   registry: `launch` registration and its `duplicate`, `protocol`, and `invalid` refusals, including
   a teardown started from inside the caller's own option getter, the unforgeable eviction and its
   ordering, the query surface, the `stop` overloads, and emitter-last `destroy`.
+- [`tests/src/server/handlers.test.ts`](../tests/src/server/handlers.test.ts) — the execution entry
+  handlers: a throwing `signal` getter rejects before a child is spawned.
 - [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the building blocks:
   `execute`, `executeSync`, and `detach` outcomes, the resolver under `PATHEXT` and an
   extension-bearing name, each platform input to the quoted batch builder and its percent-sign

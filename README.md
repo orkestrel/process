@@ -11,11 +11,11 @@ termination is bounded and reports whether the real exit arrived — `SIGTERM` t
 or resolving the result when you pass `strict: false`. `ProcessManager` is a
 keyed registry of live children: `launch` spawns and registers by id, a settled
 child evicts itself with no polling, and `stop` terminates one id, a list, or
-every child. Every tier is observable through a typed `emitter`, cancellation
-rides an `AbortSignal`, and no spawn uses a shell, so a metacharacter in an
-argument is data rather than syntax. The contracts are host-independent and
-ship from `@orkestrel/process`; the Node engine ships from
-`@orkestrel/process/server`. Part of the `@orkestrel` line.
+every child. `Process` and `ProcessManager` expose typed `emitter` properties,
+`Process` and `execute` accept `AbortSignal` cancellation, and no spawn uses a
+shell, so a metacharacter in an argument is data rather than syntax. The
+contracts are host-independent and ship from `@orkestrel/process`; the Node
+engine ships from `@orkestrel/process/server`. Part of the `@orkestrel` line.
 
 ## Install
 

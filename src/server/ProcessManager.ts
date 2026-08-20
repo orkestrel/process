@@ -101,8 +101,9 @@ export class ProcessManager implements ProcessManagerInterface {
 	 * nothing has started and a throw from one strands no process. A getter that begins `destroy`
 	 * without throwing is the one remaining race, and it leaves a bounded residual: the child is
 	 * already spawned, so the launch is refused with a {@link createProtocolError} and that child is
-	 * torn down asynchronously, bounded by `grace` plus the confirmation window. The `destroy` barrier
-	 * settled before the refusal, so awaiting it does not cover that teardown.
+	 * torn down asynchronously, bounded by `grace` plus the confirmation window. The `protocol`
+	 * refusal throws synchronously before the `destroy` barrier settles. The barrier does not cover
+	 * that child's asynchronous teardown.
 	 *
 	 * @param id - The registry key, unique among live children
 	 * @param options - The child construction options
