@@ -1,7 +1,13 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { Interface as ReadLineInterface } from 'node:readline'
 import type { EmitterInterface } from '@orkestrel/emitter'
-import type { ProcessEventMap, ProcessExit, ProcessInterface, ProcessOptions } from '@src/core'
+import type {
+	ProcessCommand,
+	ProcessEventMap,
+	ProcessExit,
+	ProcessInterface,
+	ProcessOptions,
+} from '@src/core'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
@@ -87,7 +93,7 @@ export class Process implements ProcessInterface {
 		// property runs the caller's own getter, so a read after the spawn would let that getter throw
 		// while a live child exists and no one holds a reference to it. Hoisting the reads is what
 		// makes a construction failure unable to strand a process.
-		const command = options.command
+		const source = options.command
 		const workspace = options.workspace
 		const grace = options.grace
 		const evidence = options.evidence
@@ -96,9 +102,20 @@ export class Process implements ProcessInterface {
 		const signal = options.signal
 		const on = options.on
 		const error = options.error
-		const isolated = command.isolated
-		const overrides = command.environment
-		const input = command.input
+		const file = source.file
+		const argumentsList = Object.freeze([...source.arguments])
+		const sourceEnvironment = source.environment
+		const environment =
+			sourceEnvironment === undefined ? undefined : Object.freeze({ ...sourceEnvironment })
+		const input = source.input
+		const isolated = source.isolated
+		const command: ProcessCommand = Object.freeze({
+			file,
+			arguments: argumentsList,
+			...(environment === undefined ? {} : { environment }),
+			...(input === undefined ? {} : { input }),
+			...(isolated === undefined ? {} : { isolated }),
+		})
 		validateCommand(command)
 		validateWorkspace(workspace)
 		validateTimer(grace, "option 'grace'")
@@ -113,12 +130,12 @@ export class Process implements ProcessInterface {
 		this.#backlog = backlog ?? PROCESS_BACKLOG
 		this.#signal = signal
 		this.#lines = Object.freeze({ [Symbol.asyncIterator]: this.#iterate.bind(this) })
-		const environment = mergeEnvironment(isolated === true, overrides)
-		const plan = buildSpawn(command, { workspace, environment })
+		const childEnvironment = mergeEnvironment(isolated === true, environment)
+		const plan = buildSpawn(command, { workspace, environment: childEnvironment })
 		this.#child = spawn(plan.file, [...plan.arguments], {
 			cwd: workspace,
 			detached: process.platform !== 'win32',
-			env: environment,
+			env: childEnvironment,
 			stdio: ['pipe', 'pipe', 'pipe'],
 			windowsHide: true,
 			windowsVerbatimArguments: plan.verbatim,
@@ -298,9 +315,7 @@ export class Process implements ProcessInterface {
 		const suffix = this.#decoder.end()
 		if (suffix.length > 0) this.#emitter.emit('stderr', suffix)
 		this.#closed = true
-		if (this.#signal !== undefined && this.#abort !== undefined) {
-			this.#signal.removeEventListener('abort', this.#abort)
-		}
+		this.#removeAbortListener()
 		this.#reader.close()
 		const exit = Object.freeze({ code, signal })
 		this.#exit.resolve(exit)
@@ -309,6 +324,11 @@ export class Process implements ProcessInterface {
 
 	#terminate(): void {
 		void this.stop()
+	}
+
+	#removeAbortListener(): void {
+		if (this.#signal === undefined || this.#abort === undefined) return
+		this.#signal.removeEventListener('abort', this.#abort)
 	}
 
 	async #kill(): Promise<boolean> {
@@ -322,6 +342,7 @@ export class Process implements ProcessInterface {
 	}
 
 	async #teardown(): Promise<void> {
+		this.#removeAbortListener()
 		await this.stop()
 		this.#emitter.destroy()
 	}

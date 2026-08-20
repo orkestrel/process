@@ -1,4 +1,4 @@
-import { holds } from '@orkestrel/contract'
+import { holds, isError } from '@orkestrel/contract'
 import type {
 	ProcessErrorCode,
 	ProcessErrorContext,
@@ -23,6 +23,7 @@ export class ProcessError extends Error {
 	constructor(message: string, options: ProcessErrorOptions) {
 		const cause = options.cause
 		super(message, cause === undefined ? undefined : { cause })
+		Object.defineProperty(this, Symbol.for('@orkestrel/process.error'), { value: true })
 		this.code = options.code
 		if (options.context !== undefined) this.context = options.context
 		if (options.result !== undefined) this.result = options.result
@@ -31,6 +32,11 @@ export class ProcessError extends Error {
 
 /**
  * Checks whether an unknown value is a {@link ProcessError}.
+ *
+ * @remarks
+ * Recognition combines a global own-property brand with the native `Error` base, the subclass
+ * prototype, the fixed name, and a declared code. The brand survives duplicate installations and
+ * ESM/CommonJS module copies, while a plain or property-only lookalike remains outside the type.
  *
  * @param value - The value to inspect
  * @returns True only for a `ProcessError` instance; false otherwise
@@ -42,7 +48,23 @@ export class ProcessError extends Error {
  * ```
  */
 export function isProcessError(value: unknown): value is ProcessError {
-	return holds(() => value instanceof ProcessError)
+	if (!isError(value)) return false
+	return holds(() => {
+		if (Object.getPrototypeOf(value) === Error.prototype) return false
+		if (value.name !== 'ProcessError' || !('code' in value)) return false
+		const descriptor = Object.getOwnPropertyDescriptor(
+			value,
+			Symbol.for('@orkestrel/process.error'),
+		)
+		if (descriptor?.value !== true) return false
+		return (
+			value.code === 'spawn' ||
+			value.code === 'timeout' ||
+			value.code === 'duplicate' ||
+			value.code === 'protocol' ||
+			value.code === 'invalid'
+		)
+	})
 }
 
 /**

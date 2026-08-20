@@ -15,8 +15,10 @@ import { spawn, spawnSync } from 'node:child_process'
 import { statSync } from 'node:fs'
 import { delimiter, extname, join, resolve } from 'node:path'
 import {
+	attempt,
 	boundsOf,
 	holds,
+	isFunction,
 	isNonEmptyString,
 	isNonNegativeInteger,
 	isString,
@@ -592,12 +594,16 @@ export function waitForExit(
 ): Promise<void> {
 	if (isExited(child)) return Promise.resolve()
 	const settled = Promise.withResolvers<void>()
-	const timer = setTimeout(settled.resolve, timeout)
-	child.once('exit', () => {
-		clearTimeout(timer)
+	const timer = setTimeout(() => {
+		attempt(() => {
+			if (!('off' in child)) return
+			const off = child.off
+			if (isFunction(off)) Reflect.apply(off, child, ['exit', settled.resolve])
+		})
 		settled.resolve()
-	})
-	return settled.promise
+	}, timeout)
+	child.once('exit', settled.resolve)
+	return settled.promise.finally(() => clearTimeout(timer))
 }
 
 /**
@@ -718,7 +724,21 @@ export function buildRunResult(input: RunInput): RunResult {
  * ```
  */
 export async function run(command: ProcessCommand, options?: RunOptions): Promise<RunResult> {
-	validateCommand(command)
+	const file = command.file
+	const argumentsList = Object.freeze([...command.arguments])
+	const sourceEnvironment = command.environment
+	const commandEnvironment =
+		sourceEnvironment === undefined ? undefined : Object.freeze({ ...sourceEnvironment })
+	const commandInput = command.input
+	const isolated = command.isolated
+	const snapshot: ProcessCommand = Object.freeze({
+		file,
+		arguments: argumentsList,
+		...(commandEnvironment === undefined ? {} : { environment: commandEnvironment }),
+		...(commandInput === undefined ? {} : { input: commandInput }),
+		...(isolated === undefined ? {} : { isolated }),
+	})
+	validateCommand(snapshot)
 	validateEnvironment(options?.environment)
 	validateWorkspace(options?.workspace)
 	validateTimer(options?.timeout, "option 'timeout'")
@@ -728,15 +748,15 @@ export async function run(command: ProcessCommand, options?: RunOptions): Promis
 	const grace = options?.grace ?? PROCESS_GRACE
 	const timeout = options?.timeout ?? 0
 	const strict = options?.strict ?? true
-	const text = options?.input ?? command.input
-	const line = formatCommand(command)
+	const text = options?.input ?? snapshot.input
+	const line = formatCommand(snapshot)
 	const workspace = options?.workspace ?? process.cwd()
 	const environment = mergeEnvironment(
-		command.isolated === true,
-		command.environment,
+		snapshot.isolated === true,
+		snapshot.environment,
 		options?.environment,
 	)
-	const plan = buildSpawn(command, { workspace, environment })
+	const plan = buildSpawn(snapshot, { workspace, environment })
 	const settled = Promise.withResolvers<RunResult>()
 	const terminate = new AbortController()
 	const cleanup = new AbortController()
@@ -863,7 +883,21 @@ export async function run(command: ProcessCommand, options?: RunOptions): Promis
  * ```
  */
 export function runSync(command: ProcessCommand, options?: RunSyncOptions): RunResult {
-	validateCommand(command)
+	const file = command.file
+	const argumentsList = Object.freeze([...command.arguments])
+	const sourceEnvironment = command.environment
+	const commandEnvironment =
+		sourceEnvironment === undefined ? undefined : Object.freeze({ ...sourceEnvironment })
+	const commandInput = command.input
+	const isolated = command.isolated
+	const snapshot: ProcessCommand = Object.freeze({
+		file,
+		arguments: argumentsList,
+		...(commandEnvironment === undefined ? {} : { environment: commandEnvironment }),
+		...(commandInput === undefined ? {} : { input: commandInput }),
+		...(isolated === undefined ? {} : { isolated }),
+	})
+	validateCommand(snapshot)
 	validateEnvironment(options?.environment)
 	validateWorkspace(options?.workspace)
 	validateTimer(options?.timeout, "option 'timeout'")
@@ -871,15 +905,15 @@ export function runSync(command: ProcessCommand, options?: RunSyncOptions): RunR
 	const limit = options?.limit ?? PROCESS_OUTPUT
 	const timeout = options?.timeout ?? 0
 	const strict = options?.strict ?? true
-	const text = options?.input ?? command.input
-	const line = formatCommand(command)
+	const text = options?.input ?? snapshot.input
+	const line = formatCommand(snapshot)
 	const workspace = options?.workspace ?? process.cwd()
 	const environment = mergeEnvironment(
-		command.isolated === true,
-		command.environment,
+		snapshot.isolated === true,
+		snapshot.environment,
 		options?.environment,
 	)
-	const plan = buildSpawn(command, { workspace, environment })
+	const plan = buildSpawn(snapshot, { workspace, environment })
 	const outcome = spawnSync(plan.file, [...plan.arguments], {
 		cwd: workspace,
 		env: environment,
@@ -929,11 +963,25 @@ export function runSync(command: ProcessCommand, options?: RunSyncOptions): RunR
  * ```
  */
 export function detach(command: ProcessCommand, options?: DetachOptions): void {
-	validateCommand(command)
+	const file = command.file
+	const argumentsList = Object.freeze([...command.arguments])
+	const sourceEnvironment = command.environment
+	const commandEnvironment =
+		sourceEnvironment === undefined ? undefined : Object.freeze({ ...sourceEnvironment })
+	const input = command.input
+	const isolated = command.isolated
+	const snapshot: ProcessCommand = Object.freeze({
+		file,
+		arguments: argumentsList,
+		...(commandEnvironment === undefined ? {} : { environment: commandEnvironment }),
+		...(input === undefined ? {} : { input }),
+		...(isolated === undefined ? {} : { isolated }),
+	})
+	validateCommand(snapshot)
 	validateWorkspace(options?.workspace)
 	const workspace = options?.workspace ?? process.cwd()
-	const environment = mergeEnvironment(command.isolated === true, command.environment)
-	const plan = buildSpawn(command, { workspace, environment })
+	const environment = mergeEnvironment(snapshot.isolated === true, snapshot.environment)
+	const plan = buildSpawn(snapshot, { workspace, environment })
 	const child = spawn(plan.file, [...plan.arguments], {
 		cwd: workspace,
 		detached: true,

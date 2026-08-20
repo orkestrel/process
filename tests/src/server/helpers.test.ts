@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer'
+import { EventEmitter } from 'node:events'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -403,6 +404,14 @@ describe('waitForExit', () => {
 
 		expect(performance.now() - started).toBeGreaterThanOrEqual(40)
 	})
+
+	it('removes every exit listener after repeated deadlines', async () => {
+		const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null })
+
+		for (let call = 0; call < 12; call += 1) await waitForExit(child, 1)
+
+		expect(child.listenerCount('exit')).toBe(0)
+	})
 })
 
 describe('stopChild', () => {
@@ -623,6 +632,23 @@ describe('killProcess', () => {
 })
 
 describe('run', () => {
+	it('spawns the same command file that it validated', async () => {
+		let reads = 0
+		const result = await run(
+			{
+				get file() {
+					reads += 1
+					return reads === 1 ? process.execPath : `${process.execPath}\0changed`
+				},
+				arguments: [resolveChildFixture(), 'exit', '0'],
+			},
+			{ workspace: process.cwd() },
+		)
+
+		expect(reads).toBe(1)
+		expect(result.code).toBe(0)
+	})
+
 	it('buffers a successful run and reports it did not fail', async () => {
 		const result = await run(childCommand('exit', '0'), { workspace: process.cwd() })
 		expect(result.failed).toBe(false)
@@ -725,6 +751,43 @@ describe('run', () => {
 })
 
 describe('runSync', () => {
+	it('spawns the same command file that it validated', () => {
+		let reads = 0
+		const result = runSync(
+			{
+				get file() {
+					reads += 1
+					return reads === 1 ? process.execPath : `${process.execPath}\0changed`
+				},
+				arguments: [resolveChildFixture(), 'exit', '0'],
+			},
+			{ workspace: process.cwd() },
+		)
+
+		expect(reads).toBe(1)
+		expect(result.code).toBe(0)
+	})
+
+	it('codes an invalid changing command as invalid before spawn', () => {
+		let reads = 0
+		let thrown: unknown
+		try {
+			runSync({
+				get file() {
+					reads += 1
+					return reads === 1 ? `${process.execPath}\0invalid` : process.execPath
+				},
+				arguments: [resolveChildFixture(), 'exit', '0'],
+			})
+		} catch (error) {
+			thrown = error
+		}
+
+		expect(reads).toBe(1)
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('invalid')
+	})
+
 	it('buffers a successful synchronous run', () => {
 		const result = runSync(childCommand('exit', '0'), { workspace: process.cwd() })
 		expect(result.failed).toBe(false)
@@ -802,6 +865,32 @@ describe('runSync', () => {
 })
 
 describe('detach', () => {
+	it('spawns the same command file that it validated', async () => {
+		const scratch = createScratch()
+		let reads = 0
+		try {
+			const marker = join(scratch.path, 'snapshot.txt')
+			detach(
+				{
+					get file() {
+						reads += 1
+						return reads === 1 ? process.execPath : `${process.execPath}\0changed`
+					},
+					arguments: [resolveChildFixture(), 'write', marker],
+				},
+				{ workspace: process.cwd() },
+			)
+			for (let attempt = 0; attempt < 60 && !existsSync(marker); attempt += 1) {
+				await waitForDelay(50)
+			}
+
+			expect(reads).toBe(1)
+			expect(readFileSync(marker, 'utf8')).toBe('detached')
+		} finally {
+			scratch.destroy()
+		}
+	})
+
 	it('spawns a fire-and-forget child that runs after the call returns', async () => {
 		const scratch = createScratch()
 		try {

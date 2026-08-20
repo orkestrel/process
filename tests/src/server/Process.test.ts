@@ -1,10 +1,11 @@
 import type { ProcessExit } from '@src/core'
+import { getEventListeners } from 'node:events'
 import { describe, expect, it } from 'vitest'
 import { holds } from '@orkestrel/contract'
 import { collect, createRecorder, waitForDelay } from '@orkestrel/test'
 import { isProcessError, ProcessError } from '@src/core'
 import { createProcess } from '@src/server'
-import { childCommand } from '../../setupServer.js'
+import { childCommand, resolveChildFixture } from '../../setupServer.js'
 
 describe('Process', () => {
 	it('drains output with no line consumer and still resolves exit', async () => {
@@ -388,6 +389,24 @@ describe('Process', () => {
 		expect(child.emitter.destroyed).toBe(true)
 	})
 
+	it('removes the caller abort listener when teardown begins before close', async () => {
+		const controller = new AbortController()
+		const exits = createRecorder<readonly [ProcessExit]>()
+		const child = createProcess({
+			command: childCommand('sleep'),
+			workspace: process.cwd(),
+			grace: 20,
+			signal: controller.signal,
+			on: { exit: exits.handler },
+		})
+
+		expect(getEventListeners(controller.signal, 'abort')).toHaveLength(1)
+		const ending = child.destroy()
+		expect(exits.count).toBe(0)
+		expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
+		await ending
+	})
+
 	it('gives an isolated child its own overrides without the parent environment', async () => {
 		process.env.PROCESS_PARENT_KEY = 'parent'
 		try {
@@ -418,6 +437,25 @@ describe('Process', () => {
 })
 
 describe('Process validation', () => {
+	it('spawns the same command file that it validated', async () => {
+		let reads = 0
+		const child = createProcess({
+			command: {
+				get file() {
+					reads += 1
+					return reads === 1 ? process.execPath : `${process.execPath}\0changed`
+				},
+				arguments: [resolveChildFixture(), 'exit', '0'],
+			},
+			workspace: process.cwd(),
+		})
+
+		const exit = await child.exit
+
+		expect(reads).toBe(1)
+		expect(exit.code).toBe(0)
+	})
+
 	it('refuses a NUL inside a command argument', () => {
 		expect(() =>
 			createProcess({
