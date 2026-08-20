@@ -153,8 +153,23 @@ export interface ProcessOptions {
  * bound was reached; the one-shot `ExecuteResult` carries the same name for the same fact against
  * its own capture `limit`. The typed `emitter` carries the live `stderr` chunks, the child `error` cause, and the
  * terminal `exit`, alongside the `exit` promise. `stop` and `destroy` are idempotent and never reject.
+ *
+ * The spawn is eager, so `pid` is fixed by the time construction returns; a spawn that produced no
+ * child reports `undefined` for that child's whole lifetime. An assigned id survives the exit and
+ * reports no liveness on its own, because the host reuses a dead child's id. Derive liveness as
+ * `pid !== undefined && code === null && signal === null`, and derive it again before every use of
+ * the id. `code` and `signal` mirror the host child's own terminal record, so they carry the native
+ * exit as soon as the host has it, while the `exit` promise settles on stdio close — a descendant
+ * holding inherited stdio keeps that close pending past the native exit, and a supervisor inside
+ * that window reads the terminal state here.
  */
 export interface ProcessInterface {
+	/** The host process id, fixed when construction returns, or `undefined` when the spawn produced none. */
+	readonly pid: number | undefined
+	/** The exit code the host recorded, or `null` while the child has not exited and when a signal ended it. A spawn fault reports the host's negative errno. */
+	readonly code: number | null
+	/** The terminating signal name the host recorded, or `null` while the child has not exited and when it exited on its own. */
+	readonly signal: string | null
 	/** The typed lifecycle observation surface. */
 	readonly emitter: EmitterInterface<ProcessEventMap>
 	/** The captured stdout lines, in arrival order, for one consumer, ending when the child's stdout closes. */
@@ -275,7 +290,9 @@ export interface ExecuteInput {
  * spawned, with a {@link ProcessError} coded `invalid`. `input` is standard-input payload and carries
  * no NUL restriction. An unbounded run awaits stdio completion rather than process exit, so give
  * `timeout` a value wherever a descendant may inherit the child's stdio and hold the pipe open past
- * the child's own exit.
+ * the child's own exit. Every option is read once, before the child is spawned, so the value
+ * validated is the value spawned and a caller's own getter runs while nothing has started: a getter
+ * that throws strands no process.
  */
 export interface ExecuteOptions {
 	/** The working directory. Default: the current working directory. */

@@ -388,6 +388,100 @@ describe('Process', () => {
 		expect(code).toBeLessThan(0)
 	})
 
+	it('reports a host process id from the moment construction returns and keeps it past exit', async () => {
+		const child = createProcess({
+			command: childCommand('exit', '0'),
+			workspace: process.cwd(),
+			grace: 20,
+		})
+
+		const spawned = child.pid
+		const exit = await child.exit
+
+		if (spawned === undefined) throw new Error('the spawn reported no process id')
+		expect(spawned).toBeGreaterThan(0)
+		expect(child.pid).toBe(spawned)
+		expect(exit).toEqual({ code: 0, signal: null })
+	})
+
+	it('reports no process id for a spawn that produced no child, and still settles exit', async () => {
+		const child = createProcess({
+			command: { file: 'orkestrel-nonexistent-binary', arguments: [] },
+			workspace: process.cwd(),
+			grace: 20,
+		})
+
+		const spawned = child.pid
+		const live = { code: child.code, signal: child.signal }
+		const exit = await child.exit
+
+		expect(spawned).toBeUndefined()
+		expect(live).toEqual({ code: null, signal: null })
+		expect(child.pid).toBeUndefined()
+		const code = exit.code
+		if (code === null) throw new Error('the spawn fault reported no code')
+		expect(code).toBeLessThan(0)
+		// The host records the same negative errno on the child itself, so the synchronous pair and
+		// the settled exit agree on the fault.
+		expect(child.code).toBe(code)
+	})
+
+	it('reports a null code and signal while the child is live', async () => {
+		const child = createProcess({
+			command: childCommand('sleep'),
+			workspace: process.cwd(),
+			grace: 20,
+		})
+
+		const live = { code: child.code, signal: child.signal }
+		await child.stop()
+		await child.destroy()
+
+		expect(live).toEqual({ code: null, signal: null })
+	})
+
+	it('reports the host terminal pair after the child exits', async () => {
+		const child = createProcess({
+			command: childCommand('exit', '7'),
+			workspace: process.cwd(),
+			grace: 20,
+		})
+
+		const exit = await child.exit
+
+		expect(exit).toEqual({ code: 7, signal: null })
+		expect(child.code).toBe(7)
+		expect(child.signal).toBeNull()
+	})
+
+	it('reports the terminal pair while a descendant holds the stdio and exit stays pending', async () => {
+		const child = createProcess({
+			command: childCommand('orphan'),
+			workspace: process.cwd(),
+			grace: 20,
+		})
+		const iterator = child.lines[Symbol.asyncIterator]()
+		const first = await iterator.next()
+		const second = await iterator.next()
+		const held = Number.parseInt(String(first.value).replace('grandchild:', ''), 10)
+
+		try {
+			expect(second.value).toBe('exiting')
+			await waitForDelay(250)
+			const settlement = await Promise.race([
+				child.exit.then(() => 'closed'),
+				waitForDelay(150).then(() => 'held'),
+			])
+
+			expect(settlement).toBe('held')
+			expect(child.code).toBe(0)
+			expect(child.signal).toBeNull()
+		} finally {
+			holds(() => process.kill(held, 'SIGKILL'))
+			await child.destroy()
+		}
+	})
+
 	it('emits no error event when the child exits cleanly', async () => {
 		const errors = createRecorder<readonly [unknown]>()
 		const child = createProcess({

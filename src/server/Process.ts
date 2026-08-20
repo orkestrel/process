@@ -35,11 +35,12 @@ import {
  * reapplies backpressure, and retained lines are capped at twice `backlog`; later lines are dropped
  * and `truncated` reports the omission. Standard error is decoded and forwarded live as the `stderr`
  * event while a byte-bounded raw tail is retained as `evidence`. The typed `emitter` also carries the
- * child `error` cause on a spawn fault and the terminal `exit`, alongside the `exit` promise. `stop`
- * ends the whole tree and reports whether the native exit was observed; `destroy` stops the child,
- * destroys stdin so every pending `send` settles, and destroys the emitter last. `destroy` resolving
- * does not imply the child's stdio has closed, so `exit` and `lines` can still be outstanding when a
- * descendant holds an inherited pipe.
+ * child `error` cause on a spawn fault and the terminal `exit`, alongside the `exit` promise. `pid`,
+ * `code`, and `signal` read the spawned child directly, so the native exit is readable before the
+ * `exit` promise settles on stdio close. `stop` ends the whole tree and reports whether the native
+ * exit was observed; `destroy` stops the child, destroys stdin so every pending `send` settles, and
+ * destroys the emitter last. `destroy` resolving does not imply the child's stdio has closed, so
+ * `exit` and `lines` can still be outstanding when a descendant holds an inherited pipe.
  *
  * @example
  * ```ts
@@ -143,6 +144,21 @@ export class Process implements ProcessInterface {
 			signal.addEventListener('abort', this.#abort, { once: true })
 			if (signal.aborted) void this.stop()
 		}
+	}
+
+	/** The host process id, fixed when construction returns, or `undefined` when the spawn produced none. */
+	get pid(): number | undefined {
+		return this.#child.pid
+	}
+
+	/** The exit code the host recorded, or `null` while the child has not exited and when a signal ended it. */
+	get code(): number | null {
+		return this.#child.exitCode
+	}
+
+	/** The terminating signal name the host recorded, or `null` while the child has not exited and when it exited on its own. */
+	get signal(): string | null {
+		return this.#child.signalCode
 	}
 
 	/** The typed lifecycle observation surface. */

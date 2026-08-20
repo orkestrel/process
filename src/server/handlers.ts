@@ -220,21 +220,27 @@ export async function execute(
  */
 export function executeSync(command: ProcessCommand, options?: ExecuteSyncOptions): ExecuteResult {
 	const snapshot = snapshotCommand(command)
+	const optionEnvironment = options?.environment
+	const optionWorkspace = options?.workspace
+	const optionInput = options?.input
+	const optionTimeout = options?.timeout
+	const optionStrict = options?.strict
+	const optionLimit = options?.limit
 	validateCommand(snapshot)
-	validateEnvironment(options?.environment)
-	validateWorkspace(options?.workspace)
-	validateTimer(options?.timeout, "option 'timeout'")
-	validateBytes(options?.limit, "option 'limit'", 0)
-	const limit = options?.limit ?? PROCESS_OUTPUT
-	const timeout = options?.timeout ?? 0
-	const strict = options?.strict ?? true
-	const text = options?.input ?? snapshot.input
+	validateEnvironment(optionEnvironment)
+	validateWorkspace(optionWorkspace)
+	validateTimer(optionTimeout, "option 'timeout'")
+	validateBytes(optionLimit, "option 'limit'", 0)
+	const limit = optionLimit ?? PROCESS_OUTPUT
+	const timeout = optionTimeout ?? 0
+	const strict = optionStrict ?? true
+	const text = optionInput ?? snapshot.input
 	const line = formatCommand(snapshot)
-	const workspace = options?.workspace ?? process.cwd()
+	const workspace = optionWorkspace ?? process.cwd()
 	const environment = mergeEnvironment(
 		snapshot.isolated === true,
 		snapshot.environment,
-		options?.environment,
+		optionEnvironment,
 	)
 	const plan = buildSpawn(snapshot, { workspace, environment })
 	const outcome = spawnSync(plan.file, [...plan.arguments], {
@@ -287,9 +293,10 @@ export function executeSync(command: ProcessCommand, options?: ExecuteSyncOption
  */
 export function detach(command: ProcessCommand, options?: DetachOptions): void {
 	const snapshot = snapshotCommand(command)
+	const optionWorkspace = options?.workspace
 	validateCommand(snapshot)
-	validateWorkspace(options?.workspace)
-	const workspace = options?.workspace ?? process.cwd()
+	validateWorkspace(optionWorkspace)
+	const workspace = optionWorkspace ?? process.cwd()
 	const environment = mergeEnvironment(snapshot.isolated === true, snapshot.environment)
 	const plan = buildSpawn(snapshot, { workspace, environment })
 	const child = spawn(plan.file, [...plan.arguments], {

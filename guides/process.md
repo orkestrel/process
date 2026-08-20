@@ -166,26 +166,26 @@ The defaults and host bounds, from `@orkestrel/process`.
 
 The contracts and options, all from `@orkestrel/process`.
 
-| API                       | Kind      | Summary                                                                                              |
-| ------------------------- | --------- | ---------------------------------------------------------------------------------------------------- |
-| `ProcessCommand`          | interface | One spawnable command — `file`, `arguments`, and optional `environment`, `input`, `isolated`.        |
-| `ProcessExit`             | interface | The terminal state — an exit `code`, or the `signal` that ended the child.                           |
-| `SpawnInput`              | interface | The resolved spawn form — the `file`, the `arguments`, and the `verbatim` flag.                      |
-| `ExecutableOptions`       | interface | Lookup inputs for resolving a command file — `workspace` and `environment`.                          |
-| `ProcessEventMap`         | type      | A `Process`'s events — `stderr(chunk)`, `error(cause)`, and `exit(exit)`.                            |
-| `ProcessOptions`          | interface | `Process` construction — `command`, `workspace`, and the optional settings.                          |
-| `ProcessInterface`        | interface | The supervised-child surface — `emitter` / `lines` / `evidence` / `truncated` / `exit` plus methods. |
-| `ExecuteResult`           | interface | A one-shot outcome — the captured output, the exit, and the state flags.                             |
-| `ExecuteInput`            | interface | The captured bytes and terminal facts one settled `ExecuteResult` is built from.                     |
-| `ExecuteOptions`          | interface | `execute` options — workspace, environment, input, timeout, grace, signal, strict, limit.            |
-| `ExecuteSyncOptions`      | interface | `executeSync` options — the same set without `grace` and without `signal`.                           |
-| `DetachOptions`           | interface | `detach` options — the working directory the detached child starts in.                               |
-| `ProcessManagerEventMap`  | type      | A manager's events — `launch(id)` and `exit(id, exit)`.                                              |
-| `ProcessManagerOptions`   | interface | `ProcessManager` construction — initial `on` listeners and an `error` handler.                       |
-| `ProcessManagerInterface` | interface | The registry surface — `emitter` / `count` plus the query, launch, stop, and destroy methods.        |
-| `ProcessErrorCode`        | type      | The failure categories — `spawn`, `timeout`, `duplicate`, `protocol`, or `invalid`.                  |
-| `ProcessErrorContext`     | interface | Structured failure detail — `id`, `command`, `code`, `signal`, or `value`.                           |
-| `ProcessErrorOptions`     | interface | `ProcessError` construction — `code` plus optional `context`, `cause`, `result`.                     |
+| API                       | Kind      | Summary                                                                                                                          |
+| ------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `ProcessCommand`          | interface | One spawnable command — `file`, `arguments`, and optional `environment`, `input`, `isolated`.                                    |
+| `ProcessExit`             | interface | The terminal state — an exit `code`, or the `signal` that ended the child.                                                       |
+| `SpawnInput`              | interface | The resolved spawn form — the `file`, the `arguments`, and the `verbatim` flag.                                                  |
+| `ExecutableOptions`       | interface | Lookup inputs for resolving a command file — `workspace` and `environment`.                                                      |
+| `ProcessEventMap`         | type      | A `Process`'s events — `stderr(chunk)`, `error(cause)`, and `exit(exit)`.                                                        |
+| `ProcessOptions`          | interface | `Process` construction — `command`, `workspace`, and the optional settings.                                                      |
+| `ProcessInterface`        | interface | The supervised-child surface — `pid` / `code` / `signal` / `emitter` / `lines` / `evidence` / `truncated` / `exit` plus methods. |
+| `ExecuteResult`           | interface | A one-shot outcome — the captured output, the exit, and the state flags.                                                         |
+| `ExecuteInput`            | interface | The captured bytes and terminal facts one settled `ExecuteResult` is built from.                                                 |
+| `ExecuteOptions`          | interface | `execute` options — workspace, environment, input, timeout, grace, signal, strict, limit.                                        |
+| `ExecuteSyncOptions`      | interface | `executeSync` options — the same set without `grace` and without `signal`.                                                       |
+| `DetachOptions`           | interface | `detach` options — the working directory the detached child starts in.                                                           |
+| `ProcessManagerEventMap`  | type      | A manager's events — `launch(id)` and `exit(id, exit)`.                                                                          |
+| `ProcessManagerOptions`   | interface | `ProcessManager` construction — initial `on` listeners and an `error` handler.                                                   |
+| `ProcessManagerInterface` | interface | The registry surface — `emitter` / `count` plus the query, launch, stop, and destroy methods.                                    |
+| `ProcessErrorCode`        | type      | The failure categories — `spawn`, `timeout`, `duplicate`, `protocol`, or `invalid`.                                              |
+| `ProcessErrorContext`     | interface | Structured failure detail — `id`, `command`, `code`, `signal`, or `value`.                                                       |
+| `ProcessErrorOptions`     | interface | `ProcessError` construction — `code` plus optional `context`, `cause`, `result`.                                                 |
 
 ### Server contracts
 
@@ -199,9 +199,10 @@ capture helper, so they stay out of the host-independent face.
 
 ### Surface notes
 
-The `emitter`, `lines`, `evidence`, `truncated`, and `exit` members of `ProcessInterface`, and the
-`emitter` and `count` members of `ProcessManagerInterface`, are readonly data properties, so they
-stay Surface rows. Their call-signature methods are documented under [Methods](#methods).
+The `pid`, `code`, `signal`, `emitter`, `lines`, `evidence`, `truncated`, and `exit` members of
+`ProcessInterface`, and the `emitter` and `count` members of `ProcessManagerInterface`, are readonly
+data properties, so they stay Surface rows. Their call-signature methods are documented under
+[Methods](#methods).
 
 ## Methods
 
@@ -384,7 +385,7 @@ POSIX and Windows terminate differently, and only POSIX has a cooperative phase.
 | Host    | Sequence                                                                                                                                        | `grace`  |
 | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
 | POSIX   | `SIGTERM` to the process group, wait `grace`, then `SIGKILL` to the group — each signal reaching the child directly when no group owns its pid. | used     |
-| Windows | `taskkill /F /T` on the whole tree, with a direct kill after the utility reports failure.                                                       | not used |
+| Windows | `taskkill /F /T` on the whole tree at once, with a direct kill after the utility reports failure.                                               | not used |
 
 Windows has no signal a process group can receive, so `killTree` ends the tree through the
 `taskkill.exe` utility addressed by its absolute `System32` path, which stops a `PATH` override
@@ -399,6 +400,21 @@ pid, it falls back to signalling the child directly, so `killProcess` and `stopC
 non-detached child. On Windows, or when no pid is available, it signals the child alone. Every other
 throw during signalling is swallowed, because the process can exit between the caller's liveness
 check and the call, and the child's native exit stays the authoritative terminal state.
+
+`pid` is the host id of the spawned child, and `code` and `signal` are the terminal pair the host
+recorded for it. The spawn is eager, so `pid` carries a number by the time `createProcess` returns,
+and a spawn that produced no child reports `undefined` for that child's whole lifetime. `code` and
+`signal` are `null` while the child runs; the host records them at the native exit, which arrives
+before the `exit` promise whenever a descendant holds the child's stdio open, so a supervisor inside
+that window reads the terminal state from them. A spawn fault records the host's negative errno as
+the `code`, the same value the `exit` promise carries.
+
+An assigned id survives the exit, so `pid` reports no liveness on its own. Derive liveness as
+`pid !== undefined && code === null && signal === null`, and derive it again before each use of the
+id, because the host reuses a dead child's id and a signal sent to a reused id reaches the process
+that holds it. Address a live child yourself with `process.kill(pid, 'SIGTERM')`; on a POSIX host,
+negate the id to reach the detached child's whole process group, which is the route `killProcess`
+takes.
 
 ```ts
 import { createProcess } from '@orkestrel/process/server'
@@ -552,6 +568,10 @@ the exit and the captured output together, without managing a live stream.
 `ExecuteSyncOptions` carries the same set without `grace` and without `signal`, because the
 synchronous host offers neither a cooperative termination window nor in-flight cancellation.
 
+Every option and command property is read once, before the child is spawned, in `execute` and in
+`executeSync` alike. The value validated is therefore the value spawned, whatever a getter behind an
+option returns on a later read, and a getter that throws does so while nothing has started.
+
 `input` is standard-input payload and carries no NUL restriction on either option shape:
 
 ```ts
@@ -685,10 +705,11 @@ carries only the directory the child starts in.
 
 `detach` returns nothing, not a process id. Fire-and-forget is the whole contract: an id you cannot
 observe an exit for invites a supervision you would have to build yourself. Use `Process` when you
-need the streams, the events, or a bounded stop.
+need the pid, the streams, the events, or a bounded stop.
 
 `detach` validates first, so a malformed working directory or command string throws a `ProcessError`
-coded `invalid` before anything is spawned. After the spawn, a host fault is swallowed rather than
+coded `invalid` before anything is spawned. It reads each option once, so the working directory it
+validated is the one the child starts in. After the spawn, a host fault is swallowed rather than
 crashing the caller.
 
 ```ts
@@ -978,6 +999,9 @@ isExited(reporter) // whether the native exit arrived
 - **Give `execute` a `timeout` when the command can start a descendant** — an unbounded run waits on
   stdio completion, and a descendant that inherited the child's pipes holds it open past the child's
   own exit.
+- **Derive liveness before you address `pid`** — a live child is
+  `pid !== undefined && code === null && signal === null`, and the host reuses a dead child's id, so
+  a signal sent without that check reaches whatever process holds the id.
 - **Read `evidence` on a failed exit** — the byte-bounded stderr tail is the diagnostic to attach,
   bounded by `evidence` (default `PROCESS_EVIDENCE`).
 - **Observe, do not drive** — subscribe to `emitter` for lifecycle moments; emitting is a pure
