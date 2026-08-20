@@ -13,7 +13,8 @@ import type { ProcessChild } from './types.js'
 import { Buffer } from 'node:buffer'
 import { spawn, spawnSync } from 'node:child_process'
 import { statSync } from 'node:fs'
-import { delimiter, extname, join, resolve } from 'node:path'
+import { join, posix, win32 } from 'node:path'
+import { platform as hostPlatform } from 'node:process'
 import {
 	attempt,
 	boundsOf,
@@ -107,28 +108,30 @@ export function formatCommand(command: ProcessCommand): string {
 }
 
 /**
- * Reads one environment variable the way the host resolves it.
+ * Reads one environment variable under an explicit platform's key rules.
  *
  * @remarks
  * Windows environment keys are case-insensitive, so a merged record can hold `Path` where the
- * caller asks for `PATH`. The exact key is tried first and a folded scan runs only on Windows.
+ * caller asks for `PATH`. The exact key is tried first and a folded scan runs only for `win32`.
  *
  * @param environment - The environment record to read
  * @param name - The variable name
+ * @param platform - The platform whose key rules apply
  * @returns The value, or `undefined` when the environment declares no such variable
  *
  * @example
  * ```ts
- * readVariable({ Path: 'C:\\Windows' }, 'PATH') // 'C:\\Windows' on Windows
+ * readPlatformVariable({ Path: 'C:\\Windows' }, 'PATH', 'win32') // 'C:\\Windows'
  * ```
  */
-export function readVariable(
+export function readPlatformVariable(
 	environment: Readonly<Record<string, string | undefined>>,
 	name: string,
+	platform: NodeJS.Platform,
 ): string | undefined {
 	const direct = environment[name]
 	if (direct !== undefined) return direct
-	if (process.platform !== 'win32') return undefined
+	if (platform !== 'win32') return undefined
 	const target = name.toUpperCase()
 	for (const [key, value] of Object.entries(environment)) {
 		if (key.toUpperCase() === target) return value
@@ -137,13 +140,34 @@ export function readVariable(
 }
 
 /**
- * Merges environment overrides into the environment one child receives.
+ * Reads one environment variable the way the current host resolves it.
+ *
+ * @param environment - The environment record to read
+ * @param name - The variable name
+ * @returns The value, or `undefined` when the environment declares no such variable
+ *
+ * @example
+ * ```ts
+ * readVariable({ PATH: '/usr/bin' }, 'PATH') // '/usr/bin'
+ * ```
+ */
+export function readVariable(
+	environment: Readonly<Record<string, string | undefined>>,
+	name: string,
+): string | undefined {
+	return readPlatformVariable(environment, name, hostPlatform)
+}
+
+/**
+ * Merges environment layers under an explicit platform's key rules.
  *
  * @remarks
- * Later maps override earlier ones and an `undefined` value unsets a key. On Windows the keys fold
+ * Later maps override earlier ones and an `undefined` value unsets a key. For `win32` the keys fold
  * case-insensitively and the last writer wins, so `PATH` followed by `Path` yields one variable
  * rather than two the host would resolve unpredictably.
  *
+ * @param platform - The platform whose key rules apply
+ * @param parent - The parent environment layer
  * @param isolated - If `true`, the parent environment is excluded; if `false`, the overrides layer over it
  * @param base - The command's own environment overrides
  * @param override - Per-invocation overrides applied last
@@ -151,17 +175,19 @@ export function readVariable(
  *
  * @example
  * ```ts
- * mergeEnvironment(false, { TOKEN: 'a' }, { TOKEN: undefined }) // TOKEN unset
+ * mergePlatformEnvironment('linux', {}, false, { TOKEN: 'a' }, { TOKEN: undefined }) // TOKEN unset
  * ```
  */
-export function mergeEnvironment(
+export function mergePlatformEnvironment(
+	platform: NodeJS.Platform,
+	parent: Readonly<Record<string, string | undefined>>,
 	isolated: boolean,
 	base?: Readonly<Record<string, string | undefined>>,
 	override?: Readonly<Record<string, string | undefined>>,
 ): NodeJS.ProcessEnv {
-	const folded = process.platform === 'win32'
+	const folded = platform === 'win32'
 	const layers: ReadonlyArray<Readonly<Record<string, string | undefined>>> = [
-		isolated ? {} : process.env,
+		isolated ? {} : parent,
 		base ?? {},
 		override ?? {},
 	]
@@ -179,6 +205,27 @@ export function mergeEnvironment(
 	const merged: NodeJS.ProcessEnv = {}
 	for (const [key, value] of entries.values()) merged[key] = value
 	return merged
+}
+
+/**
+ * Merges environment overrides into the environment one child receives on the current host.
+ *
+ * @param isolated - If `true`, the parent environment is excluded; if `false`, the overrides layer over it
+ * @param base - The command's own environment overrides
+ * @param override - Per-invocation overrides applied last
+ * @returns The environment for a spawn, carrying no unset key
+ *
+ * @example
+ * ```ts
+ * mergeEnvironment(true, { TOKEN: 'a' }) // { TOKEN: 'a' }
+ * ```
+ */
+export function mergeEnvironment(
+	isolated: boolean,
+	base?: Readonly<Record<string, string | undefined>>,
+	override?: Readonly<Record<string, string | undefined>>,
+): NodeJS.ProcessEnv {
+	return mergePlatformEnvironment(hostPlatform, process.env, isolated, base, override)
 }
 
 /**
@@ -201,18 +248,58 @@ export function isFile(target: string): boolean {
 }
 
 /**
- * Resolves a command file to the executable path the host would launch.
+ * Builds the executable candidates an explicit platform would search.
  *
  * @remarks
- * Windows alone needs this: the host searches the working directory before `PATH` and applies
+ * Windows alone needs this list: the host searches the working directory before `PATH` and applies
  * `PATHEXT`, and Node reproduces neither for a direct spawn. Within each searched directory the
  * literal name is tried first and each `PATHEXT` candidate after it, whether or not the name already
  * carries an extension — so `report.txt` resolves to a `report.txt` file where one exists and to
  * `report.txt.cmd` where none does. The lookup reads the child's effective environment, so an
  * overridden `PATH` selects the executable the child would have found. A POSIX host resolves the
- * file itself, so the answer there is always `undefined`. An appended extension is spelled the way
+ * file itself, so the candidate list there is empty. An appended extension is spelled the way
  * `PATHEXT` spells it rather than the way the directory entry does, which the case-insensitive host
- * treats as the same file.
+ * treats as the same file. A non-Windows platform returns an empty list because `execvp` performs
+ * its own lookup.
+ *
+ * @param file - The command executable name or path
+ * @param workspace - The directory searched first
+ * @param environment - The child's effective environment
+ * @param platform - The platform whose lookup rules apply
+ * @returns The ordered absolute candidate paths
+ *
+ * @example
+ * ```ts
+ * buildExecutableCandidates('git', 'C:\\work', { PATH: 'C:\\bin' }, 'win32')
+ * ```
+ */
+export function buildExecutableCandidates(
+	file: string,
+	workspace: string,
+	environment: Readonly<Record<string, string | undefined>>,
+	platform: NodeJS.Platform,
+): readonly string[] {
+	if (platform !== 'win32') return Object.freeze([])
+	const extensions = (readPlatformVariable(environment, 'PATHEXT', platform) ?? PROCESS_PATHEXT)
+		.split(';')
+		.filter((extension) => extension.length > 0)
+	const candidates = [file, ...extensions.map((extension) => `${file}${extension}`)]
+	const rooted = file.includes('/') || file.includes('\\')
+	const directories = rooted
+		? [workspace]
+		: [workspace, ...(readPlatformVariable(environment, 'PATH', platform) ?? '').split(';')]
+	const targets: string[] = []
+	for (const directory of directories) {
+		if (directory.length === 0) continue
+		for (const candidate of candidates) {
+			targets.push(win32.resolve(directory, candidate))
+		}
+	}
+	return Object.freeze(targets)
+}
+
+/**
+ * Resolves a command file to the executable path the host would launch.
  *
  * @param file - The command executable name or path
  * @param options - The directory searched first and the child's effective environment
@@ -224,23 +311,11 @@ export function isFile(target: string): boolean {
  * ```
  */
 export function resolveExecutable(file: string, options?: ExecutableOptions): string | undefined {
-	if (process.platform !== 'win32') return undefined
 	const environment = options?.environment ?? process.env
 	const workspace = options?.workspace ?? process.cwd()
-	const extensions = (readVariable(environment, 'PATHEXT') ?? PROCESS_PATHEXT)
-		.split(';')
-		.filter((extension) => extension.length > 0)
-	const candidates = [file, ...extensions.map((extension) => `${file}${extension}`)]
-	const rooted = file.includes('/') || file.includes('\\')
-	const directories = rooted
-		? [workspace]
-		: [workspace, ...(readVariable(environment, 'PATH') ?? '').split(delimiter)]
-	for (const directory of directories) {
-		if (directory.length === 0) continue
-		for (const candidate of candidates) {
-			const target = resolve(directory, candidate)
-			if (isFile(target)) return target
-		}
+	const candidates = buildExecutableCandidates(file, workspace, environment, hostPlatform)
+	for (const target of candidates) {
+		if (isFile(target)) return target
 	}
 	return undefined
 }
@@ -268,17 +343,61 @@ export function quoteArgument(value: string): string {
 }
 
 /**
- * Builds the resolved spawn form of one command.
+ * Builds a spawn form from a resolved file and an explicit platform.
  *
  * @remarks
- * The executable is resolved against the child's effective environment. A resolved `.cmd` or `.bat`
- * script cannot be spawned directly **on Windows**, so it runs there through an explicitly quoted
- * `cmd.exe /d /s /c` command line with the argument vector passed verbatim. No path uses a shell,
- * so a metacharacter in an argument is never interpreted. `cmd.exe` expands `%NAME%` before it
- * parses quotes, so no quoting can carry a percent sign through to a Windows batch target: an
- * argument carrying one is refused there rather than silently rewritten. The whole batch path is
- * Windows-only. A POSIX host has no `cmd.exe` and no restriction on spawning a file directly, so a
- * target named `worker.cmd` spawns directly there and receives a percent sign as literal text.
+ * A resolved `.cmd` or `.bat` script cannot be spawned directly **on Windows**, so it runs there
+ * through an explicitly quoted `cmd.exe /d /s /c` command line with the argument vector passed
+ * verbatim. No path uses a shell, so a metacharacter in an argument is never interpreted. `cmd.exe`
+ * expands `%NAME%` before it parses quotes, so no quoting can carry a percent sign through to a
+ * Windows batch target: an argument carrying one is refused there rather than silently rewritten.
+ * The whole batch path is Windows-only. A POSIX host has no `cmd.exe` and no restriction on spawning
+ * a file directly, so a target named `worker.cmd` spawns directly there and receives a percent sign
+ * as literal text.
+ *
+ * @param command - The executable and its argument vector
+ * @param file - The resolved executable file
+ * @param environment - The child's effective environment
+ * @param platform - The platform whose batch rules apply
+ * @returns The file, argument vector, and verbatim flag to spawn with
+ * @throws A {@link ProcessError} coded `invalid` when `platform` is `win32`, the resolved target is a batch script, and an argument carries a percent sign
+ *
+ * @example
+ * ```ts
+ * buildPlatformSpawn({ file: 'node', arguments: ['--version'] }, 'node', {}, 'linux').verbatim // false
+ * ```
+ */
+export function buildPlatformSpawn(
+	command: ProcessCommand,
+	file: string,
+	environment: Readonly<Record<string, string | undefined>>,
+	platform: NodeJS.Platform,
+): SpawnInput {
+	const extension = (platform === 'win32' ? win32.extname(file) : posix.extname(file)).toLowerCase()
+	// Windows alone cannot spawn a batch script directly, and `cmd.exe` is what expands `%NAME%`.
+	// A POSIX host has neither restriction, so a file whose name ends in `.cmd` is an ordinary
+	// executable there and its extension changes nothing about how it spawns.
+	const batch = platform === 'win32' && (extension === '.cmd' || extension === '.bat')
+	if (!batch) {
+		return Object.freeze({
+			file,
+			arguments: Object.freeze([...command.arguments]),
+			verbatim: false,
+		})
+	}
+	for (const argument of command.arguments) {
+		if (argument.includes('%')) throw createInvalidError('command argument', argument)
+	}
+	const line = [`"${file}"`, ...command.arguments.map(quoteArgument)].join(' ')
+	return Object.freeze({
+		file: readPlatformVariable(environment, 'ComSpec', platform) ?? 'cmd.exe',
+		arguments: Object.freeze(['/d', '/s', '/c', `"${line}"`]),
+		verbatim: true,
+	})
+}
+
+/**
+ * Builds the resolved spawn form of one command for the current host.
  *
  * @param command - The executable and its argument vector
  * @param options - The directory searched first and the child's effective environment
@@ -292,28 +411,8 @@ export function quoteArgument(value: string): string {
  */
 export function buildSpawn(command: ProcessCommand, options?: ExecutableOptions): SpawnInput {
 	const file = resolveExecutable(command.file, options) ?? command.file
-	const extension = extname(file).toLowerCase()
-	// Windows alone cannot spawn a batch script directly, and `cmd.exe` is what expands `%NAME%`.
-	// A POSIX host has neither restriction, so a file whose name ends in `.cmd` is an ordinary
-	// executable there and its extension changes nothing about how it spawns.
-	const batch = process.platform === 'win32' && (extension === '.cmd' || extension === '.bat')
-	if (!batch) {
-		return Object.freeze({
-			file,
-			arguments: Object.freeze([...command.arguments]),
-			verbatim: false,
-		})
-	}
-	for (const argument of command.arguments) {
-		if (argument.includes('%')) throw createInvalidError('command argument', argument)
-	}
-	const line = [`"${file}"`, ...command.arguments.map(quoteArgument)].join(' ')
 	const environment = options?.environment ?? process.env
-	return Object.freeze({
-		file: readVariable(environment, 'ComSpec') ?? 'cmd.exe',
-		arguments: Object.freeze(['/d', '/s', '/c', `"${line}"`]),
-		verbatim: true,
-	})
+	return buildPlatformSpawn(command, file, environment, hostPlatform)
 }
 
 /**

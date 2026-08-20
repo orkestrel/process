@@ -93,15 +93,19 @@ The constructors for each failure category, from `@orkestrel/process`.
 The resolution and environment building blocks every spawn composes, from
 `@orkestrel/process/server`.
 
-| API                 | Kind     | Summary                                                                       |
-| ------------------- | -------- | ----------------------------------------------------------------------------- |
-| `formatCommand`     | function | Render a `ProcessCommand` into its space-joined diagnostic command line.      |
-| `quoteArgument`     | function | Quote one token for a `cmd.exe` command line, doubling an embedded quote.     |
-| `buildSpawn`        | function | Resolve one command into the file, argument vector, and verbatim flag.        |
-| `resolveExecutable` | function | Resolve a command file the way Windows would, or `undefined` on a POSIX host. |
-| `isFile`            | function | Report whether a path resolves to a regular file, never throwing.             |
-| `readVariable`      | function | Read one environment variable the way the host resolves its name.             |
-| `mergeEnvironment`  | function | Merge environment overrides into the environment one child receives.          |
+| API                         | Kind     | Summary                                                                   |
+| --------------------------- | -------- | ------------------------------------------------------------------------- |
+| `formatCommand`             | function | Render a `ProcessCommand` into its space-joined diagnostic command line.  |
+| `quoteArgument`             | function | Quote one token for a `cmd.exe` command line, doubling an embedded quote. |
+| `buildSpawn`                | function | Resolve one command into the file, argument vector, and verbatim flag.    |
+| `buildPlatformSpawn`        | function | Build a spawn form from a resolved file and an explicit platform.         |
+| `buildExecutableCandidates` | function | Build the ordered paths an explicit platform would search.                |
+| `resolveExecutable`         | function | Resolve a command file the way Windows would, or `undefined` on POSIX.    |
+| `isFile`                    | function | Report whether a path resolves to a regular file, never throwing.         |
+| `readVariable`              | function | Read one environment variable the way the host resolves its name.         |
+| `readPlatformVariable`      | function | Read one variable under an explicit platform's key rules.                 |
+| `mergeEnvironment`          | function | Merge environment overrides into the environment one child receives.      |
+| `mergePlatformEnvironment`  | function | Merge explicit environment layers under one platform's key rules.         |
 
 ### Capture helpers
 
@@ -388,15 +392,17 @@ await child.destroy()
 
 No spawn in this package uses an implicit shell. `buildSpawn` resolves one command into the file, the
 argument vector, and a `verbatim` flag, and every entry point — `Process`, `run`, `runSync`, and
-`detach` — spawns through it. A metacharacter in an argument therefore reaches the child as data
+`detach` — spawns through it. The host boundary passes its platform into the pure candidate and batch
+decisions. A metacharacter in an argument therefore reaches the child as data
 rather than as syntax: the one path that builds a command line at all — a Windows `.cmd` or `.bat`
 script — runs through an explicit quoted `cmd.exe /d /s /c` invocation, and the one argument that
 invocation could corrupt is refused rather than passed.
 
-A POSIX host resolves the file through `execvp` against the child's effective `PATH`, so
-`resolveExecutable` returns `undefined` there and the command file is spawned as written. Windows
-needs the lookup, because the host searches the working directory before `PATH` and applies
-`PATHEXT`, and Node reproduces neither for a direct spawn.
+A POSIX platform input leaves the file lookup to `execvp`, so `resolveExecutable` returns
+`undefined` and the command file is spawned as written. A Windows platform input needs the lookup,
+because the host searches the working directory before `PATH` and applies `PATHEXT`, and Node
+reproduces neither for a direct spawn. `buildExecutableCandidates` makes that decision and the
+ordered candidate list pure, so both platform inputs execute on every test host.
 Within each searched directory the literal name is tried first and each `PATHEXT` candidate after
 it, whether or not the name already carries an extension: `report.txt` resolves to a `report.txt`
 file where one exists, and to `report.txt.cmd` where none does. The lookup reads the child's
@@ -436,7 +442,9 @@ buildSpawn({ file: 'node', arguments: ['--version'] }).verbatim // false
 `mergeEnvironment` builds the environment one child receives. Later maps override earlier ones, an
 `undefined` value unsets a key, and on Windows the keys fold case-insensitively with the last writer
 winning, so `PATH` followed by `Path` yields one variable rather than two the host would resolve
-unpredictably. `readVariable` reads one variable back under the same folding rule.
+unpredictably. `readVariable` reads one variable back under the same folding rule. Their
+`mergePlatformEnvironment` and `readPlatformVariable` leaves accept an explicit platform, so both
+folding decisions execute on every test host.
 
 `ProcessCommand.isolated` decides whether the parent environment is a layer at all. Omitted or
 `false`, the overrides merge over the parent environment; `true`, the child environment is the
@@ -900,6 +908,22 @@ rediscovered.
 
 ## Tests
 
+The pure platform-decision rows execute both `win32` and POSIX inputs on every host. They cover
+environment-key folding and merging, `PATHEXT` candidate order, batch routing, argument quoting, and
+the percent-sign refusal. Those rows were last proven on Linux on 2026-08-20. The live POSIX rows
+were also last proven on Linux on 2026-08-20.
+
+The live Windows filesystem, `cmd.exe`, and `taskkill.exe` rows execute on Windows only. Their
+pre-`b392629` form was last proven on Windows; the current fixtures have not run there. The exact
+unproven residue is `killTree` through `taskkill.exe` and grandchild tree termination through a live
+root. On a Windows host, settle it and re-run every server row with this command:
+
+```text
+npx vitest run --config vite.config.ts --no-cache --project src:server
+```
+
+The pure decision rows do not prove Windows end to end. They prove the decisions.
+
 - [`tests/src/core/index.test.ts`](../tests/src/core/index.test.ts) — the core barrel re-exports the
   types, constants, and error surface.
 - [`tests/src/server/Process.test.ts`](../tests/src/server/Process.test.ts) — the supervised child:
@@ -914,8 +938,9 @@ rediscovered.
   ordering, the query surface, the three `stop` overloads, and emitter-last `destroy`.
 - [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the building blocks:
   `run`, `runSync`, and `detach` outcomes, the resolver under `PATHEXT` and an extension-bearing
-  name, the quoted `cmd.exe` builder and its percent-sign refusal, the environment merge, the
-  UTF-8-safe byte bounds, the validators, and the termination helpers.
+  name, both platform inputs to the quoted batch builder and its percent-sign refusal, the
+  environment merge under both platform inputs, the UTF-8-safe byte bounds, the validators, and the
+  termination helpers.
 - [`tests/src/server/index.test.ts`](../tests/src/server/index.test.ts) — the server barrel
   re-exports the factories, runners, engine classes, and helpers.
 - [`tests/guides.test.ts`](../tests/guides.test.ts) — this guide: every documented name resolves,

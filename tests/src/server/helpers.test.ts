@@ -8,6 +8,8 @@ import { waitForCondition } from '../../setup.js'
 import { createScratch } from '@orkestrel/test/server'
 import { isProcessError, ProcessError } from '@src/core'
 import {
+	buildExecutableCandidates,
+	buildPlatformSpawn,
 	buildRunResult,
 	buildSpawn,
 	detach,
@@ -17,7 +19,9 @@ import {
 	killProcess,
 	killTree,
 	mergeEnvironment,
+	mergePlatformEnvironment,
 	quoteArgument,
+	readPlatformVariable,
 	readVariable,
 	resolveExecutable,
 	retainChunk,
@@ -82,6 +86,14 @@ describe('readVariable', () => {
 		)
 		expect(readVariable({}, 'PROCESS_TEST_KEY')).toBeUndefined()
 	})
+
+	it('folds a Windows key and preserves a POSIX key distinction from the same input', () => {
+		const environment = { Path: 'C:\\tools' }
+
+		expect(readPlatformVariable(environment, 'PATH', 'win32')).toBe('C:\\tools')
+		expect(readPlatformVariable(environment, 'PATH', 'linux')).toBeUndefined()
+		expect(readPlatformVariable({ PATH: '/usr/bin' }, 'PATH', 'linux')).toBe('/usr/bin')
+	})
 })
 
 describe('isFile', () => {
@@ -103,11 +115,28 @@ describe('quoteArgument', () => {
 })
 
 describe('resolveExecutable', () => {
+	it('builds the Windows search order and leaves the POSIX lookup to execvp', () => {
+		const environment = { Path: 'C:\\bin;D:\\tools', PathExt: '.CMD;.EXE' }
+
+		expect(buildExecutableCandidates('report.txt', 'C:\\workspace', environment, 'win32')).toEqual([
+			'C:\\workspace\\report.txt',
+			'C:\\workspace\\report.txt.CMD',
+			'C:\\workspace\\report.txt.EXE',
+			'C:\\bin\\report.txt',
+			'C:\\bin\\report.txt.CMD',
+			'C:\\bin\\report.txt.EXE',
+			'D:\\tools\\report.txt',
+			'D:\\tools\\report.txt.CMD',
+			'D:\\tools\\report.txt.EXE',
+		])
+		expect(buildExecutableCandidates('report.txt', '/workspace', environment, 'linux')).toEqual([])
+	})
+
 	// A bare command name is resolved by the caller only on Windows, where the host appends a
 	// PATHEXT extension and searches the working directory first. Every other host resolves the
 	// file inside its own `execvp`, so there is nothing here to reproduce.
 	it.skipIf(process.platform !== 'win32')(
-		'resolves a bare name through the effective PATH and PATHEXT',
+		'resolves a bare name when the filesystem applies Windows case folding',
 		() => {
 			const scratch = createScratch()
 			try {
@@ -116,7 +145,9 @@ describe('resolveExecutable', () => {
 				// Windows folds a path's case, and the resolved extension is spelled the way
 				// `PATHEXT` spells it rather than the way the directory entry does.
 				expect(
-					resolveExecutable('tool', { environment: { PATH: scratch.path } })?.toLowerCase(),
+					resolveExecutable('tool', {
+						environment: { PATH: scratch.path },
+					})?.toLowerCase(),
 				).toBe(join(scratch.path, 'tool.cmd').toLowerCase())
 				expect(
 					resolveExecutable('tool', {
@@ -133,7 +164,7 @@ describe('resolveExecutable', () => {
 	// Windows is the only host that applies `PATHEXT` at all, so it is the only host that can show
 	// which candidate a name carrying its own extension resolves to.
 	it.skipIf(process.platform !== 'win32')(
-		'tries an extension-bearing name literally before it applies PATHEXT to it',
+		'tries an extension-bearing name when the filesystem applies Windows path rules',
 		() => {
 			const scratch = createScratch()
 			try {
@@ -143,12 +174,16 @@ describe('resolveExecutable', () => {
 
 				// The literal name is a regular file, so it wins over every appended candidate.
 				expect(
-					resolveExecutable('report.txt', { environment: { PATH: scratch.path } })?.toLowerCase(),
+					resolveExecutable('report.txt', {
+						environment: { PATH: scratch.path },
+					})?.toLowerCase(),
 				).toBe(join(scratch.path, 'report.txt').toLowerCase())
 				// With no literal file to find, `PATHEXT` still applies to a name that carries an
 				// extension of its own.
 				expect(
-					resolveExecutable('notes.txt', { environment: { PATH: scratch.path } })?.toLowerCase(),
+					resolveExecutable('notes.txt', {
+						environment: { PATH: scratch.path },
+					})?.toLowerCase(),
 				).toBe(join(scratch.path, 'notes.txt.cmd').toLowerCase())
 			} finally {
 				scratch.destroy()
@@ -156,21 +191,62 @@ describe('resolveExecutable', () => {
 		},
 	)
 
-	it.skipIf(process.platform !== 'win32')('searches the workspace before the path', () => {
-		const scratch = createScratch()
-		try {
-			scratch.write('tool.cmd', '@echo off\r\necho workspace-ran\r\n')
+	it.skipIf(process.platform !== 'win32')(
+		'searches the workspace when the filesystem applies Windows path rules',
+		() => {
+			const scratch = createScratch()
+			try {
+				scratch.write('tool.cmd', '@echo off\r\necho workspace-ran\r\n')
 
-			expect(
-				resolveExecutable('tool', { workspace: scratch.path, environment: {} })?.toLowerCase(),
-			).toBe(join(scratch.path, 'tool.cmd').toLowerCase())
-		} finally {
-			scratch.destroy()
-		}
+				expect(
+					resolveExecutable('tool', {
+						workspace: scratch.path,
+						environment: {},
+					})?.toLowerCase(),
+				).toBe(join(scratch.path, 'tool.cmd').toLowerCase())
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
+
+	it.skipIf(process.platform === 'win32')(
+		'leaves the lookup to execvp when the host implements that API',
+		() => {
+			expect(resolveExecutable('node')).toBeUndefined()
+		},
+	)
+})
+
+describe('buildPlatformSpawn', () => {
+	it('routes and quotes a Windows batch target while a POSIX host spawns it directly', () => {
+		const command = { file: 'greet.cmd', arguments: ['a&b'] }
+
+		expect(
+			buildPlatformSpawn(command, 'C:\\tools\\greet.cmd', { ComSpec: 'C:\\cmd.exe' }, 'win32'),
+		).toEqual({
+			file: 'C:\\cmd.exe',
+			arguments: ['/d', '/s', '/c', '""C:\\tools\\greet.cmd" "a&b""'],
+			verbatim: true,
+		})
+		expect(buildPlatformSpawn(command, '/tools/greet.cmd', {}, 'linux')).toEqual({
+			file: '/tools/greet.cmd',
+			arguments: ['a&b'],
+			verbatim: false,
+		})
 	})
 
-	it.skipIf(process.platform === 'win32')('leaves the lookup to a host that performs it', () => {
-		expect(resolveExecutable('node')).toBeUndefined()
+	it('refuses a percent sign only for a Windows batch target', () => {
+		const command = { file: 'greet.cmd', arguments: ['%PATH%'] }
+
+		expect(() => buildPlatformSpawn(command, 'C:\\tools\\greet.cmd', {}, 'win32')).toThrow(
+			ProcessError,
+		)
+		expect(buildPlatformSpawn(command, '/tools/greet.cmd', {}, 'linux')).toEqual({
+			file: '/tools/greet.cmd',
+			arguments: ['%PATH%'],
+			verbatim: false,
+		})
 	})
 })
 
@@ -182,56 +258,6 @@ describe('buildSpawn', () => {
 		expect(plan.arguments).toEqual(['--version'])
 		expect(plan.verbatim).toBe(false)
 	})
-
-	// Only Windows refuses to spawn a batch script directly, so only Windows needs the quoted
-	// `cmd.exe /d /s /c` command line this builds.
-	it.skipIf(process.platform !== 'win32')(
-		'routes a batch script through a quoted cmd.exe command line',
-		() => {
-			const scratch = createScratch()
-			try {
-				scratch.write('with space/greet.cmd', '@echo off\r\necho cmd-ran %1\r\n')
-				const file = join(scratch.path, 'with space', 'greet.cmd')
-
-				const plan = buildSpawn({ file, arguments: ['a&b'] })
-
-				expect(plan.file.toLowerCase()).toContain('cmd.exe')
-				expect(plan.verbatim).toBe(true)
-				expect(plan.arguments).toEqual(['/d', '/s', '/c', `""${file}" "a&b""`])
-			} finally {
-				scratch.destroy()
-			}
-		},
-	)
-
-	// `cmd.exe` is the program that expands `%NAME%`, and only Windows spawns a batch target through
-	// it, so only Windows carries the refusal that expansion makes necessary.
-	it.skipIf(process.platform !== 'win32')(
-		'refuses a percent sign in an argument bound for a batch target',
-		() => {
-			// `cmd.exe` expands `%NAME%` before it parses quotes, so no quoting can carry the literal
-			// text through to a batch script.
-			expect(() => buildSpawn({ file: 'C:\\tools\\greet.cmd', arguments: ['%PATH%'] })).toThrow(
-				ProcessError,
-			)
-			expect(() => buildSpawn({ file: 'C:\\tools\\greet.bat', arguments: ['%PATH%'] })).toThrow(
-				ProcessError,
-			)
-		},
-	)
-
-	// A POSIX host has no `cmd.exe` and no restriction on spawning a file directly, so a name ending
-	// in `.cmd` is an ordinary executable there and its extension must change nothing.
-	it.skipIf(process.platform === 'win32')(
-		'spawns a batch-named target directly and passes a percent sign literally',
-		() => {
-			const plan = buildSpawn({ file: '/opt/tools/worker.cmd', arguments: ['%s'] })
-
-			expect(plan.file).toBe('/opt/tools/worker.cmd')
-			expect(plan.arguments).toEqual(['%s'])
-			expect(plan.verbatim).toBe(false)
-		},
-	)
 
 	it('passes a percent-delimited argument literally to a target that is not batch', () => {
 		const plan = buildSpawn({ file: process.execPath, arguments: ['%s', '%PATH%'] })
@@ -249,7 +275,7 @@ describe('buildSpawn', () => {
 	// Only Windows resolves and runs a batch target, so only Windows can drive the expansion this
 	// refusal exists to prevent.
 	it.skipIf(process.platform !== 'win32')(
-		'refuses a defined percent-delimited argument a batch target would otherwise expand',
+		'refuses a defined percent-delimited argument when cmd.exe expands environment variables',
 		() => {
 			const scratch = createScratch()
 			try {
@@ -273,7 +299,7 @@ describe('buildSpawn', () => {
 	)
 
 	it.skipIf(process.platform !== 'win32')(
-		'runs a batch script whose directory name contains a space',
+		'runs a batch script whose spaced path cmd.exe must parse',
 		() => {
 			const scratch = createScratch()
 			try {
@@ -459,7 +485,7 @@ describe('killTree', () => {
 	// `taskkill` is the Windows utility that ends a process tree by root id; a POSIX host reaches a
 	// tree through its process group instead, so there is no peer to drive here.
 	it.skipIf(process.platform !== 'win32')(
-		'reports failure for a tree no process id owns',
+		'reports failure for an unowned tree when taskkill.exe is available',
 		async () => {
 			expect(await killTree(4_194_303, 5_000)).toBe(false)
 		},
@@ -475,6 +501,21 @@ describe('mergeEnvironment', () => {
 		)
 		expect(merged.PROCESS_TEST_KEY).toBeUndefined()
 		expect(merged.PATH).toBe(process.env.PATH)
+	})
+
+	it('folds Windows keys and preserves POSIX keys from the same explicit parent', () => {
+		const parent = { PROCESS_PARENT_KEY: 'parent' }
+		const base = { PROCESS_TEST_KEY: 'first' }
+		const override = { process_test_key: 'second' }
+		const windows = mergePlatformEnvironment('win32', parent, false, base, override)
+		const posix = mergePlatformEnvironment('linux', parent, false, base, override)
+
+		expect(windows).toEqual({ PROCESS_PARENT_KEY: 'parent', process_test_key: 'second' })
+		expect(posix).toEqual({
+			PROCESS_PARENT_KEY: 'parent',
+			PROCESS_TEST_KEY: 'first',
+			process_test_key: 'second',
+		})
 	})
 
 	it('folds a differently cased key the way the host resolves it', () => {
@@ -493,7 +534,9 @@ describe('mergeEnvironment', () => {
 	})
 
 	it('excludes the parent environment for an isolated command', () => {
-		const merged = mergeEnvironment(true, { PROCESS_TEST_KEY: 'only' })
+		const merged = mergeEnvironment(true, {
+			PROCESS_TEST_KEY: 'only',
+		})
 
 		expect(merged.PROCESS_TEST_KEY).toBe('only')
 		expect(Object.keys(merged)).toEqual(['PROCESS_TEST_KEY'])
@@ -621,7 +664,7 @@ describe('killProcess', () => {
 	})
 
 	it.skipIf(process.platform === 'win32')(
-		'falls back to the direct child when no process group owns its pid',
+		'falls back to the direct child when process.kill reports ESRCH for a negative group id',
 		() => {
 			const signals = createRecorder<readonly [NodeJS.Signals]>()
 

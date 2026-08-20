@@ -124,10 +124,14 @@ meaning each, every one a piece a public entry point composes.
 
 ## Look out for (known limits, quirks, and 0.0.4 candidates)
 
-1. **Four tests are POSIX-gated and have NEVER run on a POSIX host**: the group-kill-with-descendant
-   proof, the `SIGTERM` → grace → `SIGKILL` escalation (the `trap` fixture exists precisely for it),
-   the POSIX resolver passthrough, and the batch-named-file direct spawn. FIRST TASK on any POSIX host:
-   run the suite there.
+1. **The decidable Windows and POSIX decisions run on every host**: environment-key folding and
+   merging, `PATHEXT` candidate order, batch routing, argument quoting, and the percent-sign refusal
+   were last proven on Linux on 2026-08-20 through explicit platform inputs. The live POSIX rows were
+   also last proven on Linux on 2026-08-20. The exact unproven Windows residue is `killTree` through
+   `taskkill.exe` and grandchild tree termination through a live root. Their pre-`b392629` form was
+   last proven on Windows; the current fixtures have not run there. Settle the residue on a Windows
+   host with `npx vitest run --config vite.config.ts --no-cache --project src:server`. The pure rows
+   prove the decisions; they do not prove Windows end to end.
 2. **Windows Job Objects** — the excluded fix for post-root-exit descendants. The honest boundary is
    documented; a real tree guarantee is a 0.0.4+ design round, not a patch.
 3. **Per-stream truncation** — `truncated` covers both streams with one flag; a consumer parsing

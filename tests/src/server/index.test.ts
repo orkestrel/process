@@ -6,6 +6,8 @@ describe('src server entry', () => {
 		expect(Object.keys(entry).sort()).toEqual([
 			'Process',
 			'ProcessManager',
+			'buildExecutableCandidates',
+			'buildPlatformSpawn',
 			'buildRunResult',
 			'buildSpawn',
 			'createProcess',
@@ -17,7 +19,9 @@ describe('src server entry', () => {
 			'killProcess',
 			'killTree',
 			'mergeEnvironment',
+			'mergePlatformEnvironment',
 			'quoteArgument',
+			'readPlatformVariable',
 			'readVariable',
 			'resolveExecutable',
 			'retainChunk',
