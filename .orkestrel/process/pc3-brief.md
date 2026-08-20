@@ -87,6 +87,46 @@ Two further rules from the same file bind your new tests:
   declaration or a fixture that could disagree, not re-derived the way the source derives it. A test
   that recomputes the answer passes for every value the source will ever return.
 
+## Q7 — a claim that is a race, reopened with measurement
+
+Unit PC2 documented that a `runSync` timeout ends the root alone and leaves descendants running, and
+wrote a test for it. **The claim is not reliably true and the test is nondeterministic.** Measured
+against the built artifact, six trials, polling every 10 ms with a 12-second budget:
+
+```text
+trial 0: expired=true marker appeared at 296ms
+trial 1: expired=true marker appeared at 295ms
+trial 2: expired=true marker appeared at NEVER (>12s)
+trial 3: expired=true marker appeared at NEVER (>12s)
+trial 4: expired=true marker appeared at NEVER (>12s)
+trial 5: expired=true marker appeared at 294ms
+```
+
+Three of six survive; three never write.
+
+**The cause.** `runSync` is given `timeout: 50`. The `tree-write` fixture's grandchild must reach its
+own `setTimeout` registration before the root is killed, and this campaign measured Node's bootstrap
+on this host at **45.7–49.9 ms**. The grandchild is racing its own interpreter startup against a 50 ms
+deadline and loses about half the time. On POSIX the fixture spawns it with
+`detached: process.platform === 'win32'`, so on Linux it is not detached and shares the root's group.
+
+**Two things are owed, and they are a design decision rather than a flake repair:**
+
+1. Make the fixture **signal readiness**, the way `trap` does after installing its handler, so the test
+   waits for an established grandchild before asserting survival. That removes the bootstrap race and
+   lets the test measure the termination behaviour it names.
+2. **Qualify the guide sentence** to what the package actually guarantees: `runSync` signals the root
+   alone, so a descendant already running survives; a descendant still starting may not.
+
+A polling-only repair was attempted and **reverted** — it converts a fast failure into a five-second
+timeout without touching the race, and a poll budget equal to the test's own timeout can never fail
+gracefully. Do not repeat it.
+
+`@orkestrel/test` has no wait-until-condition helper (`waitForDelay` is the only timing export, and
+the package reads no clock at all), so any local wait you write uses `performance.now()` per
+`.claude/rules/tests.md`, never `Date.now()`. A plan to add `waitForCondition` upstream is recorded in
+that package; do not block on it.
+
 ## Honesty requirements
 
 - `guides/process.md`'s Tests section must state which rows execute on which host, and name the host
