@@ -95,6 +95,7 @@ The resolution and environment building blocks every spawn composes, from
 
 | API                         | Kind     | Summary                                                                   |
 | --------------------------- | -------- | ------------------------------------------------------------------------- |
+| `snapshotCommand`           | function | Take one owned frozen snapshot of a caller's command before validation.   |
 | `formatCommand`             | function | Render a `ProcessCommand` into its space-joined diagnostic command line.  |
 | `quoteArgument`             | function | Quote one token for a `cmd.exe` command line, doubling an embedded quote. |
 | `buildSpawn`                | function | Resolve one command into the file, argument vector, and verbatim flag.    |
@@ -158,6 +159,7 @@ The defaults and host bounds, from `@orkestrel/process`.
 | `PROCESS_OUTPUT`       | const | `10_485_760`            | Default maximum captured bytes for a run's stdout and stderr, each. |
 | `PROCESS_TIMER`        | const | `2_147_483_647`         | The largest delay in milliseconds the host schedules as written.    |
 | `PROCESS_PATHEXT`      | const | `'.COM;.EXE;.BAT;.CMD'` | The extensions a Windows lookup applies when `PATHEXT` is unset.    |
+| `PROCESS_ERROR_CODES`  | const | the five codes          | The declared `ProcessErrorCode` categories, in declaration order.   |
 
 ### Types
 
@@ -189,9 +191,9 @@ The contracts and options, all from `@orkestrel/process`.
 The Node-side contract, from `@orkestrel/process/server`. It names a child process rather than a
 value this package owns, so it stays out of the host-independent face.
 
-| API            | Kind      | Summary                                                                                             |
-| -------------- | --------- | --------------------------------------------------------------------------------------------------- |
-| `ProcessChild` | interface | The child boundary the termination helpers drive — `pid`, `exitCode`, `signalCode`, `kill`, `once`. |
+| API            | Kind      | Summary                                                                                                    |
+| -------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
+| `ProcessChild` | interface | The child boundary the termination helpers drive — `pid`, `exitCode`, `signalCode`, `kill`, `once`, `off`. |
 
 ### Surface notes
 
@@ -275,7 +277,7 @@ Iterate it once, and fan out from that loop when several readers need the same l
 The `lines` policy follows consumer intent, and `backlog` bounds the unconsumed backlog in bytes.
 
 - Once an iterator has been requested, stdout pauses at the `backlog` mark and resumes at half of it.
-  That consumer loses nothing, and the child feels real backpressure.
+  That consumer loses nothing before termination, and the child feels real backpressure.
 - While no iterator has ever been requested, stdout keeps draining so `exit` still resolves, and
   retention stops at the mark. A consumer attaching after that point receives the retained head, then
   a gap, then the live stream.
@@ -340,6 +342,12 @@ that must not wait on either arms its own timer around them.
 POSIX detachment creates the process group that tree termination signals. The child therefore
 survives the supervisor's `SIGKILL` and does not receive the terminal's `SIGINT`. Call `stop` or
 `destroy` during an orderly shutdown.
+
+Neither bounded wait leaks a listener. `destroy` removes the abort listener it registered on the
+caller's `signal`, so a long-lived controller does not accumulate one per child. `waitForExit`
+releases its own `exit` listener when its deadline elapses before the exit, so a child driven through
+several bounded waits accumulates none either. `ProcessChild` declares the `off` that release needs,
+so a caller composing a stop of its own from the published contract releases it too.
 
 `PROCESS_CONFIRMATION` bounds each awaited step of a stop rather than the stop as a whole, so a
 worst-case termination spends more than one of them. On a POSIX host the cooperative wait after
@@ -428,13 +436,29 @@ argument carrying `%` when the resolved target is `.cmd` or `.bat`, with a `Proc
 guarantee whole: an argument either reaches the child as written or the call fails, and no path
 rewrites one. Off the batch path a percent sign is ordinary text and passes untouched.
 
+Because no spawn passes `shell: true`, Node's `DEP0190` deprecation warning — which fires when a
+`.bat` or `.cmd` file is spawned through a shell with arguments — cannot come from this package.
+
 The whole batch path is Windows-only, extension and all. A POSIX host has no `cmd.exe` and no
 restriction on spawning a file directly, so a target named `worker.cmd` spawns directly there, keeps
 `verbatim` at `false`, and receives a percent sign as literal text. The extension classifies a target
 only on the host where the extension means something.
 
+Every entry point snapshots the command before it validates, through `snapshotCommand`. The object
+validated is the object spawned: each property is read exactly once, so a `file` getter that returns
+one executable to the validator and another to the spawn cannot exist, and the argument vector and
+the environment record are copied and frozen, so a caller mutating either after the call cannot reach
+the child.
+
 ```ts
-import { buildSpawn, formatCommand, quoteArgument } from '@orkestrel/process/server'
+import {
+	buildSpawn,
+	formatCommand,
+	quoteArgument,
+	snapshotCommand,
+} from '@orkestrel/process/server'
+
+snapshotCommand({ file: 'git', arguments: ['status'] }) // { file: 'git', arguments: ['status'] }
 
 formatCommand({ file: 'git', arguments: ['status'] }) // 'git status'
 quoteArgument('status') // 'status'
@@ -571,6 +595,10 @@ Each of `stdout` and `stderr` is capped at `limit` bytes, keeping the captured h
 splitting a UTF-8 sequence. `truncated` reports that a cap was reached, and the two runners differ in
 what they do about it.
 
+One `truncated` flag covers both streams, so a consumer that parses `stdout` structurally cannot tell
+from the result which stream overflowed. Compare each captured string's byte length against `limit`
+where that distinction matters.
+
 `run` keeps reading past the cap, discards the excess, and reports `truncated` without failing the
 run. `runSync` hands `limit` to the host as its buffer ceiling, so an overflow ends the child with
 `SIGKILL` and reports `truncated` and `failed` together, with the partial output trimmed to `limit`.
@@ -622,6 +650,10 @@ on stdio completion for as long as the descendant holds the pipe.
 outlives this process, so nothing here observes its outcome. Its environment comes from the command's
 own `environment` and `isolated` rather than from a per-invocation override, and `DetachOptions`
 carries only the directory the child starts in.
+
+`detach` returns nothing, not a process id. Fire-and-forget is the whole contract: an id you cannot
+observe an exit for invites a supervision you would have to build yourself. Use `Process` when you
+need the pid, the streams, the events, or a bounded stop.
 
 `detach` validates first, so a malformed working directory or command string throws a `ProcessError`
 coded `invalid` before anything is spawned. After the spawn, a host fault is swallowed rather than
@@ -706,6 +738,13 @@ value with `isProcessError`, then branch on `code`.
 | `duplicate` | `ProcessManager.launch` reused an id that is already live.      |
 | `protocol`  | `ProcessManager.launch` ran after `destroy` had begun.          |
 | `invalid`   | A public input was refused before anything was spawned.         |
+
+`isProcessError` recognizes an error thrown by another installed copy of the package. It reads a
+global own-property brand rather than `instanceof`, so a duplicate installation and an ESM/CommonJS
+module copy both narrow, where a prototype check would refuse both. Recognition holds across copies
+at 0.0.4 or later: a copy earlier than 0.0.4 stamps no brand, so an error it throws stays outside the
+type. The guard admits exactly the codes `PROCESS_ERROR_CODES` declares, so a code added there is
+admitted with no second edit.
 
 A run failure carries its `RunResult` on `error.result`, and its command line, exit `code`, and
 `signal` on `error.context`. A duplicate-id and a protocol failure carry the offending `id` on
@@ -892,7 +931,9 @@ isExited(reporter) // whether the native exit arrived
   `lines` omission, and a run reports the `limit` it hit; a synchronous run fails on that limit while
   an asynchronous run does not.
 - **Raise `backlog` for a chatty child you iterate slowly** — the default holds `PROCESS_BACKLOG`
-  bytes of unconsumed lines before stdout pauses, and pausing is what makes the consumer lossless.
+  bytes of unconsumed lines before stdout pauses. Pausing keeps that consumer lossless before
+  termination; from the moment a stop begins, retention is capped at twice `backlog`, later lines are
+  dropped without pausing, and `truncated` reports the gap.
 - **Attach a consumer before the child speaks, or accept the gap** — a `lines` iterator requested
   after the mark was exceeded receives the retained head, a gap, then the live stream.
 - **Iterate `lines` once and fan out from that loop** — the stream is single-consumer, so a second
@@ -910,11 +951,13 @@ isExited(reporter) // whether the native exit arrived
 Three names on this surface read against a house rule, and each is settled here rather than
 rediscovered.
 
-| Name                   | Ruling                                                                                                                                                                                    |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run`, `runSync`       | Retained. The lifecycle verb table governs an entity's members, and these are standalone command runners rather than members of a lifecycle. `runSync` takes the ecosystem `Sync` suffix. |
-| `process`, `processes` | Retained. A registry exposes its contents as accessors named for what they hold, so the manager reads `manager.process(id)` and `manager.processes()`.                                    |
-| `strict`               | Replaces `reject`. A boolean reads as an adjective asserting a state, and `reject` named the reaction rather than the mode. `strict: false` resolves with the failed result.              |
+| Name                   | Ruling                                                                                                                                                                                                                      |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run`, `runSync`       | Retained. The lifecycle verb table governs an entity's members, and these are standalone command runners rather than members of a lifecycle. `runSync` takes the ecosystem `Sync` suffix.                                   |
+| `process`, `processes` | Retained. A registry exposes its contents as accessors named for what they hold, so the manager reads `manager.process(id)` and `manager.processes()`.                                                                      |
+| `strict`               | Replaces `reject`. A boolean reads as an adjective asserting a state, and `reject` named the reaction rather than the mode. `strict: false` resolves with the failed result.                                                |
+| `evidence`, `backlog`  | Byte bounds are named for their subject where an entity has several, so a `Process` carries `evidence` and `backlog` rather than two flavours of `limit`. A run has one bound, so it is named for the bound: `limit`.       |
+| `truncated`            | One name on both surfaces, because it reports one fact: the surface omitted output. Each entity names its own bound — a `Process` omits `lines` past a retention bound, and a `RunResult` omits captured text past `limit`. |
 
 ## Tests
 
@@ -955,6 +998,12 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   re-exports the factories, runners, engine classes, and helpers.
 - [`tests/guides.test.ts`](../tests/guides.test.ts) — this guide: every documented name resolves,
   every public export is documented, and every flagship fence returns what its comments claim.
+- [`tests/distribution.test.ts`](../tests/distribution.test.ts) — the artifact a consumer installs:
+  it packs the package, installs the tarball into a directory outside this repository, and compares
+  the runtime exports of both built formats against the declarations the compiler parses, under each
+  supported `moduleResolution` mode.
+- [`tests/setup.test.ts`](../tests/setup.test.ts) — `waitForCondition`, the polled wait this suite
+  uses in place of a fixed delay: when it returns, when it rejects, and the budget it names.
 
 ## See also
 

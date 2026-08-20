@@ -1,10 +1,11 @@
-import { holds, isError } from '@orkestrel/contract'
 import type {
 	ProcessErrorCode,
 	ProcessErrorContext,
 	ProcessErrorOptions,
 	RunResult,
 } from './types.js'
+import { holds, isError } from '@orkestrel/contract'
+import { PROCESS_ERROR_CODES } from './constants.js'
 
 /** A child-process failure with a stable machine-readable category. */
 export class ProcessError extends Error {
@@ -35,8 +36,10 @@ export class ProcessError extends Error {
  *
  * @remarks
  * Recognition combines a global own-property brand with the native `Error` base, the subclass
- * prototype, the fixed name, and a declared code. The brand survives duplicate installations and
- * ESM/CommonJS module copies, while a plain or property-only lookalike remains outside the type.
+ * prototype, the fixed name, and a code {@link PROCESS_ERROR_CODES} declares. The brand is
+ * recognized across duplicate installations and ESM/CommonJS module copies at 0.0.4 or later. A copy
+ * earlier than 0.0.4 stamps no brand, so an error it throws stays outside the type, and so does a
+ * plain or property-only lookalike.
  *
  * @param value - The value to inspect
  * @returns True only for a `ProcessError` instance; false otherwise
@@ -57,13 +60,8 @@ export function isProcessError(value: unknown): value is ProcessError {
 			Symbol.for('@orkestrel/process.error'),
 		)
 		if (descriptor?.value !== true) return false
-		return (
-			value.code === 'spawn' ||
-			value.code === 'timeout' ||
-			value.code === 'duplicate' ||
-			value.code === 'protocol' ||
-			value.code === 'invalid'
-		)
+		const code: unknown = value.code
+		return PROCESS_ERROR_CODES.some((declared) => declared === code)
 	})
 }
 

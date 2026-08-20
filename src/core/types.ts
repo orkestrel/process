@@ -1,4 +1,5 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
+import type { PROCESS_ERROR_CODES } from './constants.js'
 
 /**
  * The public contracts for `@orkestrel/process`: a typed child-process toolkit.
@@ -143,12 +144,15 @@ export interface ProcessOptions {
  * to exactly one waiting iterator, so two iterators split the output between them rather than each
  * receiving all of it. The policy for an unconsumed backlog follows
  * consumer intent. Once an iterator has been requested, stdout pauses at the `backlog` mark and
- * resumes at half of it, so the consumer loses nothing and the child feels real backpressure. While
+ * resumes at half of it, so the consumer loses nothing before termination and the child feels real
+ * backpressure. Termination never reapplies the pause, so from the moment a stop begins retention is
+ * capped at twice `backlog` and later lines are dropped. While
  * no iterator has ever been requested, stdout keeps draining so `exit` still resolves, and retention
  * stops at the mark: a consumer attaching after that point receives the retained head, a gap, then
  * the live stream. `evidence` is the decoded, byte-bounded stderr tail — the diagnostic to attach to
- * a failed exit. `truncated` reports that the stream omitted lines after either retention bound was
- * reached. The typed `emitter` carries the live `stderr` chunks, the child `error` cause, and the
+ * a failed exit. `truncated` reports that the `lines` stream omitted output, because one of its two
+ * retention bounds was reached; the one-shot `RunResult` carries the same name for the same fact
+ * against its own capture `limit`. The typed `emitter` carries the live `stderr` chunks, the child `error` cause, and the
  * terminal `exit`, alongside the `exit` promise. `stop` and `destroy` are idempotent and never reject.
  */
 export interface ProcessInterface {
@@ -158,7 +162,7 @@ export interface ProcessInterface {
 	readonly lines: AsyncIterable<string>
 	/** The decoded byte-bounded stderr tail. */
 	readonly evidence: string
-	/** True when the `lines` stream omitted output after a retention bound was reached. */
+	/** True when the `lines` stream omitted output because a retention bound was reached. */
 	readonly truncated: boolean
 	/** The terminal child state, observed once from the close event. */
 	readonly exit: Promise<ProcessExit>
@@ -207,8 +211,9 @@ export interface ProcessInterface {
  * `failed` is `true` when the child exited non-zero, was killed by a signal, expired, was aborted, or
  * failed to spawn. `expired` and `aborted` are the two ways the run ended the child rather than the
  * child ending itself, and only the first of them observed is recorded. `truncated` is independent of
- * both: it reports that a stream exceeded `limit`, which fails a synchronous run and does not fail an
- * asynchronous one. A spawn fault reports the host's negative errno for `run`. A spawn fault reports
+ * both: it reports that a captured stream omitted output because it exceeded `limit`, which fails a
+ * synchronous run and does not fail an asynchronous one. `ProcessInterface` carries the same name for
+ * the same fact against a supervised child's retention bounds. A spawn fault reports the host's negative errno for `run`. A spawn fault reports
  * `null` for `runSync`.
  */
 export interface RunResult {
@@ -227,7 +232,7 @@ export interface RunResult {
 	readonly expired: boolean
 	/** True if the caller's `signal` aborted the run before completion. */
 	readonly aborted: boolean
-	/** True if either stream exceeded `limit`, so the captured text is the retained head. */
+	/** True when either captured stream omitted output because it exceeded `limit`. */
 	readonly truncated: boolean
 }
 
@@ -437,8 +442,8 @@ export interface ProcessManagerInterface {
 	destroy(): Promise<void>
 }
 
-/** The machine-readable {@link ProcessError} categories. */
-export type ProcessErrorCode = 'spawn' | 'timeout' | 'duplicate' | 'protocol' | 'invalid'
+/** The machine-readable {@link ProcessError} categories, derived from {@link PROCESS_ERROR_CODES}. */
+export type ProcessErrorCode = (typeof PROCESS_ERROR_CODES)[number]
 
 /** Structured context carried by a {@link ProcessError}. */
 export interface ProcessErrorContext {

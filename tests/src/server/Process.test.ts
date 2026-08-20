@@ -225,7 +225,7 @@ describe('Process', () => {
 	// `taskkill /F /T`, which delivers no `SIGTERM` and offers the child no chance to ignore one, so
 	// only a POSIX host can observe the grace window elapse and `SIGKILL` follow.
 	it.skipIf(process.platform === 'win32')(
-		'escalates when process groups accept SIGTERM before SIGKILL',
+		'escalates to SIGKILL when the child traps SIGTERM and stays alive',
 		async () => {
 			const child = createProcess({
 				command: childCommand('trap'),
@@ -313,7 +313,7 @@ describe('Process', () => {
 	// A descendant is reached by process-tree id on Windows and by process group everywhere else, so
 	// each host proves its own mechanism. This one drives `taskkill /T`, which has no POSIX peer.
 	it.skipIf(process.platform !== 'win32')(
-		'kills a grandchild while taskkill.exe can address the live root tree',
+		'kills a grandchild through the tree while the root is still live',
 		async () => {
 			const child = createProcess({
 				command: childCommand('tree'),
@@ -340,7 +340,7 @@ describe('Process', () => {
 	// A process group is signalled by negated pid, which Windows does not implement: `process.kill`
 	// rejects a negative pid there, so only a POSIX host can prove the group reaches a descendant.
 	it.skipIf(process.platform === 'win32')(
-		'kills a grandchild while process.kill accepts a negative process-group id',
+		'kills a grandchild through the process group while the root is still live',
 		async () => {
 			const child = createProcess({
 				command: childCommand('tree'),

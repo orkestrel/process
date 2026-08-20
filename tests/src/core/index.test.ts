@@ -7,6 +7,7 @@ describe('src core entry', () => {
 		expect(Object.keys(entry).sort()).toStrictEqual([
 			'PROCESS_BACKLOG',
 			'PROCESS_CONFIRMATION',
+			'PROCESS_ERROR_CODES',
 			'PROCESS_EVIDENCE',
 			'PROCESS_GRACE',
 			'PROCESS_OUTPUT',
@@ -27,6 +28,20 @@ describe('src core entry', () => {
 		expect(error.code).toBe('duplicate')
 		expect(error.context).toStrictEqual({ id: 'unit' })
 		expect(entry.isProcessError(new Error('spawn failed'))).toBe(false)
+	})
+
+	// The guard's admitted set is compared against the declared tuple, and the refusal control is
+	// drawn from outside it, so the pair pins the exact set rather than re-deriving it.
+	it('admits every declared code and refuses one the tuple does not declare', () => {
+		for (const code of entry.PROCESS_ERROR_CODES) {
+			expect(entry.isProcessError(new entry.ProcessError('declared', { code }))).toBe(true)
+		}
+		const undeclared = Object.defineProperty(
+			Object.assign(new Error('undeclared'), { code: 'stalled', name: 'ProcessError' }),
+			Symbol.for('@orkestrel/process.error'),
+			{ value: true },
+		)
+		expect(entry.isProcessError(undeclared)).toBe(false)
 	})
 
 	// The same recognition across the two built module formats is proved in

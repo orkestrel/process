@@ -118,8 +118,8 @@ it('installs the packed artifact and drives its entries, declarations, and resol
 		expect(targetCount).toBeGreaterThan(0)
 
 		const declarations = [
-			{ entry: 'core', path: 'dist/src/core/index.d.ts', count: 13 },
-			{ entry: 'server', path: 'dist/src/server/index.d.ts', count: 33 },
+			{ entry: 'core', path: 'dist/src/core/index.d.ts', count: 14 },
+			{ entry: 'server', path: 'dist/src/server/index.d.ts', count: 34 },
 		]
 		const declared = new Map<string, readonly string[]>()
 		for (const declaration of declarations) {
@@ -192,8 +192,8 @@ it('installs the packed artifact and drives its entries, declarations, and resol
 			}
 			expect(core).toEqual(declared.get('core'))
 			expect(server).toEqual(declared.get('server'))
-			expect(core).toHaveLength(13)
-			expect(server).toHaveLength(33)
+			expect(core).toHaveLength(14)
+			expect(server).toHaveLength(34)
 			expect(coreCall).toBe(false)
 			expect(serverCall).toBe('node --version')
 		}

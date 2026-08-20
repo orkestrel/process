@@ -18,3 +18,12 @@ export const PROCESS_TIMER = 2_147_483_647
 
 /** The executable extensions a Windows lookup applies when the environment declares no `PATHEXT`. */
 export const PROCESS_PATHEXT = '.COM;.EXE;.BAT;.CMD'
+
+/** The machine-readable failure categories a {@link ProcessError} carries, in declaration order. */
+export const PROCESS_ERROR_CODES = Object.freeze([
+	'spawn',
+	'timeout',
+	'duplicate',
+	'protocol',
+	'invalid',
+] as const)

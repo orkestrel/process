@@ -27,6 +27,7 @@ describe('src server entry', () => {
 			'retainChunk',
 			'run',
 			'runSync',
+			'snapshotCommand',
 			'stopChild',
 			'trimHead',
 			'trimTail',

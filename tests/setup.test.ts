@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { waitForDelay } from '@orkestrel/test'
-import { captureError } from '@orkestrel/test'
 import { waitForCondition } from './setup.js'
 
 describe('waitForCondition', () => {
@@ -70,10 +69,5 @@ describe('waitForCondition', () => {
 			return true
 		})
 		expect(polls).toBe(1)
-	})
-
-	it('is exported as a function that captureError can drive', () => {
-		expect(typeof waitForCondition).toBe('function')
-		expect(captureError(() => undefined)).toBeUndefined()
 	})
 })

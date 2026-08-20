@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import type { ProcessChild } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { holds } from '@orkestrel/contract'
 import { createRecorder, waitForDelay } from '@orkestrel/test'
@@ -29,6 +30,7 @@ import {
 	retainChunk,
 	run,
 	runSync,
+	snapshotCommand,
 	stopChild,
 	trimHead,
 	trimTail,
@@ -65,6 +67,39 @@ describe('trimHead', () => {
 		const trimmed = trimHead(buffer, 5)
 		expect(trimmed.byteLength).toBe(5)
 		expect(trimmed.toString('utf8')).toBe(`${'\u{1f642}'}a`)
+	})
+})
+
+describe('snapshotCommand', () => {
+	it('reads each property once and keeps a later mutation out of the snapshot', () => {
+		const files: string[] = []
+		const argumentsList = ['status']
+		const environment: Record<string, string> = { TOKEN: 'a' }
+		const snapshot = snapshotCommand({
+			get file() {
+				files.push('read')
+				return files.length === 1 ? 'git' : 'curl'
+			},
+			arguments: argumentsList,
+			environment,
+			isolated: true,
+		})
+		argumentsList.push('--short')
+		environment.TOKEN = 'b'
+
+		expect(files.length).toBe(1)
+		expect(snapshot.file).toBe('git')
+		expect(snapshot.arguments).toEqual(['status'])
+		expect(snapshot.environment).toEqual({ TOKEN: 'a' })
+		expect(Object.isFrozen(snapshot)).toBe(true)
+		expect(Object.isFrozen(snapshot.arguments)).toBe(true)
+		expect(Object.isFrozen(snapshot.environment)).toBe(true)
+	})
+
+	it('omits an absent optional rather than carrying it as undefined', () => {
+		const snapshot = snapshotCommand({ file: 'git', arguments: ['status'] })
+
+		expect(Object.keys(snapshot)).toEqual(['file', 'arguments'])
 	})
 })
 
@@ -138,7 +173,7 @@ describe('resolveExecutable', () => {
 	// PATHEXT extension and searches the working directory first. Every other host resolves the
 	// file inside its own `execvp`, so there is nothing here to reproduce.
 	it.skipIf(process.platform !== 'win32')(
-		'resolves a bare name when the filesystem applies Windows case folding',
+		'resolves a bare name through the effective PATH and PATHEXT',
 		() => {
 			const scratch = createScratch()
 			try {
@@ -166,7 +201,7 @@ describe('resolveExecutable', () => {
 	// Windows is the only host that applies `PATHEXT` at all, so it is the only host that can show
 	// which candidate a name carrying its own extension resolves to.
 	it.skipIf(process.platform !== 'win32')(
-		'tries an extension-bearing name when the filesystem applies Windows path rules',
+		'tries an extension-bearing name literally before it applies PATHEXT to it',
 		() => {
 			const scratch = createScratch()
 			try {
@@ -193,31 +228,29 @@ describe('resolveExecutable', () => {
 		},
 	)
 
-	it.skipIf(process.platform !== 'win32')(
-		'searches the workspace when the filesystem applies Windows path rules',
-		() => {
-			const scratch = createScratch()
-			try {
-				scratch.write('tool.cmd', '@echo off\r\necho workspace-ran\r\n')
+	// Windows is the only host that searches the working directory before `PATH`; every other host
+	// resolves a bare name inside its own `execvp`, which never looks there.
+	it.skipIf(process.platform !== 'win32')('searches the workspace before the path', () => {
+		const scratch = createScratch()
+		try {
+			scratch.write('tool.cmd', '@echo off\r\necho workspace-ran\r\n')
 
-				expect(
-					resolveExecutable('tool', {
-						workspace: scratch.path,
-						environment: {},
-					})?.toLowerCase(),
-				).toBe(join(scratch.path, 'tool.cmd').toLowerCase())
-			} finally {
-				scratch.destroy()
-			}
-		},
-	)
+			expect(
+				resolveExecutable('tool', {
+					workspace: scratch.path,
+					environment: {},
+				})?.toLowerCase(),
+			).toBe(join(scratch.path, 'tool.cmd').toLowerCase())
+		} finally {
+			scratch.destroy()
+		}
+	})
 
-	it.skipIf(process.platform === 'win32')(
-		'leaves the lookup to execvp when the host implements that API',
-		() => {
-			expect(resolveExecutable('node')).toBeUndefined()
-		},
-	)
+	// `execvp` performs the lookup on every host but Windows, so the helper has nothing to do there
+	// and Windows is the one host where its answer is not `undefined`.
+	it.skipIf(process.platform === 'win32')('leaves the lookup to the host that performs it', () => {
+		expect(resolveExecutable('node')).toBeUndefined()
+	})
 })
 
 describe('buildPlatformSpawn', () => {
@@ -277,7 +310,7 @@ describe('buildSpawn', () => {
 	// Only Windows resolves and runs a batch target, so only Windows can drive the expansion this
 	// refusal exists to prevent.
 	it.skipIf(process.platform !== 'win32')(
-		'refuses a defined percent-delimited argument when cmd.exe expands environment variables',
+		'refuses a defined percent-delimited argument a batch target would otherwise expand',
 		() => {
 			const scratch = createScratch()
 			try {
@@ -300,6 +333,8 @@ describe('buildSpawn', () => {
 		},
 	)
 
+	// Only Windows routes a batch target through a `cmd.exe` command line, so only Windows can show
+	// that the quoting survives a path the command line would otherwise split.
 	it.skipIf(process.platform !== 'win32')(
 		'runs a batch script whose spaced path cmd.exe must parse',
 		() => {
@@ -426,12 +461,35 @@ describe('isExited', () => {
 
 describe('waitForExit', () => {
 	it('returns at once for an exited child and at the deadline for a live one', async () => {
-		await waitForExit({ exitCode: 0, signalCode: null, once: () => undefined }, 60_000)
+		await waitForExit(
+			{ exitCode: 0, signalCode: null, once: () => undefined, off: () => undefined },
+			60_000,
+		)
 
 		const started = performance.now()
-		await waitForExit({ exitCode: null, signalCode: null, once: () => undefined }, 50)
+		await waitForExit(
+			{ exitCode: null, signalCode: null, once: () => undefined, off: () => undefined },
+			50,
+		)
 
 		expect(performance.now() - started).toBeGreaterThanOrEqual(40)
+	})
+
+	// The subject is the release channel the published contract declares. A real `EventEmitter`
+	// carries `off` whether or not `ProcessChild` names it, so the object here implements exactly the
+	// slice the signature takes and nothing more.
+	it('releases the exit listener of a child implementing exactly the declared slice', async () => {
+		const listeners: Array<() => void> = []
+		const child: Pick<ProcessChild, 'exitCode' | 'signalCode' | 'once' | 'off'> = {
+			exitCode: null,
+			signalCode: null,
+			once: (_event, listener) => listeners.push(listener),
+			off: (_event, listener) => listeners.splice(listeners.indexOf(listener), 1),
+		}
+
+		await waitForExit(child, 20)
+
+		expect(listeners).toEqual([])
 	})
 
 	it('removes every exit listener after repeated deadlines', async () => {
@@ -454,6 +512,7 @@ describe('stopChild', () => {
 				signalCode: null,
 				kill: (signal) => (signals.handler(signal), true),
 				once: () => undefined,
+				off: () => undefined,
 			},
 			20,
 			100,
@@ -473,6 +532,7 @@ describe('stopChild', () => {
 				signalCode: null,
 				kill: (signal) => (signals.handler(signal), true),
 				once: () => undefined,
+				off: () => undefined,
 			},
 			20,
 			100,
@@ -487,7 +547,7 @@ describe('killTree', () => {
 	// `taskkill` is the Windows utility that ends a process tree by root id; a POSIX host reaches a
 	// tree through its process group instead, so there is no peer to drive here.
 	it.skipIf(process.platform !== 'win32')(
-		'reports failure for an unowned tree when taskkill.exe is available',
+		'reports failure for a tree no process id owns',
 		async () => {
 			expect(await killTree(4_194_303, 5_000)).toBe(false)
 		},
@@ -665,8 +725,10 @@ describe('killProcess', () => {
 		expect(signals.calls).toEqual([['SIGTERM']])
 	})
 
+	// The fallback is reached by `process.kill` rejecting a negative pid with `ESRCH`. Windows
+	// implements no process group, so it refuses a negative pid outright and never reaches it.
 	it.skipIf(process.platform === 'win32')(
-		'falls back to the direct child when process.kill reports ESRCH for a negative group id',
+		'falls back to the direct child when no process group owns its pid',
 		() => {
 			const signals = createRecorder<readonly [NodeJS.Signals]>()
 

@@ -16,10 +16,8 @@ import { statSync } from 'node:fs'
 import { join, posix, win32 } from 'node:path'
 import { platform as hostPlatform } from 'node:process'
 import {
-	attempt,
 	boundsOf,
 	holds,
-	isFunction,
 	isNonEmptyString,
 	isNonNegativeInteger,
 	isString,
@@ -90,6 +88,42 @@ export function trimHead(bytes: Uint8Array, limit: number): Buffer {
 		end -= 1
 	}
 	return Buffer.from(buffer.subarray(0, end))
+}
+
+/**
+ * Takes one owned frozen snapshot of a caller's command.
+ *
+ * @remarks
+ * Every public entry point snapshots before it validates, so the object validated is the object
+ * spawned. Each property is read exactly once, because reading one runs the caller's own getter: a
+ * command whose `file` changes between two reads would otherwise validate one executable and spawn
+ * another. The argument vector and the environment record are copied and frozen, so a caller
+ * mutating either after the call cannot reach the spawn. An absent optional stays absent rather than
+ * becoming an explicit `undefined`.
+ *
+ * @param command - The caller's command, whose properties may be getters
+ * @returns A frozen command carrying the values read at this instant
+ *
+ * @example
+ * ```ts
+ * snapshotCommand({ file: 'git', arguments: ['status'] }) // { file: 'git', arguments: ['status'] }
+ * ```
+ */
+export function snapshotCommand(command: ProcessCommand): ProcessCommand {
+	const file = command.file
+	const argumentsList = Object.freeze([...command.arguments])
+	const sourceEnvironment = command.environment
+	const environment =
+		sourceEnvironment === undefined ? undefined : Object.freeze({ ...sourceEnvironment })
+	const input = command.input
+	const isolated = command.isolated
+	return Object.freeze({
+		file,
+		arguments: argumentsList,
+		...(environment === undefined ? {} : { environment }),
+		...(input === undefined ? {} : { input }),
+		...(isolated === undefined ? {} : { isolated }),
+	})
 }
 
 /**
@@ -689,17 +723,13 @@ export function killTree(pid: number, timeout: number): Promise<boolean> {
  * ```
  */
 export function waitForExit(
-	child: Pick<ProcessChild, 'exitCode' | 'signalCode' | 'once'>,
+	child: Pick<ProcessChild, 'exitCode' | 'signalCode' | 'once' | 'off'>,
 	timeout: number,
 ): Promise<void> {
 	if (isExited(child)) return Promise.resolve()
 	const settled = Promise.withResolvers<void>()
 	const timer = setTimeout(() => {
-		attempt(() => {
-			if (!('off' in child)) return
-			const off = child.off
-			if (isFunction(off)) Reflect.apply(off, child, ['exit', settled.resolve])
-		})
+		child.off('exit', settled.resolve)
 		settled.resolve()
 	}, timeout)
 	child.once('exit', settled.resolve)
@@ -824,20 +854,7 @@ export function buildRunResult(input: RunInput): RunResult {
  * ```
  */
 export async function run(command: ProcessCommand, options?: RunOptions): Promise<RunResult> {
-	const file = command.file
-	const argumentsList = Object.freeze([...command.arguments])
-	const sourceEnvironment = command.environment
-	const commandEnvironment =
-		sourceEnvironment === undefined ? undefined : Object.freeze({ ...sourceEnvironment })
-	const commandInput = command.input
-	const isolated = command.isolated
-	const snapshot: ProcessCommand = Object.freeze({
-		file,
-		arguments: argumentsList,
-		...(commandEnvironment === undefined ? {} : { environment: commandEnvironment }),
-		...(commandInput === undefined ? {} : { input: commandInput }),
-		...(isolated === undefined ? {} : { isolated }),
-	})
+	const snapshot = snapshotCommand(command)
 	validateCommand(snapshot)
 	validateEnvironment(options?.environment)
 	validateWorkspace(options?.workspace)
@@ -985,20 +1002,7 @@ export async function run(command: ProcessCommand, options?: RunOptions): Promis
  * ```
  */
 export function runSync(command: ProcessCommand, options?: RunSyncOptions): RunResult {
-	const file = command.file
-	const argumentsList = Object.freeze([...command.arguments])
-	const sourceEnvironment = command.environment
-	const commandEnvironment =
-		sourceEnvironment === undefined ? undefined : Object.freeze({ ...sourceEnvironment })
-	const commandInput = command.input
-	const isolated = command.isolated
-	const snapshot: ProcessCommand = Object.freeze({
-		file,
-		arguments: argumentsList,
-		...(commandEnvironment === undefined ? {} : { environment: commandEnvironment }),
-		...(commandInput === undefined ? {} : { input: commandInput }),
-		...(isolated === undefined ? {} : { isolated }),
-	})
+	const snapshot = snapshotCommand(command)
 	validateCommand(snapshot)
 	validateEnvironment(options?.environment)
 	validateWorkspace(options?.workspace)
@@ -1065,20 +1069,7 @@ export function runSync(command: ProcessCommand, options?: RunSyncOptions): RunR
  * ```
  */
 export function detach(command: ProcessCommand, options?: DetachOptions): void {
-	const file = command.file
-	const argumentsList = Object.freeze([...command.arguments])
-	const sourceEnvironment = command.environment
-	const commandEnvironment =
-		sourceEnvironment === undefined ? undefined : Object.freeze({ ...sourceEnvironment })
-	const input = command.input
-	const isolated = command.isolated
-	const snapshot: ProcessCommand = Object.freeze({
-		file,
-		arguments: argumentsList,
-		...(commandEnvironment === undefined ? {} : { environment: commandEnvironment }),
-		...(input === undefined ? {} : { input }),
-		...(isolated === undefined ? {} : { isolated }),
-	})
+	const snapshot = snapshotCommand(command)
 	validateCommand(snapshot)
 	validateWorkspace(options?.workspace)
 	const workspace = options?.workspace ?? process.cwd()

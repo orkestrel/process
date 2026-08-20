@@ -33,6 +33,7 @@ import {
 	isProcessError,
 	PROCESS_BACKLOG,
 	PROCESS_CONFIRMATION,
+	PROCESS_ERROR_CODES,
 	PROCESS_EVIDENCE,
 	PROCESS_GRACE,
 	PROCESS_OUTPUT,
@@ -57,6 +58,7 @@ import {
 	retainChunk,
 	run,
 	runSync,
+	snapshotCommand,
 	trimHead,
 	trimTail,
 	validateBytes,
@@ -65,6 +67,7 @@ import {
 	validateText,
 	validateTimer,
 	validateWorkspace,
+	waitForExit,
 } from '@src/server'
 
 /** Every fence language this package's guides are allowed to use. */
@@ -85,6 +88,17 @@ const MODULES = Object.freeze({
  * over this list fails when a name here stops being stranded, so the list cannot rot.
  */
 const INTERNAL: readonly string[] = Object.freeze([])
+/**
+ * Test files no guide's Tests section lists, as repository-relative paths.
+ *
+ * Both are vendored fleet-wide proofs whose subject is the workspace rather than this package's
+ * public surface. Naming one here is what makes the omission deliberate, and the second assertion
+ * over this list fails when a name here stops being omitted, so the list cannot rot.
+ */
+const UNLISTED_TESTS: readonly string[] = Object.freeze([
+	'tests/config.test.ts',
+	'tests/policy.test.ts',
+])
 /** Root-level files this package's guides link to. `readInventory` walks directories only. */
 const ROOT_FILES = Object.freeze(['AGENTS.md', 'README.md'])
 
@@ -357,6 +371,19 @@ for (const entry of manifest) {
 			expect(missing.length).toBe(0)
 			expect(guide.tests().length).toBeGreaterThan(0)
 		})
+		// The Tests section is an inventory of what this package proves, so a proof that exists and is
+		// not listed is the defect. Listing is asserted as membership against the real test tree,
+		// because a count passes while the tree grows a file the section never gained.
+		it('lists every test file but the ones named unlisted', () => {
+			const listed = guide.tests().map((href) => resolveLink(entry.spec, href))
+			const present = Object.keys(files).filter((path) => path.endsWith('.test.ts'))
+
+			expect(present.length).toBeGreaterThan(UNLISTED_TESTS.length)
+			expect(
+				present.filter((path) => !listed.includes(path) && !UNLISTED_TESTS.includes(path)),
+			).toEqual([])
+			expect(UNLISTED_TESTS.filter((path) => listed.includes(path))).toEqual([])
+		})
 	})
 }
 
@@ -373,6 +400,65 @@ describe('flagship fences', () => {
 
 		expect(guide).toContain('twice `backlog`')
 		expect(types).toContain('twice `backlog`')
+		expect(guide).toContain('loses nothing before termination')
+		expect(types).toContain('loses nothing before termination')
+	})
+
+	// The qualification the sentence above carries, executed. A consumer that requested its iterator
+	// before the child spoke is the case pausing is supposed to make lossless, and it still loses
+	// lines once termination begins, which is the whole of what `before termination` qualifies. The
+	// child traps `SIGTERM` and keeps writing, so lines certainly arrive while the stop is in flight;
+	// a child that dies on the first signal produces no push during termination and drops nothing.
+	it('drops lines for a requesting consumer once termination begins', async () => {
+		const writer =
+			"process.on('SIGTERM', () => undefined); console.log('ready'); let n = 0;" +
+			" setInterval(() => { for (let c = 0; c < 256; c += 1) console.log((n += 1) + ':' + 'x'.repeat(128)) }, 1)"
+		const child = createProcess({
+			command: { file: process.execPath, arguments: ['-e', writer] },
+			workspace: process.cwd(),
+			backlog: 1_024,
+			grace: 100,
+		})
+		const iterator = child.lines[Symbol.asyncIterator]()
+
+		expect((await iterator.next()).value).toBe('ready')
+		expect(await child.stop()).toBe(true)
+		await child.destroy()
+
+		expect(child.truncated).toBe(true)
+	})
+
+	// The Vocabulary ruling that one name carries one fact on two surfaces. The sentence is only
+	// worth asserting if both surfaces report that fact, so both are driven here: a supervised child
+	// against its retention bound, and a one-shot run against its capture `limit`.
+	it('reports omitted output under one name on both public surfaces', async () => {
+		const guide = requireValue(
+			files['guides/process.md'],
+			'Missing file: guides/process.md',
+		).replace(/\s+/gu, ' ')
+		expect(guide).toContain('One name on both surfaces, because it reports one fact')
+
+		const chatty = createProcess({
+			command: {
+				file: process.execPath,
+				arguments: [
+					'-e',
+					'for (let n = 0; n < 4096; n += 1) console.log(n + ":" + "x".repeat(128))',
+				],
+			},
+			workspace: process.cwd(),
+			backlog: 1_024,
+		})
+		await chatty.exit
+		await chatty.destroy()
+
+		const bounded = await run(
+			{ file: process.execPath, arguments: ['-e', 'process.stdout.write("x".repeat(4096))'] },
+			{ limit: 16, strict: false },
+		)
+
+		expect(chatty.truncated).toBe(true)
+		expect(bounded.truncated).toBe(true)
 	})
 
 	it('states the root-only synchronous timeout boundary in the guide and types', () => {
@@ -399,6 +485,22 @@ describe('flagship fences', () => {
 		expect(PROCESS_OUTPUT).toBe(10_485_760)
 		expect(PROCESS_TIMER).toBe(2_147_483_647)
 		expect(PROCESS_PATHEXT).toBe('.COM;.EXE;.BAT;.CMD')
+		expect(PROCESS_ERROR_CODES).toEqual(['spawn', 'timeout', 'duplicate', 'protocol', 'invalid'])
+	})
+
+	// The guide's error table lists one row per declared code, so the table and the tuple are one
+	// statement. A code added to the tuple with no row leaves the table incomplete.
+	it('tables exactly the error codes the tuple declares', () => {
+		const guide = requireValue(files['guides/process.md'], 'Missing file: guides/process.md')
+		const heading = guide.indexOf('| Code ')
+		expect(heading).toBeGreaterThan(-1)
+		const table = guide.slice(heading)
+		const tabled = Array.from(
+			table.slice(0, table.indexOf('\n\n')).matchAll(/^\| `([a-z]+)` +\|/gmu),
+			(match) => match[1] ?? '',
+		)
+
+		expect(tabled.sort()).toEqual([...PROCESS_ERROR_CODES].sort())
 	})
 
 	it('frames the Surface fence lines and resolves its exit', async () => {
@@ -432,6 +534,10 @@ describe('flagship fences', () => {
 	})
 
 	it('resolves the command-resolution fence', () => {
+		expect(snapshotCommand({ file: 'git', arguments: ['status'] })).toEqual({
+			file: 'git',
+			arguments: ['status'],
+		})
 		expect(formatCommand({ file: 'git', arguments: ['status'] })).toBe('git status')
 		expect(quoteArgument('status')).toBe('status')
 		expect(quoteArgument('a&b')).toBe('"a&b"')
@@ -465,6 +571,84 @@ describe('flagship fences', () => {
 		)
 		expect(guide).toContain('Call `stop` or `destroy` during an orderly shutdown.')
 		expect(types).toContain('A consumer must call `stop` or `destroy` during an orderly shutdown.')
+	})
+
+	// The four contracts the guide states about what a consumer meets. Each row binds the sentence
+	// and then drives the behaviour it claims, because a sentence about behaviour passes every
+	// parity assertion whether or not it is true.
+	it('reads each command property once, so the object validated is the object spawned', () => {
+		const guide = requireValue(
+			files['guides/process.md'],
+			'Missing file: guides/process.md',
+		).replace(/\s+/gu, ' ')
+		expect(guide).toContain('The object validated is the object spawned')
+
+		const reads: string[] = []
+		const snapshot = snapshotCommand({
+			get file() {
+				reads.push('file')
+				return reads.length === 1 ? process.execPath : 'orkestrel-never-spawned'
+			},
+			arguments: ['--version'],
+		})
+
+		expect(reads.length).toBe(1)
+		expect(snapshot.file).toBe(process.execPath)
+		expect(runSync(snapshot, { strict: false }).failed).toBe(false)
+	})
+
+	it('releases the abort listener destroy registered and the exit listener waitForExit registered', async () => {
+		const guide = requireValue(
+			files['guides/process.md'],
+			'Missing file: guides/process.md',
+		).replace(/\s+/gu, ' ')
+		expect(guide).toContain('`destroy` removes the abort listener it registered')
+		expect(guide).toContain('`waitForExit` releases its own `exit` listener')
+
+		const controller = new AbortController()
+		const child = createProcess({
+			command: { file: process.execPath, arguments: ['-e', 'setInterval(() => undefined, 50)'] },
+			workspace: process.cwd(),
+			grace: 20,
+			signal: controller.signal,
+		})
+		await child.destroy()
+
+		const listeners: Array<() => void> = []
+		await waitForExit(
+			{
+				exitCode: null,
+				signalCode: null,
+				once: (_event, listener) => listeners.push(listener),
+				off: (_event, listener) => listeners.splice(listeners.indexOf(listener), 1),
+			},
+			20,
+		)
+
+		expect(listeners).toEqual([])
+		// A released abort listener leaves the signal with nothing to run, so a later abort is inert.
+		controller.abort()
+		expect(controller.signal.aborted).toBe(true)
+	})
+
+	it('recognizes a branded error by brand and refuses an unbranded one', () => {
+		const guide = requireValue(
+			files['guides/process.md'],
+			'Missing file: guides/process.md',
+		).replace(/\s+/gu, ' ')
+		expect(guide).toContain('Recognition holds across copies at 0.0.4 or later')
+
+		const branded = createInvalidError("option 'grace'", -1)
+		// What a copy earlier than 0.0.4 throws: the same shape, the same name, the same declared
+		// code, and no brand. The guide's boundary is exactly this value returning false.
+		const unbranded = Object.assign(new Error('Invalid option'), {
+			name: 'ProcessError',
+			code: 'invalid',
+		})
+
+		expect(Object.getPrototypeOf(branded)).not.toBe(Error.prototype)
+		expect(isProcessError(branded)).toBe(true)
+		expect(isProcessError(unbranded)).toBe(false)
 	})
 
 	it('records the spawn-fault code difference', () => {

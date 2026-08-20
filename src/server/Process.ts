@@ -1,13 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { Interface as ReadLineInterface } from 'node:readline'
 import type { EmitterInterface } from '@orkestrel/emitter'
-import type {
-	ProcessCommand,
-	ProcessEventMap,
-	ProcessExit,
-	ProcessInterface,
-	ProcessOptions,
-} from '@src/core'
+import type { ProcessEventMap, ProcessExit, ProcessInterface, ProcessOptions } from '@src/core'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
@@ -17,6 +11,7 @@ import { PROCESS_BACKLOG, PROCESS_CONFIRMATION, PROCESS_EVIDENCE, PROCESS_GRACE 
 import {
 	buildSpawn,
 	mergeEnvironment,
+	snapshotCommand,
 	stopChild,
 	trimTail,
 	validateBytes,
@@ -35,7 +30,7 @@ import {
  * stdout keeps draining so `exit` still resolves, and retention stops at the `backlog` mark: a
  * consumer attaching later receives the retained head, a gap, then the live stream. Once an iterator
  * has been requested, stdout pauses at the mark and resumes at half of it, so that consumer loses
- * nothing and the child feels real backpressure. The mark is soft — the ordinary backlog can
+ * nothing before termination and the child feels real backpressure. The mark is soft — the ordinary backlog can
  * overshoot it by the line that crossed it plus the rest of its delivered chunk. Termination never
  * reapplies backpressure, and retained lines are capped at twice `backlog`; later lines are dropped
  * and `truncated` reports the omission. Standard error is decoded and forwarded live as the `stderr`
@@ -104,20 +99,8 @@ export class Process implements ProcessInterface {
 		const signal = options.signal
 		const on = options.on
 		const error = options.error
-		const file = source.file
-		const argumentsList = Object.freeze([...source.arguments])
-		const sourceEnvironment = source.environment
-		const environment =
-			sourceEnvironment === undefined ? undefined : Object.freeze({ ...sourceEnvironment })
-		const input = source.input
-		const isolated = source.isolated
-		const command: ProcessCommand = Object.freeze({
-			file,
-			arguments: argumentsList,
-			...(environment === undefined ? {} : { environment }),
-			...(input === undefined ? {} : { input }),
-			...(isolated === undefined ? {} : { isolated }),
-		})
+		const command = snapshotCommand(source)
+		const input = command.input
 		validateCommand(command)
 		validateWorkspace(workspace)
 		validateTimer(grace, "option 'grace'")
@@ -132,7 +115,7 @@ export class Process implements ProcessInterface {
 		this.#backlog = backlog ?? PROCESS_BACKLOG
 		this.#signal = signal
 		this.#lines = Object.freeze({ [Symbol.asyncIterator]: this.#iterate.bind(this) })
-		const childEnvironment = mergeEnvironment(isolated === true, environment)
+		const childEnvironment = mergeEnvironment(command.isolated === true, command.environment)
 		const plan = buildSpawn(command, { workspace, environment: childEnvironment })
 		this.#child = spawn(plan.file, [...plan.arguments], {
 			cwd: workspace,
