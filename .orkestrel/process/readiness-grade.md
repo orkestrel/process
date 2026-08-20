@@ -486,3 +486,70 @@ CLOSES WHEN: n/a — excluded on the convention evidence above. If the link is l
 SEVERITY: internal-quality
 
 BLOCKERS: Cross-copy error guard fails on a real ProcessError. It is the one row I would fix before spending the 0.0.4 approval window. The defect is pre-existing in 0.0.3, so 0.0.4 does not introduce it — but 0.0.4 is what opens the multi-version window across `mcp`, `scaffold`, `probe`, and `supervisor` that the sequencing record already anticipates, and across that window `isProcessError` silently returns `false` for genuine failures the package itself threw. The other two open rows (no distribution proof, `/server` types under node10) are degrades-consumers and can follow the publish.
+---
+
+# Addendum, 2026-08-20 — Q7's claim is a race, measured
+
+Q7 landed as documentation plus a test asserting that a `runSync` timeout leaves a grandchild running
+while the same shape under `run` ends the tree. The test is **nondeterministic**, and the cause is the
+product's behaviour rather than the test's instrument.
+
+Measured directly against the built artifact, six trials, polling for the marker every 10 ms with a
+12-second budget:
+
+```text
+trial 0: expired=true marker appeared at 296ms
+trial 1: expired=true marker appeared at 295ms
+trial 2: expired=true marker appeared at NEVER (>12s)
+trial 3: expired=true marker appeared at NEVER (>12s)
+trial 4: expired=true marker appeared at NEVER (>12s)
+trial 5: expired=true marker appeared at 294ms
+```
+
+Three of six survive and write; three never write at all.
+
+## Why
+
+`runSync` is given `timeout: 50`. The `tree-write` fixture spawns its grandchild and the grandchild
+must reach its own `setTimeout` registration before the root is killed. The audit already measured
+Node's bootstrap on this host at **45.7–49.9 ms** (`ProcessManager` row, `tmp/probe/bootstrap.test.ts`).
+The grandchild is therefore racing its own interpreter startup against the root's 50 ms deadline, and
+loses about half the time.
+
+On POSIX the fixture spawns the grandchild with `detached: process.platform === 'win32'`, so on Linux
+it is **not** detached and shares the root's process group.
+
+## What this changes
+
+The guide sentence Q7 added — that a `runSync` timeout ends the root alone and leaves descendants
+running — is true only for a descendant that finished starting first. As written it states a guarantee
+the package does not provide.
+
+Two things are owed, and they are a design decision rather than a flake repair:
+
+1. **The fixture must signal readiness**, the way `trap` does after installing its handler, so the
+   test waits for an established grandchild before asserting survival. That removes the bootstrap race
+   and lets the test measure the termination behaviour it names.
+2. **The guide must qualify the claim** to what the package actually guarantees: `runSync` signals the
+   root alone, so a descendant that is already running survives; a descendant still starting may not.
+
+A repair attempt that only polls for the marker is not enough and was reverted. Polling converts a
+fast failure into a five-second timeout without touching the race, and a budget equal to the test's own
+timeout can never fail gracefully.
+
+**Routed to PC3**, which owns these fixtures and test files.
+
+## An ecosystem gap this exposes
+
+`@orkestrel/test` publishes `waitForDelay` and no "wait until a condition holds" helper:
+
+```text
+$ grep -oE 'export declare (function|const) [a-zA-Z]+' node_modules/@orkestrel/test/dist/src/*/index.d.ts
+… captureError collect collectStream createHostileValues createLoopback createRecorder createScratch
+  createTeardown isExcluded matchesIdentity readInventory removeTree requireValue resolveContained
+  resolveRoot roundTripJSON waitForDelay
+```
+
+Two packages have now independently written a fixed-sleep race for want of it: probe's arming test
+(`tests/src/bin/main.test.ts`, repaired 2026-08-19) and this one. The absent helper is the shared root
+cause of a defect class, and it belongs in `@orkestrel/test` rather than being re-solved per package.

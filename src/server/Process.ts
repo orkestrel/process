@@ -35,15 +35,16 @@ import {
  * stdout keeps draining so `exit` still resolves, and retention stops at the `backlog` mark: a
  * consumer attaching later receives the retained head, a gap, then the live stream. Once an iterator
  * has been requested, stdout pauses at the mark and resumes at half of it, so that consumer loses
- * nothing and the child feels real backpressure. The mark is soft — the host delivers whole chunks,
- * so the backlog overshoots it by up to one delivered chunk plus the drain that termination
- * releases. Standard error is decoded and forwarded live as the `stderr` event while a byte-bounded
- * raw tail is retained as `evidence`. The typed `emitter` also carries the child `error` cause on a
- * spawn fault and the terminal `exit`, alongside the `exit` promise. `stop` ends the whole tree and
- * reports whether the native exit was observed; `destroy` stops the child, destroys stdin so every
- * pending `send` settles, and destroys the emitter last. `destroy` resolving does not imply the
- * child's stdio has closed, so `exit` and `lines` can still be outstanding when a descendant holds
- * an inherited pipe.
+ * nothing and the child feels real backpressure. The mark is soft — the ordinary backlog can
+ * overshoot it by the line that crossed it plus the rest of its delivered chunk. Termination never
+ * reapplies backpressure, and retained lines are capped at twice `backlog`; later lines are dropped
+ * and `truncated` reports the omission. Standard error is decoded and forwarded live as the `stderr`
+ * event while a byte-bounded raw tail is retained as `evidence`. The typed `emitter` also carries the
+ * child `error` cause on a spawn fault and the terminal `exit`, alongside the `exit` promise. `stop`
+ * ends the whole tree and reports whether the native exit was observed; `destroy` stops the child,
+ * destroys stdin so every pending `send` settles, and destroys the emitter last. `destroy` resolving
+ * does not imply the child's stdio has closed, so `exit` and `lines` can still be outstanding when a
+ * descendant holds an inherited pipe.
  *
  * @example
  * ```ts
@@ -76,6 +77,7 @@ export class Process implements ProcessInterface {
 	#pending = 0
 	#requested = false
 	#paused = false
+	#truncated = false
 	#terminating = false
 	#closed = false
 	#ended = false
@@ -169,6 +171,11 @@ export class Process implements ProcessInterface {
 	/** The decoded byte-bounded stderr tail. */
 	get evidence(): string {
 		return this.#tail.toString('utf8')
+	}
+
+	/** True when the `lines` stream omitted output after a retention bound was reached. */
+	get truncated(): boolean {
+		return this.#truncated
 	}
 
 	/** The terminal child state, observed once from the close event. */
@@ -273,7 +280,11 @@ export class Process implements ProcessInterface {
 		// With no consumer ever attached, retention stops at the mark and the stream keeps draining
 		// so the child can exit; a consumer attaching later receives the head, a gap, then the live
 		// stream.
-		if (!this.#requested && this.#pending + bytes > this.#backlog) return
+		const limit = this.#terminating ? this.#backlog * 2 : this.#backlog
+		if ((!this.#requested || this.#terminating) && this.#pending + bytes > limit) {
+			this.#truncated = true
+			return
+		}
 		this.#queue.push(line)
 		this.#pending += bytes
 		this.#restrain()
@@ -331,10 +342,22 @@ export class Process implements ProcessInterface {
 		this.#signal.removeEventListener('abort', this.#abort)
 	}
 
+	#capBacklog(): void {
+		const limit = this.#backlog * 2
+		while (this.#pending > limit && this.#queue.length > this.#head) {
+			const line = this.#queue.pop()
+			if (line === undefined) break
+			this.#pending -= Buffer.byteLength(line) + 1
+			this.#truncated = true
+		}
+	}
+
 	async #kill(): Promise<boolean> {
-		// A paused stdout holds the child's own write, and therefore its exit, so backpressure is
-		// released before anything is signalled and never reapplied.
+		// A paused stdout holds the child's own write, and therefore its exit. Bound the retained head,
+		// then release backpressure before signalling; later lines drop at the teardown cap instead of
+		// pausing the reader again.
 		this.#terminating = true
+		this.#capBacklog()
 		this.#relieve()
 		const confirmed = await stopChild(this.#child, this.#grace, PROCESS_CONFIRMATION)
 		this.#child.stdin.destroy()

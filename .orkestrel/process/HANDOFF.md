@@ -74,8 +74,9 @@ meaning each, every one a piece a public entry point composes.
    proven at `backlog: 1` with 4096 ordered lines); while none ever has, draining continues and
    retention caps (so `exit` still resolves — pause-always would BLOCK a chatty child before it can
    exit, probed). Pausing never happens after termination begins; teardown resumes the stream so
-   `close` can fire. Overshoot bound: one delivered stream chunk plus one line (readline delivers the
-   in-flight chunk after a pause — measured, ~490 lines per 64 KiB chunk).
+   `close` can fire. The ordinary soft mark can overshoot by the line that crossed it plus the rest
+   of its delivered chunk. During termination retention is capped at twice `backlog`; later lines
+   are dropped without re-pausing, and `truncated` reports any omitted line.
 4. **`lines` is a single-consumer stream**; `exit` follows Node's `close` (all stdio drained), so a
    descendant holding the pipe delays `exit` and an UNBOUNDED `run` awaits stdio completion by design —
    callers pass `timeout` where descendants may inherit stdio.

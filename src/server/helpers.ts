@@ -866,11 +866,13 @@ export async function run(command: ProcessCommand, options?: RunOptions): Promis
  * @remarks
  * The synchronous counterpart of {@link run}, spawned through the same resolver and never through a
  * shell. The host offers no cooperative termination window and no in-flight cancellation, so this
- * contract carries neither. A positive `timeout` and an output overflow both end the child with
- * `SIGKILL`: an overflow reports `truncated` and `failed` together and trims the partial output to
- * `limit`, where {@link run} keeps reading and reports `truncated` without failing. The environment
- * and input follow the same merge as {@link run}. Unless `strict` is `false`, a failed run throws a
- * {@link createRunError} carrying the {@link RunResult}.
+ * contract carries neither. A positive `timeout` ends only the root process and can leave
+ * descendants running; use {@link run} or {@link Process} when timeout must terminate the tree. A
+ * timeout and an output overflow both end the root with `SIGKILL`: an overflow reports `truncated`
+ * and `failed` together and trims the partial output to `limit`, where {@link run} keeps reading and
+ * reports `truncated` without failing. The environment and input follow the same merge as
+ * {@link run}. Unless `strict` is `false`, a failed run throws a {@link createRunError} carrying the
+ * {@link RunResult}.
  *
  * @param command - The executable, arguments, and optional environment and input
  * @param options - Working directory, timeout, capture limit, and failure delivery
@@ -922,7 +924,7 @@ export function runSync(command: ProcessCommand, options?: RunSyncOptions): RunR
 		killSignal: 'SIGKILL',
 		windowsHide: true,
 		windowsVerbatimArguments: plan.verbatim,
-		...(text !== undefined ? { input: text } : {}),
+		...(text !== undefined ? { input: Buffer.from(text) } : {}),
 		...(timeout > 0 ? { timeout } : {}),
 	})
 	const error = outcome.error

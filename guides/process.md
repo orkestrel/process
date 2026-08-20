@@ -159,26 +159,26 @@ The defaults and host bounds, from `@orkestrel/process`.
 
 The contracts and options, all from `@orkestrel/process`.
 
-| API                       | Kind      | Summary                                                                                       |
-| ------------------------- | --------- | --------------------------------------------------------------------------------------------- |
-| `ProcessCommand`          | interface | One spawnable command — `file`, `arguments`, and optional `environment`, `input`, `isolated`. |
-| `ProcessExit`             | interface | The terminal state — an exit `code`, or the `signal` that ended the child.                    |
-| `SpawnInput`              | interface | The resolved spawn form — the `file`, the `arguments`, and the `verbatim` flag.               |
-| `ExecutableOptions`       | interface | Lookup inputs for resolving a command file — `workspace` and `environment`.                   |
-| `ProcessEventMap`         | type      | A `Process`'s events — `stderr(chunk)`, `error(cause)`, and `exit(exit)`.                     |
-| `ProcessOptions`          | interface | `Process` construction — `command`, `workspace`, and the optional settings.                   |
-| `ProcessInterface`        | interface | The supervised-child surface — `emitter` / `lines` / `evidence` / `exit` plus methods.        |
-| `RunResult`               | interface | A one-shot outcome — the captured output, the exit, and the four state flags.                 |
-| `RunInput`                | interface | The captured bytes and terminal facts one settled `RunResult` is built from.                  |
-| `RunOptions`              | interface | `run` options — workspace, environment, input, timeout, grace, signal, strict, limit.         |
-| `RunSyncOptions`          | interface | `runSync` options — the same set without `grace` and without `signal`.                        |
-| `DetachOptions`           | interface | `detach` options — the working directory the detached child starts in.                        |
-| `ProcessManagerEventMap`  | type      | A manager's events — `launch(id)` and `exit(id, exit)`.                                       |
-| `ProcessManagerOptions`   | interface | `ProcessManager` construction — initial `on` listeners and an `error` handler.                |
-| `ProcessManagerInterface` | interface | The registry surface — `emitter` / `count` plus the query, launch, stop, and destroy methods. |
-| `ProcessErrorCode`        | type      | The failure categories — `spawn`, `timeout`, `duplicate`, `protocol`, or `invalid`.           |
-| `ProcessErrorContext`     | interface | Structured failure detail — `id`, `command`, `code`, `signal`, or `value`.                    |
-| `ProcessErrorOptions`     | interface | `ProcessError` construction — `code` plus optional `context`, `cause`, `result`.              |
+| API                       | Kind      | Summary                                                                                              |
+| ------------------------- | --------- | ---------------------------------------------------------------------------------------------------- |
+| `ProcessCommand`          | interface | One spawnable command — `file`, `arguments`, and optional `environment`, `input`, `isolated`.        |
+| `ProcessExit`             | interface | The terminal state — an exit `code`, or the `signal` that ended the child.                           |
+| `SpawnInput`              | interface | The resolved spawn form — the `file`, the `arguments`, and the `verbatim` flag.                      |
+| `ExecutableOptions`       | interface | Lookup inputs for resolving a command file — `workspace` and `environment`.                          |
+| `ProcessEventMap`         | type      | A `Process`'s events — `stderr(chunk)`, `error(cause)`, and `exit(exit)`.                            |
+| `ProcessOptions`          | interface | `Process` construction — `command`, `workspace`, and the optional settings.                          |
+| `ProcessInterface`        | interface | The supervised-child surface — `emitter` / `lines` / `evidence` / `truncated` / `exit` plus methods. |
+| `RunResult`               | interface | A one-shot outcome — the captured output, the exit, and the four state flags.                        |
+| `RunInput`                | interface | The captured bytes and terminal facts one settled `RunResult` is built from.                         |
+| `RunOptions`              | interface | `run` options — workspace, environment, input, timeout, grace, signal, strict, limit.                |
+| `RunSyncOptions`          | interface | `runSync` options — the same set without `grace` and without `signal`.                               |
+| `DetachOptions`           | interface | `detach` options — the working directory the detached child starts in.                               |
+| `ProcessManagerEventMap`  | type      | A manager's events — `launch(id)` and `exit(id, exit)`.                                              |
+| `ProcessManagerOptions`   | interface | `ProcessManager` construction — initial `on` listeners and an `error` handler.                       |
+| `ProcessManagerInterface` | interface | The registry surface — `emitter` / `count` plus the query, launch, stop, and destroy methods.        |
+| `ProcessErrorCode`        | type      | The failure categories — `spawn`, `timeout`, `duplicate`, `protocol`, or `invalid`.                  |
+| `ProcessErrorContext`     | interface | Structured failure detail — `id`, `command`, `code`, `signal`, or `value`.                           |
+| `ProcessErrorOptions`     | interface | `ProcessError` construction — `code` plus optional `context`, `cause`, `result`.                     |
 
 ### Server contracts
 
@@ -191,9 +191,9 @@ value this package owns, so it stays out of the host-independent face.
 
 ### Surface notes
 
-The `emitter`, `lines`, `evidence`, and `exit` members of `ProcessInterface`, and the `emitter` and
-`count` members of `ProcessManagerInterface`, are readonly data properties, so they stay Surface
-rows. Their call-signature methods are documented under [Methods](#methods).
+The `emitter`, `lines`, `evidence`, `truncated`, and `exit` members of `ProcessInterface`, and the
+`emitter` and `count` members of `ProcessManagerInterface`, are readonly data properties, so they
+stay Surface rows. Their call-signature methods are documented under [Methods](#methods).
 
 ## Methods
 
@@ -244,7 +244,7 @@ spawn fault and the terminal `exit`, alongside the `exit` promise.
 | `workspace` | `string`                        | yes      | The working directory the child runs in.                                                                   |
 | `grace`     | `number`                        | no       | POSIX milliseconds between `SIGTERM` and `SIGKILL`. Default: `PROCESS_GRACE` (`5_000`).                    |
 | `evidence`  | `number`                        | no       | Maximum retained stderr tail in bytes. Default: `PROCESS_EVIDENCE` (`2_048`).                              |
-| `backlog`   | `number`                        | no       | Soft high-water mark in bytes for the unconsumed `lines` backlog. Default: `PROCESS_BACKLOG`.              |
+| `backlog`   | `number`                        | no       | Soft high-water mark in bytes; termination retains at most twice `backlog`. Default: `PROCESS_BACKLOG`.    |
 | `writable`  | `boolean`                       | no       | When `true`, stdin stays open for `send`; when `false` or omitted, stdin closes after any initial `input`. |
 | `signal`    | `AbortSignal`                   | no       | Aborting this signal terminates the child through the same bounded `stop`.                                 |
 | `on`        | `EmitterHooks<ProcessEventMap>` | no       | Initial `stderr`, `error`, and `exit` listeners installed at construction.                                 |
@@ -254,8 +254,9 @@ There is no completion deadline. A caller that wants one arms its own timer and 
 
 Every numeric option is validated at construction. A timer value outside `[0, PROCESS_TIMER]`, a
 negative or fractional byte value, and a `backlog` below `1` each throw a `ProcessError` coded
-`invalid` before anything is spawned, and so does a command string that is empty when required or
-carries a NUL character.
+`invalid` before anything is spawned, and so does a spawn-bound command string that is empty when
+required or carries a NUL character. `input` is standard-input payload and carries no NUL
+restriction.
 
 Every option and command property is read once, before the child is spawned. Reading a property runs
 whatever getter you put behind it, so hoisting those reads is what keeps a construction failure from
@@ -276,9 +277,11 @@ The `lines` policy follows consumer intent, and `backlog` bounds the unconsumed 
   a gap, then the live stream.
 
 The mark is soft in the pausing direction. `readline` frames every line a delivered chunk carries
-before a pause takes effect, so the backlog can pass the mark by the line that crossed it plus the
-rest of that chunk. Termination releases the pause and never reapplies it, because a paused stdout
-holds the child's own write and therefore its exit, so the teardown drain can pass the mark again.
+before a pause takes effect, so the ordinary backlog can pass the mark by the line that crossed it
+plus the rest of that chunk. Termination releases the pause and never reapplies it, because a paused
+stdout holds the child's own write and therefore its exit. The teardown drain retains at most twice
+`backlog`; it drops later lines without pausing stdout. The `truncated` property becomes `true` when
+either the no-consumer mark or the termination cap omits a line, so a consumer can detect the gap.
 
 A retained line costs its payload bytes plus the newline that framed it, so a line carrying no
 payload still costs one byte. That is what bounds a flood of empty lines, which would otherwise be
@@ -334,6 +337,10 @@ that must not wait on either arms its own timer around them.
 worst-case termination spends more than one of them. On a POSIX host the cooperative wait after
 `SIGTERM` is bounded by `grace` and the wait after `SIGKILL` by `PROCESS_CONFIRMATION`. On Windows
 the `taskkill` call is bounded by `PROCESS_CONFIRMATION` and the wait that follows it by another.
+
+`runSync` ends only the root process when its `timeout` elapses. A descendant can remain live because
+the synchronous host exposes no tree-termination phase. Use `run` or `Process` when the timeout must
+terminate the child tree.
 
 The two hosts terminate differently, and only one of them has a cooperative phase.
 
@@ -476,7 +483,7 @@ managing a live stream.
 | ------------- | ------------------------------------- | --------------------- | ------------------------------------------------------------------------ |
 | `workspace`   | `string`                              | current directory     | The working directory.                                                   |
 | `environment` | `Record<string, string \| undefined>` | inherit the parent    | Overrides applied last; `undefined` unsets a key.                        |
-| `input`       | `string`                              | the command's `input` | Standard input written to the child, overriding `command.input`.         |
+| `input`       | `string`                              | the command's `input` | Standard-input payload, including NUL, overriding `command.input`.       |
 | `timeout`     | `number`                              | `0` (disabled)        | Milliseconds before the child is terminated; `0` or omitted disables it. |
 | `grace`       | `number`                              | `PROCESS_GRACE`       | The POSIX `SIGTERM` to `SIGKILL` window when a timeout or abort ends it. |
 | `signal`      | `AbortSignal`                         | none                  | Aborting this signal terminates the run and reports `aborted`.           |
@@ -485,6 +492,19 @@ managing a live stream.
 
 `RunSyncOptions` carries the same set without `grace` and without `signal`, because the synchronous
 host offers neither a cooperative termination window nor in-flight cancellation.
+
+`input` is standard-input payload and carries no NUL restriction on either option shape:
+
+```ts
+import { runSync } from '@orkestrel/process/server'
+
+const input = `left${String.fromCodePoint(0)}right`
+const echoed = runSync(
+	{ file: process.execPath, arguments: ['-e', 'process.stdin.pipe(process.stdout)'] },
+	{ input },
+)
+echoed.stdout === input // true
+```
 
 A run with no `timeout` and no `signal` is unbounded, and what it waits for is stdio completion
 rather than process exit. A descendant that inherits the child's stdio holds those pipes open after
@@ -563,7 +583,8 @@ other.
 
 | Subject         | `run`                                                     | `runSync`                                            |
 | --------------- | --------------------------------------------------------- | ---------------------------------------------------- |
-| Cooperative end | `grace` between `SIGTERM` and `SIGKILL` on a POSIX host.  | None; a timeout ends the child with `SIGKILL`.       |
+| Cooperative end | `grace` between `SIGTERM` and `SIGKILL` on a POSIX host.  | None; a timeout ends the root alone with `SIGKILL`.  |
+| Descendants     | A timeout or abort terminates the child tree.             | A timeout can leave descendants running.             |
 | Cancellation    | An `AbortSignal` terminates the run and sets `aborted`.   | None; the host offers no in-flight cancellation.     |
 | Overflow        | Reports `truncated` and keeps the run successful.         | Reports `truncated` and `failed`, killing the child. |
 | Refusal         | Rejects before spawning, because it is an async function. | Throws before spawning.                              |
@@ -849,8 +870,9 @@ isExited(reporter) // whether the native exit arrived
 - **Set `grace` to the child's real cleanup budget on a POSIX host** — `stop` waits that long after
   `SIGTERM` before `SIGKILL`, so a child that flushes on shutdown needs enough of a window to finish.
   Windows has no cooperative phase, so the value does nothing there.
-- **Read `truncated` rather than sizing `limit` by guesswork** — a run reports the cap it hit, and a
-  synchronous run fails on it while an asynchronous run does not.
+- **Read `truncated` rather than assuming captured output is complete** — a `Process` reports a
+  `lines` omission, and a run reports the `limit` it hit; a synchronous run fails on that limit while
+  an asynchronous run does not.
 - **Raise `backlog` for a chatty child you iterate slowly** — the default holds `PROCESS_BACKLOG`
   bytes of unconsumed lines before stdout pauses, and pausing is what makes the consumer lossless.
 - **Attach a consumer before the child speaks, or accept the gap** — a `lines` iterator requested

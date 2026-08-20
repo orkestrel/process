@@ -26,9 +26,10 @@ import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkes
  * @remarks
  * `environment` merges over the parent process environment unless `isolated` is `true`, and an
  * `undefined` value unsets a key. On Windows the merge is case-insensitive and the last writer
- * wins, matching how the host resolves an environment variable. `input` is written to the child's
- * stdin immediately after spawn. Every string here is spawn-bound: an empty `file`, or a NUL
- * character anywhere, is refused with a {@link ProcessError} coded `invalid`.
+ * wins, matching how the host resolves an environment variable. `input` is standard-input payload
+ * written immediately after spawn, so it carries no NUL restriction. Every spawn-bound string here
+ * is validated: an empty `file`, or a NUL character in `file`, `arguments`, or `environment`, is
+ * refused with a {@link ProcessError} coded `invalid`.
  */
 export interface ProcessCommand {
 	readonly file: string
@@ -105,8 +106,10 @@ export type ProcessEventMap = {
  * `grace` is the cooperative window between `SIGTERM` and `SIGKILL` on a POSIX host; Windows has no
  * cooperative phase, so the value is unused there. There is no completion deadline — a caller that
  * wants one arms its own timer and calls `stop`. `backlog` bounds the unconsumed `lines` backlog.
- * `on` installs initial {@link ProcessEventMap} listeners and `error` receives isolated listener
- * failures. Every numeric option is validated at construction: a timer value outside
+ * During termination, retained lines are capped at twice `backlog`; later lines are dropped without
+ * pausing stdout, and {@link ProcessInterface.truncated} reports the omission. `on` installs initial
+ * {@link ProcessEventMap} listeners and `error` receives isolated listener failures. Every numeric
+ * option is validated at construction: a timer value outside
  * `[0, PROCESS_TIMER]`, a negative or fractional byte value, or a `backlog` below `1` throws a
  * {@link ProcessError} coded `invalid`.
  */
@@ -120,7 +123,7 @@ export interface ProcessOptions {
 	readonly grace?: number
 	/** Maximum retained stderr tail in bytes. Default: {@link PROCESS_EVIDENCE}. */
 	readonly evidence?: number
-	/** Soft high-water mark in bytes for the unconsumed `lines` backlog. Default: {@link PROCESS_BACKLOG}. */
+	/** Soft high-water mark in bytes for the unconsumed `lines` backlog; termination retains at most twice this value. Default: {@link PROCESS_BACKLOG}. */
 	readonly backlog?: number
 	/** If `true`, stdin stays open for {@link ProcessInterface.send}; if `false` or omitted, stdin closes after any initial `input`. */
 	readonly writable?: boolean
@@ -140,9 +143,9 @@ export interface ProcessOptions {
  * no iterator has ever been requested, stdout keeps draining so `exit` still resolves, and retention
  * stops at the mark: a consumer attaching after that point receives the retained head, a gap, then
  * the live stream. `evidence` is the decoded, byte-bounded stderr tail — the diagnostic to attach to
- * a failed exit. The typed `emitter` carries the live `stderr` chunks, the child `error` cause, and
- * the terminal `exit`, alongside the `exit` promise. `stop` and `destroy` are idempotent and never
- * reject.
+ * a failed exit. `truncated` reports that the stream omitted lines after either retention bound was
+ * reached. The typed `emitter` carries the live `stderr` chunks, the child `error` cause, and the
+ * terminal `exit`, alongside the `exit` promise. `stop` and `destroy` are idempotent and never reject.
  */
 export interface ProcessInterface {
 	/** The typed lifecycle observation surface. */
@@ -151,6 +154,8 @@ export interface ProcessInterface {
 	readonly lines: AsyncIterable<string>
 	/** The decoded byte-bounded stderr tail. */
 	readonly evidence: string
+	/** True when the `lines` stream omitted output after a retention bound was reached. */
+	readonly truncated: boolean
 	/** The terminal child state, observed once from the close event. */
 	readonly exit: Promise<ProcessExit>
 	/**
@@ -257,16 +262,17 @@ export interface RunInput {
  * decides how a failure is delivered: by default a non-zero exit rejects with a
  * {@link ProcessError} carrying the {@link RunResult}; `strict: false` resolves with the result
  * instead, so the caller inspects `failed`. An invalid option or command rejects before the child is
- * spawned, with a {@link ProcessError} coded `invalid`. An unbounded run awaits stdio completion
- * rather than process exit, so give `timeout` a value wherever a descendant may inherit the child's
- * stdio and hold the pipe open past the child's own exit.
+ * spawned, with a {@link ProcessError} coded `invalid`. `input` is standard-input payload and carries
+ * no NUL restriction. An unbounded run awaits stdio completion rather than process exit, so give
+ * `timeout` a value wherever a descendant may inherit the child's stdio and hold the pipe open past
+ * the child's own exit.
  */
 export interface RunOptions {
 	/** The working directory. Default: the current working directory. */
 	readonly workspace?: string
 	/** Environment overrides merged over the parent environment; an `undefined` value unsets a key. */
 	readonly environment?: Readonly<Record<string, string | undefined>>
-	/** Standard input written to the child. */
+	/** Standard-input payload written to the child, including any NUL characters. */
 	readonly input?: string
 	/** Milliseconds before the child is terminated. `0` or omitted disables the timeout. */
 	readonly timeout?: number
@@ -285,18 +291,20 @@ export interface RunOptions {
  *
  * @remarks
  * The synchronous host offers neither a cooperative termination window nor in-flight cancellation,
- * so this contract carries no `grace` and no `signal`. A `timeout` and an output overflow both end
- * the child with `SIGKILL`; an overflow reports `truncated` and `failed` together, which is where
- * the synchronous and asynchronous runners genuinely differ.
+ * so this contract carries no `grace` and no `signal`. A `timeout` ends only the root process and can
+ * leave descendants running; use `run` or {@link ProcessInterface} when timeout must terminate the
+ * tree. A `timeout` and an output overflow both end the root with `SIGKILL`; an overflow reports
+ * `truncated` and `failed` together, which is where the synchronous and asynchronous runners
+ * genuinely differ. `input` is standard-input payload and carries no NUL restriction.
  */
 export interface RunSyncOptions {
 	/** The working directory. Default: the current working directory. */
 	readonly workspace?: string
 	/** Environment overrides merged over the parent environment; an `undefined` value unsets a key. */
 	readonly environment?: Readonly<Record<string, string | undefined>>
-	/** Standard input written to the child. */
+	/** Standard-input payload written to the child, including any NUL characters. */
 	readonly input?: string
-	/** Milliseconds before the host kills the child. `0` or omitted disables the timeout. */
+	/** Milliseconds before the host kills the root process alone. `0` or omitted disables the timeout. */
 	readonly timeout?: number
 	/** If `false`, return the result on failure instead of throwing. Default: `true`. */
 	readonly strict?: boolean

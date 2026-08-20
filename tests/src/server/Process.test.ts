@@ -245,6 +245,30 @@ describe('Process', () => {
 		},
 	)
 
+	it('caps retained lines while termination drains a flooding child', async () => {
+		const backlog = 1_024
+		const child = createProcess({
+			command: childCommand('flood'),
+			workspace: process.cwd(),
+			grace: 100,
+			backlog,
+		})
+		const iterator = child.lines[Symbol.asyncIterator]()
+		const ready = await iterator.next()
+		await waitForDelay(50)
+
+		const confirmed = await child.stop()
+		const exit = await child.exit
+		const retained = await collect(child.lines)
+		const bytes = retained.reduce((total, line) => total + Buffer.byteLength(line) + 1, 0)
+
+		expect(ready.value).toBe('ready')
+		expect(confirmed).toBe(true)
+		expect(exit.signal).toBe('SIGKILL')
+		expect(bytes).toBeLessThanOrEqual(backlog * 2)
+		expect(child.truncated).toBe(true)
+	})
+
 	it('confirms a stop for a child that already exited', async () => {
 		const child = createProcess({
 			command: childCommand('exit', '0'),
@@ -437,6 +461,23 @@ describe('Process', () => {
 })
 
 describe('Process validation', () => {
+	it('accepts NUL as standard-input payload', async () => {
+		const input = `left${String.fromCodePoint(0)}right\n`
+		const child = createProcess({
+			command: {
+				file: process.execPath,
+				arguments: ['-e', 'process.stdin.pipe(process.stdout)'],
+				input,
+			},
+			workspace: process.cwd(),
+		})
+
+		const lines = await collect(child.lines)
+		await child.exit
+
+		expect(lines).toEqual([input.slice(0, -1)])
+	})
+
 	it('spawns the same command file that it validated', async () => {
 		let reads = 0
 		const child = createProcess({

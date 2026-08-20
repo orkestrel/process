@@ -61,6 +61,32 @@ Windows decision and the POSIX decision, on this host, from the same test file.
 Include the percent-sign refusal for a batch target — `HANDOFF.md` contract item 1 records it as
 attacker-proven and it is exactly the kind of rule that must not regress silently.
 
+## A rule the existing skips already break
+
+`.claude/rules/tests.md` § Test contract:
+
+> Give a conditional skip the mechanism that makes it inapplicable, **cited**, not the platform name
+> alone. A test skipped on a platform is a test nobody re-examines; a test skipped because a named API
+> rejects a named case is one anybody can re-check.
+
+All fourteen conditional skips in this package cite `process.platform` and nothing else. That is the
+rule violation that let nine tests sit unexecuted without anyone re-examining them, and it is why the
+audit found this seam rather than a gate finding it.
+
+So every skip that survives your extraction must name **the mechanism**: which API, rejecting which
+case, on which host. `it.skipIf(process.platform !== 'win32')` becomes a skip whose reason a reader
+can re-check without owning a Windows machine.
+
+Two further rules from the same file bind your new tests:
+
+- *"Probe a host-varying property at runtime, on the host the test is running on, and assert against
+  what the probe returned."* Your extracted functions take the platform as a parameter, so both
+  branches are ordinary inputs and neither is host-varying. Where something genuinely is — path
+  separators, case folding — probe it rather than fixture it.
+- *"Never assert an implementation against itself."* An extracted decision must be compared to a
+  declaration or a fixture that could disagree, not re-derived the way the source derives it. A test
+  that recomputes the answer passes for every value the source will ever return.
+
 ## Honesty requirements
 
 - `guides/process.md`'s Tests section must state which rows execute on which host, and name the host

@@ -349,6 +349,30 @@ for (const entry of manifest) {
 // the transcription exercises the same no-shell resolver a reader's `node` reaches.
 
 describe('flagship fences', () => {
+	it('states the numeric teardown backlog cap on both public contracts', () => {
+		const guide = requireValue(files['guides/process.md'], 'Missing file: guides/process.md')
+		const types = requireValue(files['src/core/types.ts'], 'Missing file: src/core/types.ts')
+
+		expect(guide).toContain('twice `backlog`')
+		expect(types).toContain('twice `backlog`')
+	})
+
+	it('states the root-only synchronous timeout boundary in the guide and types', () => {
+		const guide = requireValue(files['guides/process.md'], 'Missing file: guides/process.md')
+		const types = requireValue(files['src/core/types.ts'], 'Missing file: src/core/types.ts')
+
+		expect(guide).toContain('`runSync` ends only the root process')
+		expect(types).toContain('`timeout` ends only the root process')
+	})
+
+	it('states that standard-input payload accepts NUL in the guide and types', () => {
+		const guide = requireValue(files['guides/process.md'], 'Missing file: guides/process.md')
+		const types = requireValue(files['src/core/types.ts'], 'Missing file: src/core/types.ts')
+
+		expect(guide).toContain('standard-input payload and carries no NUL restriction')
+		expect(types).toContain('standard-input payload and carries no NUL restriction')
+	})
+
 	it('documents the constant values its Surface table prints', () => {
 		expect(PROCESS_GRACE).toBe(5_000)
 		expect(PROCESS_CONFIRMATION).toBe(5_000)
@@ -428,6 +452,16 @@ describe('flagship fences', () => {
 		)
 		expect(outcome.failed).toBe(true)
 		expect(outcome.code).toBe(3)
+	})
+
+	it('passes the standard-input payload fence with NUL intact', () => {
+		const input = `left${String.fromCodePoint(0)}right`
+		const result = runSync(
+			{ file: process.execPath, arguments: ['-e', 'process.stdin.pipe(process.stdout)'] },
+			{ input },
+		)
+
+		expect(result.stdout).toBe(input)
 	})
 
 	it('splits the output-bound fence exactly where the guide says the runners differ', async () => {

@@ -12,6 +12,13 @@ if (mode === 'write') {
 	// that it ran.
 	writeFileSync(detail, 'detached')
 	process.exit(0)
+} else if (mode === 'delayed-write') {
+	// Delay the observable write until after the root's timeout, so a caller can distinguish a
+	// surviving grandchild from one the tree termination reached.
+	setTimeout(() => {
+		writeFileSync(detail, 'grandchild')
+		process.exit(0)
+	}, 250)
 } else if (mode === 'announce') {
 	// Publish this process id to a file and stay alive, so a caller holding no handle on this process
 	// can still ask the host whether it is still running.
@@ -49,6 +56,15 @@ if (mode === 'write') {
 	} else {
 		setInterval(() => undefined, 1_000)
 	}
+} else if (mode === 'tree-write') {
+	// The grandchild writes only after the root's timeout. A root-only timeout leaves the marker;
+	// tree termination reaches the grandchild before it can write.
+	const grandchild = spawn(process.argv[0], [process.argv[1], 'delayed-write', detail], {
+		stdio: ['ignore', 1, 2],
+		detached: process.platform === 'win32',
+	})
+	grandchild.unref()
+	setInterval(() => undefined, 1_000)
 } else if (mode === 'chatty') {
 	// Emit far more lines than any consumer reads promptly, then let stdout flush: the eager pump
 	// must drain with no consumer so exit still resolves and a late consumer receives every line.
@@ -84,6 +100,18 @@ if (mode === 'write') {
 	setInterval(() => undefined, 1_000)
 	process.on('SIGTERM', () => undefined)
 	process.stdout.write('trapped\n')
+} else if (mode === 'flood') {
+	// Trap the cooperative signal and keep producing framed output while termination drains stdout.
+	// The bounded parent must drop beyond its teardown cap without pausing this stream again.
+	let index = 0
+	process.on('SIGTERM', () => undefined)
+	process.stdout.write('ready\n')
+	setInterval(() => {
+		for (let count = 0; count < 256; count += 1) {
+			process.stdout.write(`${String(index)}:${'x'.repeat(128)}\n`)
+			index += 1
+		}
+	}, 1)
 } else if (mode === 'hang') {
 	// No SIGTERM handler: a termination signal ends the process as a signal exit, so a caller that
 	// terminates it observes a non-zero, signalled outcome rather than a graceful code 0.
