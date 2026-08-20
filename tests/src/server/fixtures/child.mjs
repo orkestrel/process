@@ -13,6 +13,10 @@ if (mode === 'write') {
 	writeFileSync(detail, 'detached')
 	process.exit(0)
 } else if (mode === 'delayed-write') {
+	// Announce that this grandchild is established before arming its write. The root's timeout is
+	// shorter than Node's own bootstrap on some hosts, so a test that does not wait for this line is
+	// racing interpreter startup rather than measuring termination.
+	writeFileSync(`${detail}.ready`, 'ready')
 	// Delay the observable write until after the root's timeout, so a caller can distinguish a
 	// surviving grandchild from one the tree termination reached.
 	setTimeout(() => {

@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createRecorder, waitForDelay } from '@orkestrel/test'
+import { waitForCondition } from '../../setup.js'
 import { createScratch } from '@orkestrel/test/server'
 import { isProcessError, ProcessError } from '@src/core'
 import {
@@ -751,6 +752,68 @@ describe('run', () => {
 })
 
 describe('runSync', () => {
+	it(
+		'leaves an established grandchild running after a root-only timeout where run ends the tree',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch()
+			try {
+				const blockingMarker = join(scratch.path, 'blocking.txt')
+				const streamedMarker = join(scratch.path, 'streamed.txt')
+
+				// The root must outlive the grandchild's interpreter startup, or this measures bootstrap
+				// rather than termination. Node bootstraps in 45.7-49.9 ms on this host, so the former
+				// 50 ms root timeout was a coin flip and lost three times in six.
+				const blocking = runSync(childCommand('tree-write', blockingMarker), {
+					workspace: process.cwd(),
+					timeout: 400,
+					strict: false,
+				})
+				expect(blocking.expired).toBe(true)
+
+				// The claim is about an ESTABLISHED descendant. The root's 50 ms deadline is shorter than
+				// Node's own bootstrap on some hosts, so waiting a fixed interval measures whether the
+				// grandchild finished starting rather than whether termination reached it. Waiting for the
+				// fixture's readiness line removes that race: measured without it, three of six trials
+				// never wrote at all.
+				await waitForCondition(() => existsSync(`${blockingMarker}.ready`), 6_000)
+				await waitForCondition(() => existsSync(blockingMarker), 6_000)
+				expect(existsSync(blockingMarker)).toBe(true)
+
+				const streamed = await run(childCommand('tree-write', streamedMarker), {
+					workspace: process.cwd(),
+					timeout: 50,
+					grace: 20,
+					strict: false,
+				})
+				expect(streamed.expired).toBe(true)
+
+				// Tree termination reaches the grandchild, so its marker never appears. A fixed wait is the
+				// right instrument for a negative: it bounds how long absence must hold, sized above the
+				// ~295 ms a surviving grandchild takes to write.
+				await waitForDelay(600)
+				expect(existsSync(streamedMarker)).toBe(false)
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
+
+	it('sends string input as bytes, so a NUL in the payload reaches the child', () => {
+		// input is stdin payload rather than a spawn-bound string, so it carries no NUL restriction.
+		// Passing the string through unconverted made spawnSync reject it with Unknown encoding: buffer.
+		const payload = 'before\u0000after\nstop\n'
+		const result = runSync(childCommand('echo'), {
+			workspace: process.cwd(),
+			input: payload,
+			strict: false,
+		})
+		expect(result.failed).toBe(false)
+		// The child echoes the line it read, so a NUL surviving the transfer proves the payload was
+		// sent as bytes rather than rejected or re-encoded.
+		expect(result.stdout).toContain('before\u0000after')
+	})
+
 	it('spawns the same command file that it validated', () => {
 		let reads = 0
 		const result = runSync(
