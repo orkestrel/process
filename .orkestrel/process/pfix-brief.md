@@ -65,15 +65,31 @@ Prefer transcription where the fence is executable in this container without a r
 termination are proven on no host; that disposition stands and is not yours to reopen. A fence that
 cannot execute here gets the narrowing, not a skipped test.
 
+## Finding 5 — the manifest ships a placeholder description and no keywords
+
+`package.json` carries `"description": "The @orkestrel/process package."` and `"keywords": []`.
+Both entered at the initial commit and were never edited. 0.0.3 already shipped them, and the
+working tree's 0.0.4 repeats them byte for byte.
+
+This is birth-owned, not vendored: `HOST_PATHS` does not list `package.json`, and scaffold's own
+generator states that a workspace owns its manifest's description, its keywords, and any script it
+added once the manifest exists. `The ${name} package.` is the birth default a consumer is meant to
+replace. So a written description survives `repair` and `overwrite`, and editing it here is correct.
+
+Write a description from `README.md`'s own opening, and a keyword set a consumer searching npm would
+use. Fixing this emits no changed byte in `dist/`, so it rides the pending bump at no cost.
+
 ## Scope
 
 - **Owned:** `tests/guides.test.ts`, `src/server/helpers.ts`, `src/server/types.ts`,
-  `tests/src/server/helpers.test.ts`, `guides/process.md`.
+  `tests/src/server/helpers.test.ts`, `guides/process.md`, and — for the `description` and
+  `keywords` fields only — `package.json`.
 - **Off-limits:** every other file. In particular the vendored host — `AGENTS.md`, `CLAUDE.md`,
   `.agents/`, `.claude/`, `.codex/`, `.cursor/`, `configs/helpers.ts`, `scripts/*.sh`,
   `tests/config.test.ts`, `tests/policy.test.ts`, `tests/setupPolicy.ts` — is owned by
-  `@orkestrel/scaffold` and restored by `repair`. `package.json` and `vite.config.ts` are
-  scaffold-planned; do not hand-edit either. Do not change the version.
+  `@orkestrel/scaffold` and restored by `repair`. `vite.config.ts` is
+  scaffold-planned; do not hand-edit it. In `package.json` you own `description` and `keywords` and
+  nothing else — every other field there is planned. Do not change the version.
 
 ## Host conditions
 
@@ -112,6 +128,8 @@ Close them in this order and report each command with its exit code.
 4. `npx vitest run --config vite.config.ts --project guides` exits 0. Report its counts.
 5. `rg -n -i '\bsixteen\b' tests/ src/ guides/process.md README.md` returns no hit.
 6. `rg -n 'slot `?[01]`?|counts\[[01]\]' src/ tests/ guides/process.md` returns no hit.
+7. `node -p "const p=require('./package.json'); p.description + ' | ' + p.keywords.join(',')"`
+   prints a written description and a non-empty keyword set.
 
 Report a whole-suite result as an observation if you take one, never as a criterion.
 

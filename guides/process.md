@@ -189,12 +189,13 @@ The contracts and options, all from `@orkestrel/process`.
 
 ### Server contracts
 
-The Node-side contract, from `@orkestrel/process/server`. It names a child process rather than a
-value this package owns, so it stays out of the host-independent face.
+The Node-side contracts, from `@orkestrel/process/server`. They support the Node child boundary and
+capture helper, so they stay out of the host-independent face.
 
-| API            | Kind      | Summary                                                                                                    |
-| -------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
-| `ProcessChild` | interface | The child boundary the termination helpers drive — `pid`, `exitCode`, `signalCode`, `kill`, `once`, `off`. |
+| API             | Kind      | Summary                                                                                                    |
+| --------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
+| `ProcessChild`  | interface | The child boundary the termination helpers drive — `pid`, `exitCode`, `signalCode`, `kill`, `once`, `off`. |
+| `CaptureCounts` | interface | Mutable delivered and retained byte totals for capture without per-chunk allocation.                       |
 
 ### Surface notes
 
@@ -674,7 +675,7 @@ crashing the caller.
 ```ts
 import { detach } from '@orkestrel/process/server'
 
-detach({ file: 'node', arguments: ['daemon.js'] }, { workspace: process.cwd() })
+detach({ file: process.execPath, arguments: ['-e', ''] }, { workspace: process.cwd() })
 ```
 
 ## The keyed registry
@@ -903,7 +904,10 @@ whole sequence, host-aware, and it never signals a process it has already seen e
 import { spawn } from 'node:child_process'
 import { stopChild } from '@orkestrel/process/server'
 
-const worker = spawn('node', ['worker.js'], { detached: process.platform !== 'win32' })
+const worker = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 50)'], {
+	detached: process.platform !== 'win32',
+	stdio: 'ignore',
+})
 
 const confirmed = await stopChild(worker, 5_000, 5_000)
 confirmed // true when the native exit arrived
@@ -918,7 +922,10 @@ host may have reused, and signalling it reaches whatever holds that pid now.
 import { spawn } from 'node:child_process'
 import { isExited, killProcess, killTree, waitForExit } from '@orkestrel/process/server'
 
-const reporter = spawn('node', ['reporter.js'], { detached: process.platform !== 'win32' })
+const reporter = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 50)'], {
+	detached: process.platform !== 'win32',
+	stdio: 'ignore',
+})
 
 if (!isExited(reporter)) {
 	killProcess(reporter, 'SIGTERM') // POSIX: the whole process group

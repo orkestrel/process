@@ -1,8 +1,16 @@
 {
 	"name": "@orkestrel/process",
 	"version": "0.0.4",
-	"description": "The @orkestrel/process package.",
-	"keywords": [],
+	"description": "A typed child-process toolkit with supervised streaming, bounded output capture and termination, detached spawns, and keyed child registries.",
+	"keywords": [
+		"child-process",
+		"nodejs",
+		"process",
+		"process-manager",
+		"spawn",
+		"subprocess",
+		"typescript"
+	],
 	"homepage": "https://github.com/orkestrel/process#readme",
 	"bugs": "https://github.com/orkestrel/process/issues",
 	"license": "MIT",

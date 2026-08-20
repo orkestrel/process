@@ -5,6 +5,7 @@
 // catch. Change a fence, change its transcription.
 
 import { Buffer } from 'node:buffer'
+import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -47,8 +48,12 @@ import {
 	buildSpawn,
 	createProcess,
 	createProcessManager,
+	detach,
 	formatCommand,
+	isExited,
 	isFile,
+	killProcess,
+	killTree,
 	mergeEnvironment,
 	mergePlatformEnvironment,
 	quoteArgument,
@@ -59,6 +64,7 @@ import {
 	execute,
 	executeSync,
 	snapshotCommand,
+	stopChild,
 	trimHead,
 	trimTail,
 	validateBytes,
@@ -614,6 +620,42 @@ describe('flagship fences', () => {
 		await child.destroy()
 	})
 
+	it('spawns the detached fence without waiting', () => {
+		expect(
+			detach({ file: process.execPath, arguments: ['-e', ''] }, { workspace: process.cwd() }),
+		).toBeUndefined()
+	})
+
+	it('confirms the bounded-stop fence', async () => {
+		const worker = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 50)'], {
+			detached: process.platform !== 'win32',
+			stdio: 'ignore',
+		})
+
+		const confirmed = await stopChild(worker, 5_000, 5_000)
+		expect(confirmed).toBe(true)
+	})
+
+	it('drives the termination-helper fence through the host sequence', async () => {
+		const reporter = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 50)'], {
+			detached: process.platform !== 'win32',
+			stdio: 'ignore',
+		})
+
+		if (!isExited(reporter)) {
+			killProcess(reporter, 'SIGTERM')
+			await waitForExit(reporter, 1_000)
+		}
+		if (!isExited(reporter) && process.platform === 'win32') {
+			await killTree(reporter.pid ?? 0, 5_000)
+		}
+		if (!isExited(reporter)) {
+			killProcess(reporter, 'SIGKILL')
+			await waitForExit(reporter, 5_000)
+		}
+		expect(isExited(reporter)).toBe(true)
+	})
+
 	it('sends one line to an open channel and confirms the stop', async () => {
 		const echo = createProcess({
 			command: {
@@ -915,7 +957,7 @@ describe('flagship fences', () => {
 
 // ── Unfenced TSDoc example transcriptions ────────────────────────────────────
 //
-// Sixteen exports appear in no `guides/process.md` fence, so the example gate accepts their TSDoc
+// Exports that appear in no `guides/process.md` fence use their TSDoc
 // `@example` block in place of one. A block satisfies that gate by existing, which leaves the value
 // its comment claims unasserted. Each row below runs one such block against the real barrel and
 // asserts that value, so a changed return value fails this gate. Change an `@example`, change its row.
@@ -981,10 +1023,10 @@ describe('unfenced TSDoc examples', () => {
 
 	it('retains the byte count retainChunk\u2019s example claims', () => {
 		const chunks: Buffer[] = []
-		const counts = [0, 0]
+		const counts = { delivered: 0, retained: 0 }
 		retainChunk(Buffer.from('hello'), chunks, counts, 3)
 
-		expect(counts[1]).toBe(3)
+		expect(counts.retained).toBe(3)
 	})
 
 	// The example claims one value per host, so each host's claim is its own case. Off Windows

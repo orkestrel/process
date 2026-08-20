@@ -57,3 +57,15 @@ export interface ProcessChild {
 	 */
 	off(event: 'exit', listener: () => void): unknown
 }
+
+/**
+ * The byte totals accumulated while a stream head is retained.
+ *
+ * @remarks
+ * The properties are mutable because {@link retainChunk} updates the caller-owned accumulator in
+ * place without allocating for each delivered chunk.
+ */
+export interface CaptureCounts {
+	delivered: number
+	retained: number
+}

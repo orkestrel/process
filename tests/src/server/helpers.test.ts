@@ -440,14 +440,14 @@ describe('validateCommand', () => {
 describe('retainChunk', () => {
 	it('retains the head up to the limit while counting everything delivered', () => {
 		const chunks: Buffer[] = []
-		const counts: number[] = [0, 0]
+		const counts = { delivered: 0, retained: 0 }
 
 		retainChunk(Buffer.from('hello'), chunks, counts, 3)
 		retainChunk(Buffer.from('world'), chunks, counts, 3)
 		retainChunk('not a chunk', chunks, counts, 3)
 
 		expect(Buffer.concat(chunks).toString('utf8')).toBe('hel')
-		expect(counts).toEqual([10, 3])
+		expect(counts).toEqual({ delivered: 10, retained: 3 })
 	})
 })
 

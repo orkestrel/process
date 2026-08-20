@@ -9,7 +9,7 @@ import type {
 	ExecuteSyncOptions,
 	SpawnInput,
 } from '@src/core'
-import type { ProcessChild } from './types.js'
+import type { CaptureCounts, ProcessChild } from './types.js'
 import { Buffer } from 'node:buffer'
 import { spawn, spawnSync } from 'node:child_process'
 import { statSync } from 'node:fs'
@@ -584,39 +584,37 @@ export function validateWorkspace(workspace: string | undefined): void {
  *
  * @remarks
  * The retained head is kept as chunk slices and joined once, so a long stream never repeatedly
- * concatenates a growing buffer. `counts` is a delivered-and-retained tally: slot `0` counts every
- * delivered byte and slot `1` counts the retained bytes, so a caller compares slot `0` against
+ * concatenates a growing buffer. `counts.delivered` records every delivered byte and
+ * `counts.retained` records the retained bytes, so a caller compares `counts.delivered` against
  * `limit` to learn whether the capture was truncated.
  *
  * @param chunk - The delivered chunk, ignored when it is not a buffer
  * @param chunks - The retained head, appended to in place
- * @param counts - The `[delivered, retained]` tally, updated in place
+ * @param counts - The delivered and retained byte totals, updated in place
  * @param limit - The maximum retained byte count
  * @returns Nothing
  *
  * @example
  * ```ts
  * const chunks: Buffer[] = []
- * const counts = [0, 0]
+ * const counts = { delivered: 0, retained: 0 }
  * retainChunk(Buffer.from('hello'), chunks, counts, 3)
- * counts[1] // 3
+ * counts.retained // 3
  * ```
  */
 export function retainChunk(
 	chunk: unknown,
 	chunks: Buffer[],
-	counts: number[],
+	counts: CaptureCounts,
 	limit: number,
 ): void {
 	if (!Buffer.isBuffer(chunk)) return
-	const delivered = counts[0] ?? 0
-	const retained = counts[1] ?? 0
-	counts[0] = delivered + chunk.byteLength
-	const room = limit - retained
+	counts.delivered += chunk.byteLength
+	const room = limit - counts.retained
 	if (room <= 0) return
 	const slice = chunk.byteLength <= room ? chunk : Buffer.from(chunk.subarray(0, room))
 	chunks.push(slice)
-	counts[1] = retained + slice.byteLength
+	counts.retained += slice.byteLength
 }
 
 /**
@@ -883,8 +881,8 @@ export async function execute(
 	const finish = new AbortController()
 	const outChunks: Buffer[] = []
 	const errChunks: Buffer[] = []
-	const outCounts: number[] = [0, 0]
-	const errCounts: number[] = [0, 0]
+	const outCounts: CaptureCounts = { delivered: 0, retained: 0 }
+	const errCounts: CaptureCounts = { delivered: 0, retained: 0 }
 	let spawned = false
 	let expired = false
 	let aborted = false
@@ -916,7 +914,7 @@ export async function execute(
 					signal: child.signalCode,
 					expired,
 					aborted,
-					truncated: (outCounts[0] ?? 0) > limit || (errCounts[0] ?? 0) > limit,
+					truncated: outCounts.delivered > limit || errCounts.delivered > limit,
 					limit,
 					...(cause === undefined ? {} : { cause }),
 				}),
