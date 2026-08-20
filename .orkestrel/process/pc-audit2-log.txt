@@ -1,0 +1,103 @@
+a13e4e9 One shape per concept, and the handoff dissolved
+The two-lane audit's subjective findings, closed.
+
+The command snapshot was four verbatim copies — the package's own input contract,
+the thing PC1 repaired, met four times with no place that defined it. One exported
+`snapshotCommand` now, called from `run`, `runSync`, `detach`, and the `Process`
+constructor, documented in the guide's helper table and tested once. Its control is
+the assertion that the snapshot's key set is exactly what was passed, which fails
+for any implementation carrying an absent optional as undefined.
+
+`waitForExit` read a member its own contract did not declare. It removed its exit
+listener through an `'off' in child` check, a type guard, and a `Reflect.apply`,
+while `ProcessChild` declared four members and none of them was `off`. So a caller
+conforming exactly to the published contract leaked a listener on every deadline,
+and the existing proof only passed because it used an `EventEmitter`, which carries
+`off` by accident. Declaring it reddened the typecheck first; reverting the release
+call reddened two runtime rows, the new one and the old one that had never really
+been testing this.
+
+The guide promised `lines` is lossless one bullet below the bullet telling the
+reader to check `truncated`, and the cap made the first false during termination.
+Both sentences qualified, and the executed row now drives a child that traps
+SIGTERM and keeps writing, so a requesting consumer provably loses lines once
+teardown begins.
+
+`ProcessErrorCode` was declared once and re-listed by hand inside the guard, so a
+sixth code compiled cleanly and made `isProcessError` return false for a genuine
+error — the defect Q4 closed, through a second door. The frozen tuple is the single
+declaration now; the red proof added a sixth code and watched the hand-written
+guard refuse it, then watched the derived guard admit it with no second edit.
+
+Also: the brand's remarks no longer claim to survive duplicate installations
+without naming the boundary, `truncated`'s two surfaces are ruled one concept
+against two bounds rather than renamed apart, the Tests section lists both proofs
+this campaign added, eleven test names state their subject with applicability moved
+to a cited mechanism at the skip, and PC1's four undocumented contracts are stated
+and gated executably.
+
+`HANDOFF.md` is deleted. Its behavioural contract, its byte-bound naming ruling,
+the per-stream truncation limit, and `detach` returning nothing all moved into the
+guide; the Windows residue is an explicit drop with its settling command; the
+adopter states, the verification map, and the republish recipe were live state and
+prune with no promotion.
+
+Two files fell in neither the owned nor the off-limits list — a barrel export moves
+the barrel test and the distribution counts with it — so the unit returned exact
+patches rather than reaching outside its scope. Applied on integration.
+
+Independent verification on 2026-08-20: format:check, lint:check, check, build,
+test, test:distribution, and test:distribution --mode release all exit 0. Source
+117 passed and 7 skipped, policy 86, config 28, guides 85 and 1 skipped, setup 5.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KgYWuAE9LECgKRJE3ARgJV
+
+---
+e9d9cfc Execute the four behaviours the guide only asserted in prose
+Both audit lanes ruled claims 10, 11, 12, and 14 UNPROVEN, unanimously. Each was
+closed by asserting that a sentence appears in a file, which passes unchanged when
+the code starts returning something else. That is the mechanism that let the false
+`%1` claim survive 51 green parity assertions before this campaign, reproduced one
+release later on four more statements.
+
+Each now has an assertion that breaks when the behaviour does:
+
+- `isolated: true` leaves no `PATH` on POSIX: the child's own environment is read
+  back and `PATH` asserted absent.
+- A spawn fault reports the host's negative errno for `run` and `null` for
+  `runSync`. Measured here: -2. The one existing test asserted `not.toBe(0)`,
+  which `null` satisfies.
+- A detached POSIX child survives the supervisor's SIGKILL and never receives the
+  terminal's SIGINT. Both halves proven through a group-directed signal, with the
+  grouped child as the control that does receive it.
+- The `moduleResolution` floor compiles: four real `ts.createProgram` runs inside
+  the installed consumer, `skipLibCheck: false`, with `node10` as a permanent
+  firing control whose diagnostic is the README sentence compiled.
+
+Three defects in the proofs themselves. The termination proof's `run` half still
+ran at `timeout: 50`, inside the 45.7-49.9 ms bootstrap window the comment eight
+lines above calls a coin flip, and waited on no readiness marker — so its negative
+assertion could not tell tree termination from a grandchild that never started.
+The standalone negative control resolved `@orkestrel/process/absent` against this
+repository's own manifest, so the control that was seen to fire proved the wrong
+subject. And `--mode release` was inert: the EPERM branch extracted the tarball
+unconditionally, so `prepublishOnly` could go green having proved the package
+unpacks and never that it installs.
+
+`src:core` is hermetic again. It loaded `dist/`, which is gitignored, so a fresh
+clone failed with "built core entries did not load" — a build-order fault reported
+as a missing export. The built-artifact assertion moved to the distribution proof,
+where it runs against what a consumer receives.
+
+Q15, Q17, Q19, and Q20 close. Q17's count was wrong in the grade: 16 unfenced
+`@example` blocks, not twelve, measured with the compiler rather than assumed.
+
+Independent verification on 2026-08-20: format:check, lint:check, check, build,
+test, test:distribution, and test:distribution --mode release all exit 0. With
+dist/ moved aside, test:src exits 0 at 113 passed, 7 skipped.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KgYWuAE9LECgKRJE3ARgJV
+
+---
