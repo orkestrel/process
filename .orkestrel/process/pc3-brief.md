@@ -87,45 +87,22 @@ Two further rules from the same file bind your new tests:
   declaration or a fixture that could disagree, not re-derived the way the source derives it. A test
   that recomputes the answer passes for every value the source will ever return.
 
-## Q7 — a claim that is a race, reopened with measurement
+## Q7 is CLOSED — do not reopen it
 
-Unit PC2 documented that a `runSync` timeout ends the root alone and leaves descendants running, and
-wrote a test for it. **The claim is not reliably true and the test is nondeterministic.** Measured
-against the built artifact, six trials, polling every 10 ms with a 12-second budget:
+Q7's race was closed by the Orchestrator before this unit was dispatched, at commit `16ec17f`. Its
+cause was the test's own parameter, not its instrument: the root ran `timeout: 50` while Node
+bootstraps in 45.7–49.9 ms on this host, so the grandchild raced its own interpreter startup and lost
+three of six trials. The root now runs 400 ms and the test measures termination. Eight consecutive
+runs are green.
 
-```text
-trial 0: expired=true marker appeared at 296ms
-trial 1: expired=true marker appeared at 295ms
-trial 2: expired=true marker appeared at NEVER (>12s)
-trial 3: expired=true marker appeared at NEVER (>12s)
-trial 4: expired=true marker appeared at NEVER (>12s)
-trial 5: expired=true marker appeared at 294ms
-```
+Leave `leaves an established grandchild running after a root-only timeout where run ends the tree`
+alone. If your extraction touches it, preserve the 400 ms root timeout and the readiness wait, and say
+so in your report.
 
-Three of six survive; three never write.
-
-**The cause.** `runSync` is given `timeout: 50`. The `tree-write` fixture's grandchild must reach its
-own `setTimeout` registration before the root is killed, and this campaign measured Node's bootstrap
-on this host at **45.7–49.9 ms**. The grandchild is racing its own interpreter startup against a 50 ms
-deadline and loses about half the time. On POSIX the fixture spawns it with
-`detached: process.platform === 'win32'`, so on Linux it is not detached and shares the root's group.
-
-**Two things are owed, and they are a design decision rather than a flake repair:**
-
-1. Make the fixture **signal readiness**, the way `trap` does after installing its handler, so the test
-   waits for an established grandchild before asserting survival. That removes the bootstrap race and
-   lets the test measure the termination behaviour it names.
-2. **Qualify the guide sentence** to what the package actually guarantees: `runSync` signals the root
-   alone, so a descendant already running survives; a descendant still starting may not.
-
-A polling-only repair was attempted and **reverted** — it converts a fast failure into a five-second
-timeout without touching the race, and a poll budget equal to the test's own timeout can never fail
-gracefully. Do not repeat it.
-
-`@orkestrel/test` has no wait-until-condition helper (`waitForDelay` is the only timing export, and
-the package reads no clock at all), so any local wait you write uses `performance.now()` per
-`.claude/rules/tests.md`, never `Date.now()`. A plan to add `waitForCondition` upstream is recorded in
-that package; do not block on it.
+**Use `waitForCondition` from `tests/setup.ts`** for any wait you add. It exists now, measures its
+deadline with `performance.now()`, and accepts a synchronous or asynchronous condition. Do not write
+another local polling loop, and never use a fixed delay to wait for something another process
+produces.
 
 ## Honesty requirements
 
