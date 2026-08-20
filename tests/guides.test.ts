@@ -29,7 +29,7 @@ import {
 	createDuplicateError,
 	createInvalidError,
 	createProtocolError,
-	createRunError,
+	createExecuteError,
 	isProcessError,
 	PROCESS_BACKLOG,
 	PROCESS_CONFIRMATION,
@@ -43,7 +43,7 @@ import {
 import {
 	buildExecutableCandidates,
 	buildPlatformSpawn,
-	buildRunResult,
+	buildExecuteResult,
 	buildSpawn,
 	createProcess,
 	createProcessManager,
@@ -56,8 +56,8 @@ import {
 	readVariable,
 	resolveExecutable,
 	retainChunk,
-	run,
-	runSync,
+	execute,
+	executeSync,
 	snapshotCommand,
 	trimHead,
 	trimTail,
@@ -452,7 +452,7 @@ describe('flagship fences', () => {
 		await chatty.exit
 		await chatty.destroy()
 
-		const bounded = await run(
+		const bounded = await execute(
 			{ file: process.execPath, arguments: ['-e', 'process.stdout.write("x".repeat(4096))'] },
 			{ limit: 16, strict: false },
 		)
@@ -474,7 +474,7 @@ describe('flagship fences', () => {
 		expect(guide).toContain('both captured strings are trimmed to `limit`')
 
 		const limit = 16
-		const written = runSync(
+		const written = executeSync(
 			{
 				file: process.execPath,
 				arguments: [
@@ -494,7 +494,7 @@ describe('flagship fences', () => {
 		const guide = requireValue(files['guides/process.md'], 'Missing file: guides/process.md')
 		const types = requireValue(files['src/core/types.ts'], 'Missing file: src/core/types.ts')
 
-		expect(guide).toContain('`runSync` ends only the root process')
+		expect(guide).toContain('`executeSync` ends only the root process')
 		expect(types).toContain('`timeout` ends only the root process')
 	})
 
@@ -623,7 +623,7 @@ describe('flagship fences', () => {
 
 		expect(reads.length).toBe(1)
 		expect(snapshot.file).toBe(process.execPath)
-		expect(runSync(snapshot, { strict: false }).failed).toBe(false)
+		expect(executeSync(snapshot, { strict: false }).failed).toBe(false)
 	})
 
 	it('releases the abort listener destroy registered and the exit listener waitForExit registered', async () => {
@@ -689,13 +689,13 @@ describe('flagship fences', () => {
 			.replaceAll('*', '')
 			.replace(/\s+/gu, ' ')
 		expect(guide).toContain(
-			"A spawn fault reports the host's negative errno in `ProcessExit.code` and an asynchronous `RunResult.code`.",
+			"A spawn fault reports the host's negative errno in `ProcessExit.code` and an asynchronous `ExecuteResult.code`.",
 		)
-		expect(guide).toContain('The synchronous `runSync` result reports `null` instead.')
+		expect(guide).toContain('The synchronous `executeSync` result reports `null` instead.')
 		expect(types).toContain(
-			"A spawn fault reports the host's negative errno for `Process` and `run`.",
+			"A spawn fault reports the host's negative errno for `Process` and `execute`.",
 		)
-		expect(types).toContain('A spawn fault reports `null` for `runSync`.')
+		expect(types).toContain('A spawn fault reports `null` for `executeSync`.')
 	})
 
 	it('states the supported TypeScript module-resolution floor', () => {
@@ -715,7 +715,7 @@ describe('flagship fences', () => {
 	// own set into an explicit Windows environment.
 	it('reads the isolated environment fence back from the child', () => {
 		const printer = 'process.stdout.write(Object.keys(process.env).sort().join(","))'
-		const keys = runSync({
+		const keys = executeSync({
 			file: process.execPath,
 			arguments: ['-e', printer],
 			environment: { TOKEN: 'a' },
@@ -731,7 +731,7 @@ describe('flagship fences', () => {
 	// environment there, so what that host leaves behind is a separate claim this one cannot settle.
 	it.skipIf(process.platform === 'win32')('leaves an isolated POSIX child no PATH', () => {
 		const printer = 'process.stdout.write(Object.keys(process.env).sort().join(","))'
-		const keys = runSync({
+		const keys = executeSync({
 			file: process.execPath,
 			arguments: ['-e', printer],
 			environment: { TOKEN: 'a' },
@@ -742,12 +742,12 @@ describe('flagship fences', () => {
 		expect(keys.includes('PATH')).toBe(false)
 	})
 
-	it('settles the run fence in both its rejecting and inspecting forms', async () => {
-		const version = await run({ file: 'node', arguments: ['--version'] })
+	it('settles the execution fence in both its rejecting and inspecting forms', async () => {
+		const version = await execute({ file: 'node', arguments: ['--version'] })
 		expect(version.failed).toBe(false)
 		expect(version.stdout.startsWith('v')).toBe(true)
 
-		const outcome = await run(
+		const outcome = await execute(
 			{ file: 'node', arguments: ['-e', 'process.exit(3)'] },
 			{ strict: false },
 		)
@@ -757,7 +757,7 @@ describe('flagship fences', () => {
 
 	it('passes the standard-input payload fence with NUL intact', () => {
 		const input = `left${String.fromCodePoint(0)}right`
-		const result = runSync(
+		const result = executeSync(
 			{ file: process.execPath, arguments: ['-e', 'process.stdin.pipe(process.stdout)'] },
 			{ input },
 		)
@@ -768,14 +768,14 @@ describe('flagship fences', () => {
 	it('splits the output-bound fence exactly where the guide says the runners differ', async () => {
 		const script = 'process.stdout.write("x".repeat(4096))'
 
-		const streamed = await run(
+		const streamed = await execute(
 			{ file: 'node', arguments: ['-e', script] },
 			{ limit: 16, strict: false },
 		)
 		expect(streamed.truncated).toBe(true)
 		expect(streamed.failed).toBe(false)
 
-		const blocking = runSync(
+		const blocking = executeSync(
 			{ file: 'node', arguments: ['-e', script] },
 			{ limit: 16, strict: false },
 		)
@@ -818,17 +818,17 @@ describe('flagship fences', () => {
 	it('refuses the validation fence input before it spawns anything', () => {
 		let thrown: unknown
 		try {
-			runSync({ file: 'node', arguments: ['--version'] }, { timeout: -1 })
+			executeSync({ file: 'node', arguments: ['--version'] }, { timeout: -1 })
 		} catch (error) {
 			thrown = error
 		}
-		if (!isProcessError(thrown)) throw new Error('runSync accepted a negative timeout')
+		if (!isProcessError(thrown)) throw new Error('executeSync accepted a negative timeout')
 		expect(thrown.code).toBe('invalid')
 		expect(thrown.context?.value).toBe(-1)
 	})
 
 	it('builds and wraps the run result the errors fence assembles', () => {
-		const result = buildRunResult({
+		const result = buildExecuteResult({
 			command: 'node -e process.exit(1)',
 			stdout: new TextEncoder().encode('ok'),
 			stderr: new Uint8Array(0),
@@ -841,8 +841,8 @@ describe('flagship fences', () => {
 		})
 
 		expect(result.failed).toBe(true)
-		expect(createRunError(result).code).toBe('spawn')
-		expect(createRunError(result).result).toBe(result)
+		expect(createExecuteError(result).code).toBe('spawn')
+		expect(createExecuteError(result).result).toBe(result)
 	})
 })
 

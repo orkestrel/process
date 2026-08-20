@@ -15,9 +15,9 @@ describe('src core entry', () => {
 			'PROCESS_TIMER',
 			'ProcessError',
 			'createDuplicateError',
+			'createExecuteError',
 			'createInvalidError',
 			'createProtocolError',
-			'createRunError',
 			'isProcessError',
 		])
 	})

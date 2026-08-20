@@ -3,10 +3,10 @@ import type {
 	DetachOptions,
 	ExecutableOptions,
 	ProcessCommand,
-	RunInput,
-	RunOptions,
-	RunResult,
-	RunSyncOptions,
+	ExecuteInput,
+	ExecuteOptions,
+	ExecuteResult,
+	ExecuteSyncOptions,
 	SpawnInput,
 } from '@src/core'
 import type { ProcessChild } from './types.js'
@@ -24,7 +24,7 @@ import {
 } from '@orkestrel/contract'
 import {
 	createInvalidError,
-	createRunError,
+	createExecuteError,
 	PROCESS_CONFIRMATION,
 	PROCESS_GRACE,
 	PROCESS_OUTPUT,
@@ -130,7 +130,7 @@ export function snapshotCommand(command: ProcessCommand): ProcessCommand {
  * Renders one command into its diagnostic command line.
  *
  * @param command - The executable and its argument vector
- * @returns The space-joined command line, for a {@link RunResult} and error messages
+ * @returns The space-joined command line, for an {@link ExecuteResult} and error messages
  *
  * @example
  * ```ts
@@ -779,7 +779,7 @@ export async function stopChild(
 }
 
 /**
- * Builds one settled {@link RunResult} from a completed run's captured bytes and terminal facts.
+ * Builds one settled {@link ExecuteResult} from a completed run's captured bytes and terminal facts.
  *
  * @remarks
  * `failed` is derived: a run failed when it timed out, was aborted, ended on a host fault, was ended
@@ -792,7 +792,7 @@ export async function stopChild(
  *
  * @example
  * ```ts
- * buildRunResult({
+ * buildExecuteResult({
  * 	command: 'git status',
  * 	stdout: Buffer.from('ok'),
  * 	stderr: Buffer.alloc(0),
@@ -805,7 +805,7 @@ export async function stopChild(
  * }).failed // false
  * ```
  */
-export function buildRunResult(input: RunInput): RunResult {
+export function buildExecuteResult(input: ExecuteInput): ExecuteResult {
 	return Object.freeze({
 		command: input.command,
 		stdout: trimHead(input.stdout, input.limit).toString('utf8'),
@@ -840,20 +840,23 @@ export function buildRunResult(input: RunInput): RunResult {
  * after the child itself has gone. Give such a run a `timeout`. The child's `environment` merges over
  * the parent unless the command is `isolated`, then `options.environment` on top, and `options.input`
  * overrides `command.input`. Unless `strict` is `false`, a failed run rejects with a
- * {@link createRunError} carrying the {@link RunResult}. An invalid option or command string rejects
+ * {@link createExecuteError} carrying the {@link ExecuteResult}. An invalid option or command string rejects
  * before the child is spawned, because an async function cannot throw synchronously.
  *
  * @param command - The executable, arguments, and optional environment and input
  * @param options - Working directory, timeout, grace, signal, capture limit, and failure delivery
  * @returns The settled run outcome
- * @throws A {@link ProcessError} coded `invalid` for a malformed option, command string, or batch-bound argument, or one carrying the {@link RunResult} when the run failed and `strict` is not `false`
+ * @throws A {@link ProcessError} coded `invalid` for a malformed option, command string, or batch-bound argument, or one carrying the {@link ExecuteResult} when the run failed and `strict` is not `false`
  *
  * @example
  * ```ts
- * const result = await run({ file: 'git', arguments: ['status'] }, { workspace: process.cwd() })
+ * const result = await execute({ file: 'git', arguments: ['status'] }, { workspace: process.cwd() })
  * ```
  */
-export async function run(command: ProcessCommand, options?: RunOptions): Promise<RunResult> {
+export async function execute(
+	command: ProcessCommand,
+	options?: ExecuteOptions,
+): Promise<ExecuteResult> {
 	const snapshot = snapshotCommand(command)
 	validateCommand(snapshot)
 	validateEnvironment(options?.environment)
@@ -874,7 +877,7 @@ export async function run(command: ProcessCommand, options?: RunOptions): Promis
 		options?.environment,
 	)
 	const plan = buildSpawn(snapshot, { workspace, environment })
-	const settled = Promise.withResolvers<RunResult>()
+	const settled = Promise.withResolvers<ExecuteResult>()
 	const terminate = new AbortController()
 	const cleanup = new AbortController()
 	const finish = new AbortController()
@@ -905,7 +908,7 @@ export async function run(command: ProcessCommand, options?: RunOptions): Promis
 			clearTimeout(confirmTimer)
 			cleanup.abort()
 			settled.resolve(
-				buildRunResult({
+				buildExecuteResult({
 					command: line,
 					stdout: Buffer.concat(outChunks),
 					stderr: Buffer.concat(errChunks),
@@ -973,7 +976,7 @@ export async function run(command: ProcessCommand, options?: RunOptions): Promis
 	}
 
 	const result = await settled.promise
-	if (result.failed && strict) throw createRunError(result, cause)
+	if (result.failed && strict) throw createExecuteError(result, cause)
 	return result
 }
 
@@ -981,27 +984,27 @@ export async function run(command: ProcessCommand, options?: RunOptions): Promis
  * Runs one command to completion synchronously, buffering its output, and returns the outcome.
  *
  * @remarks
- * The synchronous counterpart of {@link run}, spawned through the same resolver and never through a
+ * The synchronous counterpart of {@link execute}, spawned through the same resolver and never through a
  * shell. The host offers no cooperative termination window and no in-flight cancellation, so this
  * contract carries neither. A positive `timeout` ends only the root process and can leave
- * descendants running; use {@link run} or {@link Process} when timeout must terminate the tree. A
+ * descendants running; use {@link execute} or {@link Process} when timeout must terminate the tree. A
  * timeout and an output overflow both end the root with `SIGKILL`: an overflow reports `truncated`
- * and `failed` together and trims the partial output to `limit`, where {@link run} keeps reading and
+ * and `failed` together and trims the partial output to `limit`, where {@link execute} keeps reading and
  * reports `truncated` without failing. The environment and input follow the same merge as
- * {@link run}. Unless `strict` is `false`, a failed run throws a {@link createRunError} carrying the
- * {@link RunResult}.
+ * {@link execute}. Unless `strict` is `false`, a failed run throws a {@link createExecuteError}
+ * carrying the {@link ExecuteResult}.
  *
  * @param command - The executable, arguments, and optional environment and input
  * @param options - Working directory, timeout, capture limit, and failure delivery
  * @returns The run outcome
- * @throws A {@link ProcessError} coded `invalid` for a malformed option, command string, or batch-bound argument, or one carrying the {@link RunResult} when the run failed and `strict` is not `false`
+ * @throws A {@link ProcessError} coded `invalid` for a malformed option, command string, or batch-bound argument, or one carrying the {@link ExecuteResult} when the run failed and `strict` is not `false`
  *
  * @example
  * ```ts
- * const result = runSync({ file: 'git', arguments: ['--version'] }, { strict: false })
+ * const result = executeSync({ file: 'git', arguments: ['--version'] }, { strict: false })
  * ```
  */
-export function runSync(command: ProcessCommand, options?: RunSyncOptions): RunResult {
+export function executeSync(command: ProcessCommand, options?: ExecuteSyncOptions): ExecuteResult {
 	const snapshot = snapshotCommand(command)
 	validateCommand(snapshot)
 	validateEnvironment(options?.environment)
@@ -1033,7 +1036,7 @@ export function runSync(command: ProcessCommand, options?: RunSyncOptions): RunR
 	})
 	const error = outcome.error
 	const fault = error !== undefined && 'code' in error && isString(error.code) ? error.code : ''
-	const result = buildRunResult({
+	const result = buildExecuteResult({
 		command: line,
 		stdout: Buffer.isBuffer(outcome.stdout) ? outcome.stdout : Buffer.alloc(0),
 		stderr: Buffer.isBuffer(outcome.stderr) ? outcome.stderr : Buffer.alloc(0),
@@ -1045,7 +1048,7 @@ export function runSync(command: ProcessCommand, options?: RunSyncOptions): RunR
 		limit,
 		...(error === undefined ? {} : { cause: error }),
 	})
-	if (result.failed && strict) throw createRunError(result, error)
+	if (result.failed && strict) throw createExecuteError(result, error)
 	return result
 }
 

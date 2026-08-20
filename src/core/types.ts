@@ -11,7 +11,7 @@ import type { PROCESS_ERROR_CODES } from './constants.js'
  *   backlog, a byte-bounded stderr tail, a live stderr event, a writable stdin channel, a typed
  *   lifecycle {@link ProcessEventMap} emitter, and bounded termination. The low-level streaming
  *   primitive.
- * - **{@link RunResult} / run** — a one-shot runner that buffers a child to completion and settles
+ * - **{@link ExecuteResult} / execute** — a one-shot runner that buffers a child to completion and settles
  *   with its output and exit, the ergonomic layer for fire-and-collect commands.
  * - **{@link ProcessManagerInterface}** — a keyed registry of live {@link ProcessInterface}
  *   children, launched and stopped by id, observed through its own {@link ProcessManagerEventMap}.
@@ -45,7 +45,7 @@ export interface ProcessCommand {
 
 /** The observed terminal state of a child process: its exit code, or the signal that ended it. */
 export interface ProcessExit {
-	/** The exit code, or `null` when a signal ended the process. A spawn fault reports the host's negative errno for `Process` and `run`. */
+	/** The exit code, or `null` when a signal ended the process. A spawn fault reports the host's negative errno for `Process` and `execute`. */
 	readonly code: number | null
 	/** The terminating signal name, or `null` when the process exited on its own. */
 	readonly signal: string | null
@@ -151,7 +151,7 @@ export interface ProcessOptions {
  * stops at the mark: a consumer attaching after that point receives the retained head, a gap, then
  * the live stream. `evidence` is the decoded, byte-bounded stderr tail — the diagnostic to attach to
  * a failed exit. `truncated` reports that the `lines` stream omitted output, because one of its two
- * retention bounds was reached; the one-shot `RunResult` carries the same name for the same fact
+ * retention bounds was reached; the one-shot `ExecuteResult` carries the same name for the same fact
  * against its own capture `limit`. The typed `emitter` carries the live `stderr` chunks, the child `error` cause, and the
  * terminal `exit`, alongside the `exit` promise. `stop` and `destroy` are idempotent and never reject.
  */
@@ -213,17 +213,17 @@ export interface ProcessInterface {
  * child ending itself, and only the first of them observed is recorded. `truncated` is independent of
  * both: it reports that a captured stream omitted output because it exceeded `limit`, which fails a
  * synchronous run and does not fail an asynchronous one. `ProcessInterface` carries the same name for
- * the same fact against a supervised child's retention bounds. A spawn fault reports the host's negative errno for `run`. A spawn fault reports
- * `null` for `runSync`.
+ * the same fact against a supervised child's retention bounds. A spawn fault reports the host's negative errno for `execute`. A spawn fault reports
+ * `null` for `executeSync`.
  */
-export interface RunResult {
+export interface ExecuteResult {
 	/** The command line that was run, for diagnostics. */
 	readonly command: string
 	/** The captured standard output, byte-bounded by `limit`. */
 	readonly stdout: string
 	/** The captured standard error, byte-bounded by `limit`. */
 	readonly stderr: string
-	/** The exit code. A spawn fault reports the host's negative errno for `run` and `null` for `runSync`. */
+	/** The exit code. A spawn fault reports the host's negative errno for `execute` and `null` for `executeSync`. */
 	readonly code: number | null
 	readonly signal: string | null
 	/** True if the run did not complete successfully. */
@@ -237,14 +237,14 @@ export interface RunResult {
 }
 
 /**
- * The captured bytes and terminal facts one settled {@link RunResult} is built from.
+ * The captured bytes and terminal facts one settled {@link ExecuteResult} is built from.
  *
  * @remarks
  * Both byte fields are trimmed to `limit` on a code-point boundary when the result is built, so a
  * caller passes the raw retained head and never a decoded string. `cause` carries the host fault
  * that ended the run, when one did; its presence alone marks the run failed.
  */
-export interface RunInput {
+export interface ExecuteInput {
 	/** The diagnostic command line. */
 	readonly command: string
 	/** The retained standard-output bytes. */
@@ -271,14 +271,14 @@ export interface RunInput {
  * @remarks
  * A run is a fire-and-collect function, not a lifecycle entity, so it carries no emitter. `strict`
  * decides how a failure is delivered: by default a non-zero exit rejects with a
- * {@link ProcessError} carrying the {@link RunResult}; `strict: false` resolves with the result
+ * {@link ProcessError} carrying the {@link ExecuteResult}; `strict: false` resolves with the result
  * instead, so the caller inspects `failed`. An invalid option or command rejects before the child is
  * spawned, with a {@link ProcessError} coded `invalid`. `input` is standard-input payload and carries
  * no NUL restriction. An unbounded run awaits stdio completion rather than process exit, so give
  * `timeout` a value wherever a descendant may inherit the child's stdio and hold the pipe open past
  * the child's own exit.
  */
-export interface RunOptions {
+export interface ExecuteOptions {
 	/** The working directory. Default: the current working directory. */
 	readonly workspace?: string
 	/** Environment overrides merged over the parent environment; an `undefined` value unsets a key. */
@@ -303,12 +303,12 @@ export interface RunOptions {
  * @remarks
  * The synchronous host offers neither a cooperative termination window nor in-flight cancellation,
  * so this contract carries no `grace` and no `signal`. A `timeout` ends only the root process and can
- * leave descendants running; use `run` or {@link ProcessInterface} when timeout must terminate the
+ * leave descendants running; use `execute` or {@link ProcessInterface} when timeout must terminate the
  * tree. A `timeout` and an output overflow both end the root with `SIGKILL`; an overflow reports
  * `truncated` and `failed` together, which is where the synchronous and asynchronous runners
  * genuinely differ. `input` is standard-input payload and carries no NUL restriction.
  */
-export interface RunSyncOptions {
+export interface ExecuteSyncOptions {
 	/** The working directory. Default: the current working directory. */
 	readonly workspace?: string
 	/** Environment overrides merged over the parent environment; an `undefined` value unsets a key. */
@@ -467,6 +467,6 @@ export interface ProcessErrorOptions {
 	readonly context?: ProcessErrorContext
 	/** The underlying cause, when one exists. */
 	readonly cause?: unknown
-	/** The buffered run outcome, present when a {@link RunResult} produced the failure. */
-	readonly result?: RunResult
+	/** The buffered run outcome, present when an {@link ExecuteResult} produced the failure. */
+	readonly result?: ExecuteResult
 }

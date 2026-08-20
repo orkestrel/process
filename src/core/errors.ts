@@ -2,7 +2,7 @@ import type {
 	ProcessErrorCode,
 	ProcessErrorContext,
 	ProcessErrorOptions,
-	RunResult,
+	ExecuteResult,
 } from './types.js'
 import { holds, isError } from '@orkestrel/contract'
 import { PROCESS_ERROR_CODES } from './constants.js'
@@ -13,7 +13,7 @@ export class ProcessError extends Error {
 	readonly code: ProcessErrorCode
 	readonly context?: ProcessErrorContext
 	/** The buffered run outcome, present when a one-shot run produced the failure. */
-	readonly result?: RunResult
+	readonly result?: ExecuteResult
 
 	/**
 	 * Create a process error.
@@ -111,14 +111,15 @@ export function createInvalidError(subject: string, value: unknown): ProcessErro
  * Creates the failure raised when a run does not complete successfully and rejection is requested.
  *
  * @remarks
- * The category is `timeout` only when the run's own timeout elapsed; every other failure, including
- * an abort and an output overflow, is a `spawn` failure carrying its {@link RunResult}.
+ * The category is `timeout` only when the run's own timeout elapsed; every other failure,
+ * including an abort and an output overflow, is a `spawn` failure carrying its
+ * {@link ExecuteResult}.
  *
  * @param result - The buffered run outcome that failed
  * @param cause - The underlying host fault, when one ended the run
- * @returns A typed run failure carrying its {@link RunResult}
+ * @returns A typed run failure carrying its {@link ExecuteResult}
  */
-export function createRunError(result: RunResult, cause?: unknown): ProcessError {
+export function createExecuteError(result: ExecuteResult, cause?: unknown): ProcessError {
 	let reason = `exited with code ${String(result.code)}`
 	if (result.signal !== null) reason = `was killed by ${result.signal}`
 	if (result.truncated) reason = 'exceeded its output limit'

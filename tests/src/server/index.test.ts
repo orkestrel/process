@@ -7,12 +7,14 @@ describe('src server entry', () => {
 			'Process',
 			'ProcessManager',
 			'buildExecutableCandidates',
+			'buildExecuteResult',
 			'buildPlatformSpawn',
-			'buildRunResult',
 			'buildSpawn',
 			'createProcess',
 			'createProcessManager',
 			'detach',
+			'execute',
+			'executeSync',
 			'formatCommand',
 			'isExited',
 			'isFile',
@@ -25,8 +27,6 @@ describe('src server entry', () => {
 			'readVariable',
 			'resolveExecutable',
 			'retainChunk',
-			'run',
-			'runSync',
 			'snapshotCommand',
 			'stopChild',
 			'trimHead',
@@ -46,8 +46,8 @@ describe('src server entry', () => {
 		expect(typeof entry.ProcessManager).toBe('function')
 		expect(typeof entry.createProcess).toBe('function')
 		expect(typeof entry.createProcessManager).toBe('function')
-		expect(typeof entry.run).toBe('function')
-		expect(typeof entry.runSync).toBe('function')
+		expect(typeof entry.execute).toBe('function')
+		expect(typeof entry.executeSync).toBe('function')
 		expect(typeof entry.detach).toBe('function')
 	})
 })

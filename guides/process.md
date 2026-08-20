@@ -2,8 +2,8 @@
 
 > A typed child-process toolkit in three tiers. `Process` supervises one child with framed stdout
 > lines under a bounded backlog, a byte-bounded stderr tail, a live `stderr` event, a writable stdin
-> channel, a typed lifecycle emitter, and bounded termination. `run` and `runSync` are the one-shot
-> runners that buffer a child to completion and settle with a `RunResult`; `detach` is the
+> channel, a typed lifecycle emitter, and bounded termination. `execute` and `executeSync` are the one-shot
+> runners that buffer a child to completion and settle with an `ExecuteResult`; `detach` is the
 > fire-and-forget spawn that returns without waiting. `ProcessManager` is a keyed registry of live
 > children, launched and stopped by id and observed through its own emitter. No spawn in this package
 > uses an implicit shell, and an argument a batch target could corrupt is refused rather than passed,
@@ -36,7 +36,7 @@ await child.destroy()
 ```
 
 The three tiers divide by lifetime. Reach for `Process` when you need the live stream, the stdin
-channel, or the lifecycle events. Reach for `run` or `runSync` when you want the buffered output and
+channel, or the lifecycle events. Reach for `execute` or `executeSync` when you want the buffered output and
 the exit in one call. Reach for `ProcessManager` when you supervise several children by id.
 
 ### Factories
@@ -52,11 +52,11 @@ The interface-oriented constructors, from `@orkestrel/process/server`.
 
 The one-shot and fire-and-forget spawns, from `@orkestrel/process/server`.
 
-| API       | Kind     | Summary                                                                    |
-| --------- | -------- | -------------------------------------------------------------------------- |
-| `run`     | function | Run a command to completion, buffer its output, and resolve a `RunResult`. |
-| `runSync` | function | The blocking counterpart of `run`, returning the `RunResult` directly.     |
-| `detach`  | function | Spawn a command detached with no stdio and return without waiting for it.  |
+| API           | Kind     | Summary                                                                         |
+| ------------- | -------- | ------------------------------------------------------------------------------- |
+| `execute`     | function | Run a command to completion, buffer its output, and resolve an `ExecuteResult`. |
+| `executeSync` | function | The blocking counterpart of `execute`, returning the `ExecuteResult` directly.  |
+| `detach`      | function | Spawn a command detached with no stdio and return without waiting for it.       |
 
 ### Entities
 
@@ -86,7 +86,7 @@ The constructors for each failure category, from `@orkestrel/process`.
 | `createDuplicateError` | function | The `duplicate`-coded failure a registry raises on a reused live id.      |
 | `createProtocolError`  | function | The `protocol`-coded failure a launch raises on a destroyed registry.     |
 | `createInvalidError`   | function | The `invalid`-coded failure a refused public input raises before a spawn. |
-| `createRunError`       | function | The failure a rejecting run raises, carrying its `RunResult`.             |
+| `createExecuteError`   | function | The failure a rejecting run raises, carrying its `ExecuteResult`.         |
 
 ### Command helpers
 
@@ -112,12 +112,12 @@ The resolution and environment building blocks every spawn composes, from
 
 The byte-bounding and result-assembly building blocks, from `@orkestrel/process/server`.
 
-| API              | Kind     | Summary                                                                  |
-| ---------------- | -------- | ------------------------------------------------------------------------ |
-| `trimHead`       | function | Keep at most `limit` leading bytes without splitting a UTF-8 sequence.   |
-| `trimTail`       | function | Keep at most `limit` trailing bytes without splitting a UTF-8 sequence.  |
-| `retainChunk`    | function | Retain one delivered chunk up to a limit and tally what the stream sent. |
-| `buildRunResult` | function | Assemble one frozen `RunResult` from captured bytes and terminal facts.  |
+| API                  | Kind     | Summary                                                                     |
+| -------------------- | -------- | --------------------------------------------------------------------------- |
+| `trimHead`           | function | Keep at most `limit` leading bytes without splitting a UTF-8 sequence.      |
+| `trimTail`           | function | Keep at most `limit` trailing bytes without splitting a UTF-8 sequence.     |
+| `retainChunk`        | function | Retain one delivered chunk up to a limit and tally what the stream sent.    |
+| `buildExecuteResult` | function | Assemble one frozen `ExecuteResult` from captured bytes and terminal facts. |
 
 ### Termination helpers
 
@@ -174,10 +174,10 @@ The contracts and options, all from `@orkestrel/process`.
 | `ProcessEventMap`         | type      | A `Process`'s events — `stderr(chunk)`, `error(cause)`, and `exit(exit)`.                            |
 | `ProcessOptions`          | interface | `Process` construction — `command`, `workspace`, and the optional settings.                          |
 | `ProcessInterface`        | interface | The supervised-child surface — `emitter` / `lines` / `evidence` / `truncated` / `exit` plus methods. |
-| `RunResult`               | interface | A one-shot outcome — the captured output, the exit, and the four state flags.                        |
-| `RunInput`                | interface | The captured bytes and terminal facts one settled `RunResult` is built from.                         |
-| `RunOptions`              | interface | `run` options — workspace, environment, input, timeout, grace, signal, strict, limit.                |
-| `RunSyncOptions`          | interface | `runSync` options — the same set without `grace` and without `signal`.                               |
+| `ExecuteResult`           | interface | A one-shot outcome — the captured output, the exit, and the four state flags.                        |
+| `ExecuteInput`            | interface | The captured bytes and terminal facts one settled `ExecuteResult` is built from.                     |
+| `ExecuteOptions`          | interface | `execute` options — workspace, environment, input, timeout, grace, signal, strict, limit.            |
+| `ExecuteSyncOptions`      | interface | `executeSync` options — the same set without `grace` and without `signal`.                           |
 | `DetachOptions`           | interface | `detach` options — the working directory the detached child starts in.                               |
 | `ProcessManagerEventMap`  | type      | A manager's events — `launch(id)` and `exit(id, exit)`.                                              |
 | `ProcessManagerOptions`   | interface | `ProcessManager` construction — initial `on` listeners and an `error` handler.                       |
@@ -354,8 +354,8 @@ worst-case termination spends more than one of them. On a POSIX host the coopera
 `SIGTERM` is bounded by `grace` and the wait after `SIGKILL` by `PROCESS_CONFIRMATION`. On Windows
 the `taskkill` call is bounded by `PROCESS_CONFIRMATION` and the wait that follows it by another.
 
-`runSync` ends only the root process when its `timeout` elapses. A descendant can remain live because
-the synchronous host exposes no tree-termination phase. Use `run` or `Process` when the timeout must
+`executeSync` ends only the root process when its `timeout` elapses. A descendant can remain live because
+the synchronous host exposes no tree-termination phase. Use `execute` or `Process` when the timeout must
 terminate the child tree.
 
 The two hosts terminate differently, and only one of them has a cooperative phase.
@@ -403,7 +403,7 @@ await child.destroy()
 ## Command resolution
 
 No spawn in this package uses an implicit shell. `buildSpawn` resolves one command into the file, the
-argument vector, and a `verbatim` flag, and every entry point — `Process`, `run`, `runSync`, and
+argument vector, and a `verbatim` flag, and every entry point — `Process`, `execute`, `executeSync`, and
 `detach` — spawns through it. The host boundary passes its platform into the pure candidate and batch
 decisions. A metacharacter in an argument therefore reaches the child as data
 rather than as syntax: the one path that builds a command line at all — a Windows `.cmd` or `.bat`
@@ -495,10 +495,10 @@ Read the difference back from the child rather than from the merge, because the 
 word on it:
 
 ```ts
-import { runSync } from '@orkestrel/process/server'
+import { executeSync } from '@orkestrel/process/server'
 
 const printer = 'process.stdout.write(Object.keys(process.env).sort().join(","))'
-const keys = runSync({
+const keys = executeSync({
 	file: process.execPath,
 	arguments: ['-e', printer],
 	environment: { TOKEN: 'a' },
@@ -511,11 +511,11 @@ keys.includes('SYSTEMROOT') // true on Windows, false on a POSIX host
 
 ## One-shot runs
 
-`run` runs a command to completion, buffers its output, and resolves a `RunResult`. `runSync` is the
-blocking counterpart. Use either when you want the exit and the captured output together, without
-managing a live stream.
+The `execute` function runs a command to completion, buffers its output, and resolves an
+`ExecuteResult`. The `executeSync` function is the blocking counterpart. Use either when you want
+the exit and the captured output together, without managing a live stream.
 
-`RunOptions` are all optional:
+`ExecuteOptions` are all optional:
 
 | Option        | Type                                  | Default               | Meaning                                                                  |
 | ------------- | ------------------------------------- | --------------------- | ------------------------------------------------------------------------ |
@@ -528,16 +528,16 @@ managing a live stream.
 | `strict`      | `boolean`                             | `true`                | When `false`, resolve with the result on failure instead of rejecting.   |
 | `limit`       | `number`                              | `PROCESS_OUTPUT`      | Maximum captured bytes for stdout and for stderr, each.                  |
 
-`RunSyncOptions` carries the same set without `grace` and without `signal`, because the synchronous
+`ExecuteSyncOptions` carries the same set without `grace` and without `signal`, because the synchronous
 host offers neither a cooperative termination window nor in-flight cancellation.
 
 `input` is standard-input payload and carries no NUL restriction on either option shape:
 
 ```ts
-import { runSync } from '@orkestrel/process/server'
+import { executeSync } from '@orkestrel/process/server'
 
 const input = `left${String.fromCodePoint(0)}right`
-const echoed = runSync(
+const echoed = executeSync(
 	{ file: process.execPath, arguments: ['-e', 'process.stdin.pipe(process.stdout)'] },
 	{ input },
 )
@@ -547,12 +547,12 @@ echoed.stdout === input // true
 A run with no `timeout` and no `signal` is unbounded, and what it waits for is stdio completion
 rather than process exit. A descendant that inherits the child's stdio holds those pipes open after
 the child itself has exited, and the run stays pending for as long as the descendant lives. Give
-`run` a `timeout` wherever the command may start a descendant that inherits its stdio; the bound
+`execute` a `timeout` wherever the command may start a descendant that inherits its stdio; the bound
 below applies to a terminated run and cannot rescue one that was never bounded.
 
 ### The result family
 
-`RunResult` reports the outcome through four booleans. `failed` is derived from the rest of the
+`ExecuteResult` reports the outcome through four booleans. `failed` is derived from the rest of the
 result, and the other three each report one specific thing that happened.
 
 | Field       | True when                                                                  |
@@ -569,22 +569,25 @@ the two ways the run ended the child rather than the child ending itself, and on
 observed is recorded, so they are never both `true`.
 
 A spawn fault reports the host's negative errno in `ProcessExit.code` and an asynchronous
-`RunResult.code`. The synchronous `runSync` result reports `null` instead.
+`ExecuteResult.code`. The synchronous `executeSync` result reports `null` instead.
 
-By default a failed run rejects with a `ProcessError` carrying the `RunResult` on its `result`
+By default a failed run rejects with a `ProcessError` carrying the `ExecuteResult` on its `result`
 property. An expired run carries code `timeout`; every other failure carries code `spawn`. Passing
 `strict: false` settles with the result even on failure, so you inspect `failed` yourself.
 
 ```ts
-import { run } from '@orkestrel/process/server'
+import { execute } from '@orkestrel/process/server'
 
 // Rejecting form (the default): a failed run throws.
-const version = await run({ file: 'node', arguments: ['--version'] })
+const version = await execute({ file: 'node', arguments: ['--version'] })
 version.failed // false
 version.stdout.startsWith('v') // true
 
 // Non-rejecting form: inspect the outcome directly.
-const outcome = await run({ file: 'node', arguments: ['-e', 'process.exit(3)'] }, { strict: false })
+const outcome = await execute(
+	{ file: 'node', arguments: ['-e', 'process.exit(3)'] },
+	{ strict: false },
+)
 outcome.failed // true
 outcome.code // 3
 ```
@@ -601,23 +604,26 @@ are trimmed to `limit`, so a stream that stopped exactly at the cap and a stream
 the same length. Where the distinction matters, bound the two streams separately by running the
 command twice, or capture the child's output yourself.
 
-`run` keeps reading past the cap, discards the excess, and reports `truncated` without failing the
-run. `runSync` hands `limit` to the host as its buffer ceiling, so an overflow ends the child with
+`execute` keeps reading past the cap, discards the excess, and reports `truncated` without failing the
+run. `executeSync` hands `limit` to the host as its buffer ceiling, so an overflow ends the child with
 `SIGKILL` and reports `truncated` and `failed` together, with the partial output trimmed to `limit`.
 
 ```ts
-import { run, runSync } from '@orkestrel/process/server'
+import { execute, executeSync } from '@orkestrel/process/server'
 
 const script = 'process.stdout.write("x".repeat(4096))'
 
-const streamed = await run(
+const streamed = await execute(
 	{ file: 'node', arguments: ['-e', script] },
 	{ limit: 16, strict: false },
 )
 streamed.truncated // true
 streamed.failed // false
 
-const blocking = runSync({ file: 'node', arguments: ['-e', script] }, { limit: 16, strict: false })
+const blocking = executeSync(
+	{ file: 'node', arguments: ['-e', script] },
+	{ limit: 16, strict: false },
+)
 blocking.truncated // true
 blocking.failed // true
 blocking.signal // 'SIGKILL'
@@ -625,10 +631,10 @@ blocking.signal // 'SIGKILL'
 
 ### Where the two runners differ
 
-`runSync` is not a synchronous mirror of `run`. Read the differences before you swap one for the
+`executeSync` is not a synchronous mirror of `execute`. Read the differences before you swap one for the
 other.
 
-| Subject         | `run`                                                     | `runSync`                                            |
+| Subject         | `execute`                                                 | `executeSync`                                        |
 | --------------- | --------------------------------------------------------- | ---------------------------------------------------- |
 | Cooperative end | `grace` between `SIGTERM` and `SIGKILL` on a POSIX host.  | None; a timeout ends the root alone with `SIGKILL`.  |
 | Descendants     | A timeout or abort terminates the child tree.             | A timeout can leave descendants running.             |
@@ -640,7 +646,7 @@ other.
 Both share the rest: the same resolver and no implicit shell, the same environment merge, the same
 `input` override, the same `limit` bounding, and the same `strict` behavior.
 
-`run` also bounds what follows termination. After a timeout or an abort ends the child, `stopChild`
+`execute` also bounds what follows termination. After a timeout or an abort ends the child, `stopChild`
 runs and the outcome is then awaited for one further `PROCESS_CONFIRMATION`, so a descendant still
 holding the child's stdio cannot keep a terminated run pending forever. Nothing bounds a run that was
 never terminated: with no `timeout` and no `signal` there is no deadline to reach, and the run waits
@@ -748,7 +754,7 @@ at 0.0.4 or later: a copy earlier than 0.0.4 stamps no brand, so an error it thr
 type. The guard admits exactly the codes `PROCESS_ERROR_CODES` declares, so a code added there is
 admitted with no second edit.
 
-A run failure carries its `RunResult` on `error.result`, and its command line, exit `code`, and
+A run failure carries its `ExecuteResult` on `error.result`, and its command line, exit `code`, and
 `signal` on `error.context`. A duplicate-id and a protocol failure carry the offending `id` on
 `error.context`. A validation failure carries the rejected input on `error.context.value`. The
 underlying cause, when one exists, is retained on `error.cause`.
@@ -762,16 +768,16 @@ createInvalidError("option 'grace'", -1).code // 'invalid'
 createInvalidError("option 'grace'", -1).context?.value // -1
 ```
 
-Every public entry point validates before it spawns. `run` rejects rather than throwing, because an
-async function cannot throw synchronously; the `Process` constructor, `runSync`, and `detach` all
+Every public entry point validates before it spawns. `execute` rejects rather than throwing, because an
+async function cannot throw synchronously; the `Process` constructor, `executeSync`, and `detach` all
 throw.
 
 ```ts
-import { runSync } from '@orkestrel/process/server'
+import { executeSync } from '@orkestrel/process/server'
 import { isProcessError } from '@orkestrel/process'
 
 try {
-	runSync({ file: 'node', arguments: ['--version'] }, { timeout: -1 })
+	executeSync({ file: 'node', arguments: ['--version'] }, { timeout: -1 })
 } catch (error) {
 	if (isProcessError(error)) {
 		error.code // 'invalid'
@@ -780,14 +786,14 @@ try {
 }
 ```
 
-`createRunError` is the factory behind a rejecting run, and `buildRunResult` assembles the result it
+`createExecuteError` is the factory behind a rejecting run, and `buildExecuteResult` assembles the result it
 carries.
 
 ```ts
-import { buildRunResult } from '@orkestrel/process/server'
-import { createRunError } from '@orkestrel/process'
+import { buildExecuteResult } from '@orkestrel/process/server'
+import { createExecuteError } from '@orkestrel/process'
 
-const result = buildRunResult({
+const result = buildExecuteResult({
 	command: 'node -e process.exit(1)',
 	stdout: new TextEncoder().encode('ok'),
 	stderr: new Uint8Array(0),
@@ -800,8 +806,8 @@ const result = buildRunResult({
 })
 
 result.failed // true
-createRunError(result).code // 'spawn'
-createRunError(result).result === result // true
+createExecuteError(result).code // 'spawn'
+createExecuteError(result).result === result // true
 ```
 
 ## Observing
@@ -842,9 +848,9 @@ child.emitter.on('exit', ({ code, signal }) => metrics.record('worker.exit', { c
 ### Collect output in one call
 
 ```ts
-import { run } from '@orkestrel/process/server'
+import { execute } from '@orkestrel/process/server'
 
-const { stdout } = await run({ file: 'git', arguments: ['rev-parse', 'HEAD'] })
+const { stdout } = await execute({ file: 'git', arguments: ['rev-parse', 'HEAD'] })
 const commit = stdout.trim()
 ```
 
@@ -940,7 +946,7 @@ isExited(reporter) // whether the native exit arrived
   after the mark was exceeded receives the retained head, a gap, then the live stream.
 - **Iterate `lines` once and fan out from that loop** — the stream is single-consumer, so a second
   iterator takes lines away from the first rather than repeating them.
-- **Give `run` a `timeout` when the command can start a descendant** — an unbounded run waits on
+- **Give `execute` a `timeout` when the command can start a descendant** — an unbounded run waits on
   stdio completion, and a descendant that inherited the child's pipes holds it open past the child's
   own exit.
 - **Read `evidence` on a failed exit** — the byte-bounded stderr tail is the diagnostic to attach,
@@ -953,13 +959,13 @@ isExited(reporter) // whether the native exit arrived
 Three names on this surface read against a house rule, and each is settled here rather than
 rediscovered.
 
-| Name                   | Ruling                                                                                                                                                                                                                      |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `run`, `runSync`       | Retained. The lifecycle verb table governs an entity's members, and these are standalone command runners rather than members of a lifecycle. `runSync` takes the ecosystem `Sync` suffix.                                   |
-| `process`, `processes` | Retained. A registry exposes its contents as accessors named for what they hold, so the manager reads `manager.process(id)` and `manager.processes()`.                                                                      |
-| `strict`               | Replaces `reject`. A boolean reads as an adjective asserting a state, and `reject` named the reaction rather than the mode. `strict: false` resolves with the failed result.                                                |
-| `evidence`, `backlog`  | Byte bounds are named for their subject where an entity has several, so a `Process` carries `evidence` and `backlog` rather than two flavours of `limit`. A run has one bound, so it is named for the bound: `limit`.       |
-| `truncated`            | One name on both surfaces, because it reports one fact: the surface omitted output. Each entity names its own bound — a `Process` omits `lines` past a retention bound, and a `RunResult` omits captured text past `limit`. |
+| Name                     | Ruling                                                                                                                                                                                                                           |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `execute`, `executeSync` | Use the fixed lifecycle verb for primary work to completion. `executeSync` keeps the ecosystem `Sync` suffix.                                                                                                                    |
+| `process`, `processes`   | Retained. A registry exposes its contents as accessors named for what they hold, so the manager reads `manager.process(id)` and `manager.processes()`.                                                                           |
+| `strict`                 | Replaces `reject`. A boolean reads as an adjective asserting a state, and `reject` named the reaction rather than the mode. `strict: false` resolves with the failed result.                                                     |
+| `evidence`, `backlog`    | Byte bounds are named for their subject where an entity has several, so a `Process` carries `evidence` and `backlog` rather than two flavours of `limit`. A run has one bound, so it is named for the bound: `limit`.            |
+| `truncated`              | One name on both surfaces, because it reports one fact: the surface omitted output. Each entity names its own bound — a `Process` omits `lines` past a retention bound, and an `ExecuteResult` omits captured text past `limit`. |
 
 ## Tests
 
@@ -992,7 +998,7 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   a teardown started from inside the caller's own option getter, the unforgeable eviction and its
   ordering, the query surface, the three `stop` overloads, and emitter-last `destroy`.
 - [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the building blocks:
-  `run`, `runSync`, and `detach` outcomes, the resolver under `PATHEXT` and an extension-bearing
+  `execute`, `executeSync`, and `detach` outcomes, the resolver under `PATHEXT` and an extension-bearing
   name, both platform inputs to the quoted batch builder and its percent-sign refusal, the
   environment merge under both platform inputs, the UTF-8-safe byte bounds, the validators, and the
   termination helpers.

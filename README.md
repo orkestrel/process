@@ -5,8 +5,8 @@ child: stdout is framed into lines under a bounded backlog, stderr is forwarded
 live and kept as a byte-bounded tail, stdin is a writable channel, and
 termination is bounded and reports whether the real exit arrived — `SIGTERM` then
 `SIGKILL` after a grace window on a POSIX host, a whole-tree kill on Windows.
-`run` and `runSync` are the one-shot runners — they buffer a child to completion
-and settle with a `RunResult` carrying the captured output, the exit, and
+`execute` and `executeSync` are the one-shot runners — they buffer a child to completion
+and settle with an `ExecuteResult` carrying the captured output, the exit, and
 `failed` / `expired` / `aborted` / `truncated`, rejecting with a `ProcessError`
 by default or resolving the result when you pass `strict: false`.
 `ProcessManager` is a keyed registry of live children: `launch` spawns and
@@ -32,10 +32,10 @@ npm install @orkestrel/process
 ## Usage
 
 ```ts
-import { run } from '@orkestrel/process/server'
+import { execute } from '@orkestrel/process/server'
 
 // One-shot: buffer a command to completion and read its output and exit.
-const { stdout } = await run({ file: 'node', arguments: ['--version'] })
+const { stdout } = await execute({ file: 'node', arguments: ['--version'] })
 console.log(stdout.trim()) // for example, "v22.12.0"
 ```
 
@@ -56,7 +56,7 @@ await child.destroy()
 
 ## Guide
 
-For the full surface — the supervised `Process`, the `run` / `runSync` / `detach`
+For the full surface — the supervised `Process`, the `execute` / `executeSync` / `detach`
 spawns, the keyed `ProcessManager`, the observable `emitter`, the `ProcessError`
 failure type, and the lower-level helpers — see
 [`guides/process.md`](guides/process.md).
@@ -65,7 +65,7 @@ failure type, and the lower-level helpers — see
 
 Two typed entry points per the `exports` field in `package.json`: the
 host-independent contracts, constants, errors, and `isProcessError` guard from
-`@orkestrel/process`, and the Node engine — `Process`, `run`, `runSync`,
+`@orkestrel/process`, and the Node engine — `Process`, `execute`, `executeSync`,
 `detach`, `ProcessManager`, and their factories and helpers — from
 `@orkestrel/process/server`.
 

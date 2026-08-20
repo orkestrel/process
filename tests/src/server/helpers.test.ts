@@ -13,7 +13,7 @@ import { isProcessError, ProcessError } from '@src/core'
 import {
 	buildExecutableCandidates,
 	buildPlatformSpawn,
-	buildRunResult,
+	buildExecuteResult,
 	buildSpawn,
 	detach,
 	formatCommand,
@@ -28,8 +28,8 @@ import {
 	readVariable,
 	resolveExecutable,
 	retainChunk,
-	run,
-	runSync,
+	execute,
+	executeSync,
 	snapshotCommand,
 	stopChild,
 	trimHead,
@@ -296,7 +296,7 @@ describe('buildSpawn', () => {
 
 	it('passes a percent-delimited argument literally to a target that is not batch', () => {
 		const plan = buildSpawn({ file: process.execPath, arguments: ['%s', '%PATH%'] })
-		const result = runSync(
+		const result = executeSync(
 			{ file: process.execPath, arguments: [resolveChildFixture(), 'args', '%s', '%PATH%'] },
 			{ workspace: process.cwd(), strict: false },
 		)
@@ -319,7 +319,7 @@ describe('buildSpawn', () => {
 
 				let thrown: unknown
 				try {
-					runSync({ file, arguments: ['%PATH%'] }, { workspace: process.cwd(), strict: false })
+					executeSync({ file, arguments: ['%PATH%'] }, { workspace: process.cwd(), strict: false })
 				} catch (error) {
 					thrown = error
 				}
@@ -343,7 +343,7 @@ describe('buildSpawn', () => {
 				scratch.write('with space/greet.cmd', '@echo off\r\necho cmd-ran %1\r\n')
 				const file = join(scratch.path, 'with space', 'greet.cmd')
 
-				const result = runSync({ file, arguments: ['hello'] }, { strict: false })
+				const result = executeSync({ file, arguments: ['hello'] }, { strict: false })
 
 				expect(result.failed).toBe(false)
 				expect(result.stdout).toContain('cmd-ran hello')
@@ -605,10 +605,10 @@ describe('mergeEnvironment', () => {
 	})
 })
 
-describe('buildRunResult', () => {
+describe('buildExecuteResult', () => {
 	it('derives failure from the exit, a signal, an expiry, an abort, or a host fault', () => {
 		const empty = Buffer.alloc(0)
-		const ok = buildRunResult({
+		const ok = buildExecuteResult({
 			command: 'c',
 			stdout: Buffer.from('out'),
 			stderr: Buffer.from('err'),
@@ -632,7 +632,7 @@ describe('buildRunResult', () => {
 			truncated: false,
 		})
 		expect(
-			buildRunResult({
+			buildExecuteResult({
 				command: 'c',
 				stdout: empty,
 				stderr: empty,
@@ -645,7 +645,7 @@ describe('buildRunResult', () => {
 			}).failed,
 		).toBe(true)
 		expect(
-			buildRunResult({
+			buildExecuteResult({
 				command: 'c',
 				stdout: empty,
 				stderr: empty,
@@ -658,7 +658,7 @@ describe('buildRunResult', () => {
 			}).failed,
 		).toBe(true)
 		expect(
-			buildRunResult({
+			buildExecuteResult({
 				command: 'c',
 				stdout: empty,
 				stderr: empty,
@@ -671,7 +671,7 @@ describe('buildRunResult', () => {
 			}).failed,
 		).toBe(true)
 		expect(
-			buildRunResult({
+			buildExecuteResult({
 				command: 'c',
 				stdout: empty,
 				stderr: empty,
@@ -684,7 +684,7 @@ describe('buildRunResult', () => {
 			}).failed,
 		).toBe(true)
 		expect(
-			buildRunResult({
+			buildExecuteResult({
 				command: 'c',
 				stdout: empty,
 				stderr: empty,
@@ -700,7 +700,7 @@ describe('buildRunResult', () => {
 	})
 
 	it('keeps truncation out of the failure derivation', () => {
-		const result = buildRunResult({
+		const result = buildExecuteResult({
 			command: 'c',
 			stdout: Buffer.from('output'),
 			stderr: Buffer.alloc(0),
@@ -775,10 +775,10 @@ describe('killProcess', () => {
 	)
 })
 
-describe('run', () => {
+describe('execute', () => {
 	it('spawns the same command file that it validated', async () => {
 		let reads = 0
-		const result = await run(
+		const result = await execute(
 			{
 				get file() {
 					reads += 1
@@ -794,7 +794,7 @@ describe('run', () => {
 	})
 
 	it('buffers a successful run and reports it did not fail', async () => {
-		const result = await run(childCommand('exit', '0'), { workspace: process.cwd() })
+		const result = await execute(childCommand('exit', '0'), { workspace: process.cwd() })
 		expect(result.failed).toBe(false)
 		expect(result.code).toBe(0)
 		expect(result.stdout).toContain('ran:0')
@@ -806,7 +806,7 @@ describe('run', () => {
 	it('rejects a failed run with a process error carrying the result', async () => {
 		let thrown: unknown
 		try {
-			await run(childCommand('exit', '3'), { workspace: process.cwd() })
+			await execute(childCommand('exit', '3'), { workspace: process.cwd() })
 		} catch (error) {
 			thrown = error
 		}
@@ -815,14 +815,17 @@ describe('run', () => {
 	})
 
 	it('resolves a failed run with the outcome when strict is false', async () => {
-		const result = await run(childCommand('exit', '4'), { workspace: process.cwd(), strict: false })
+		const result = await execute(childCommand('exit', '4'), {
+			workspace: process.cwd(),
+			strict: false,
+		})
 		expect(result.failed).toBe(true)
 		expect(result.code).toBe(4)
 		expect(result.expired).toBe(false)
 	})
 
 	it('reports a run that outlasted its timeout as expired rather than aborted', async () => {
-		const result = await run(childCommand('hang'), {
+		const result = await execute(childCommand('hang'), {
 			workspace: process.cwd(),
 			timeout: 100,
 			grace: 20,
@@ -835,7 +838,7 @@ describe('run', () => {
 
 	it('reports an externally aborted run as aborted rather than expired', async () => {
 		const controller = new AbortController()
-		const pending = run(childCommand('sleep'), {
+		const pending = execute(childCommand('sleep'), {
 			workspace: process.cwd(),
 			grace: 20,
 			signal: controller.signal,
@@ -855,7 +858,7 @@ describe('run', () => {
 		const controller = new AbortController()
 		const late = setTimeout(() => controller.abort(), 2_000)
 		try {
-			const result = await run(childCommand('hang'), {
+			const result = await execute(childCommand('hang'), {
 				workspace: process.cwd(),
 				timeout: 100,
 				grace: 20,
@@ -873,7 +876,7 @@ describe('run', () => {
 
 	it('reports the abort when it fires before an armed timeout', async () => {
 		const controller = new AbortController()
-		const pending = run(childCommand('hang'), {
+		const pending = execute(childCommand('hang'), {
 			workspace: process.cwd(),
 			timeout: 5_000,
 			grace: 20,
@@ -894,7 +897,7 @@ describe('run', () => {
 		const controller = new AbortController()
 		const together = setTimeout(() => controller.abort(), 100)
 		try {
-			const result = await run(childCommand('hang'), {
+			const result = await execute(childCommand('hang'), {
 				workspace: process.cwd(),
 				timeout: 100,
 				grace: 20,
@@ -910,7 +913,7 @@ describe('run', () => {
 	})
 
 	it('caps a huge capture at the limit and reports truncation without failing', async () => {
-		const result = await run(childCommand('chatty'), {
+		const result = await execute(childCommand('chatty'), {
 			workspace: process.cwd(),
 			limit: 1_024,
 			strict: false,
@@ -926,7 +929,7 @@ describe('run', () => {
 	it('threads the spawn cause onto the rejected process error', async () => {
 		let thrown: unknown
 		try {
-			await run(
+			await execute(
 				{ file: 'orkestrel-nonexistent-binary.exe', arguments: [] },
 				{ workspace: process.cwd() },
 			)
@@ -940,14 +943,14 @@ describe('run', () => {
 	// The documented difference between the two runners on a spawn fault. The errno itself is the
 	// host's, so its sign is the property a caller can act on and the property asserted.
 	it('reports the host negative errno when the command cannot be spawned', async () => {
-		const result = await run(
+		const result = await execute(
 			{ file: 'orkestrel-nonexistent-binary.exe', arguments: [] },
 			{ workspace: process.cwd(), strict: false },
 		)
 
 		expect(result.failed).toBe(true)
 		const code = result.code
-		if (code === null) throw new Error('run reported no code for a spawn fault')
+		if (code === null) throw new Error('execute reported no code for a spawn fault')
 		expect(code).toBeLessThan(0)
 	})
 
@@ -955,7 +958,7 @@ describe('run', () => {
 		const nul = String.fromCodePoint(0)
 		let thrown: unknown
 		try {
-			await run(childCommand('exit', '0'), {
+			await execute(childCommand('exit', '0'), {
 				workspace: process.cwd(),
 				environment: { PROCESS_TEST_KEY: `a${nul}b` },
 			})
@@ -968,9 +971,9 @@ describe('run', () => {
 	})
 })
 
-describe('runSync', () => {
+describe('executeSync', () => {
 	it(
-		'leaves an established grandchild running after a root-only timeout where run ends the tree',
+		'leaves an established grandchild running after a root-only timeout where asynchronous execution ends the tree',
 		{ timeout: 20_000 },
 		async () => {
 			const scratch = createScratch()
@@ -981,7 +984,7 @@ describe('runSync', () => {
 				// The root must outlive the grandchild's interpreter startup, or this measures bootstrap
 				// rather than termination. Node bootstraps in 45.7-49.9 ms on this host, so the former
 				// 50 ms root timeout was a coin flip and lost three times in six.
-				const blocking = runSync(childCommand('tree-write', blockingMarker), {
+				const blocking = executeSync(childCommand('tree-write', blockingMarker), {
 					workspace: process.cwd(),
 					timeout: 400,
 					strict: false,
@@ -1001,7 +1004,7 @@ describe('runSync', () => {
 				// fixture's 250 ms write delay. The grandchild announces readiness 91-105 ms after the
 				// call on this host and writes ~250 ms after that, so 200 ms sits between the two with
 				// margin at both ends, where the former 50 ms sat inside the bootstrap window.
-				const streamed = await run(childCommand('tree-write', streamedMarker), {
+				const streamed = await execute(childCommand('tree-write', streamedMarker), {
 					workspace: process.cwd(),
 					timeout: 200,
 					grace: 20,
@@ -1029,7 +1032,7 @@ describe('runSync', () => {
 		// input is stdin payload rather than a spawn-bound string, so it carries no NUL restriction.
 		// Passing the string through unconverted made spawnSync reject it with Unknown encoding: buffer.
 		const payload = 'before\u0000after\nstop\n'
-		const result = runSync(childCommand('echo'), {
+		const result = executeSync(childCommand('echo'), {
 			workspace: process.cwd(),
 			input: payload,
 			strict: false,
@@ -1042,7 +1045,7 @@ describe('runSync', () => {
 
 	it('spawns the same command file that it validated', () => {
 		let reads = 0
-		const result = runSync(
+		const result = executeSync(
 			{
 				get file() {
 					reads += 1
@@ -1061,7 +1064,7 @@ describe('runSync', () => {
 		let reads = 0
 		let thrown: unknown
 		try {
-			runSync({
+			executeSync({
 				get file() {
 					reads += 1
 					return reads === 1 ? `${process.execPath}\0invalid` : process.execPath
@@ -1078,13 +1081,16 @@ describe('runSync', () => {
 	})
 
 	it('buffers a successful synchronous run', () => {
-		const result = runSync(childCommand('exit', '0'), { workspace: process.cwd() })
+		const result = executeSync(childCommand('exit', '0'), { workspace: process.cwd() })
 		expect(result.failed).toBe(false)
 		expect(result.stdout).toContain('ran:0')
 	})
 
 	it('resolves a failed synchronous run with the outcome when strict is false', () => {
-		const result = runSync(childCommand('exit', '5'), { workspace: process.cwd(), strict: false })
+		const result = executeSync(childCommand('exit', '5'), {
+			workspace: process.cwd(),
+			strict: false,
+		})
 		expect(result.failed).toBe(true)
 		expect(result.code).toBe(5)
 	})
@@ -1092,7 +1098,7 @@ describe('runSync', () => {
 	it('throws a process error for a failed synchronous run by default', () => {
 		let thrown: unknown
 		try {
-			runSync(childCommand('exit', '6'), { workspace: process.cwd() })
+			executeSync(childCommand('exit', '6'), { workspace: process.cwd() })
 		} catch (error) {
 			thrown = error
 		}
@@ -1101,7 +1107,7 @@ describe('runSync', () => {
 	})
 
 	it('fails a synchronous run whose output overflowed the limit', () => {
-		const result = runSync(childCommand('chatty'), {
+		const result = executeSync(childCommand('chatty'), {
 			workspace: process.cwd(),
 			limit: 1_024,
 			strict: false,
@@ -1113,7 +1119,7 @@ describe('runSync', () => {
 	})
 
 	it('passes a shell metacharacter through as one argument', () => {
-		const result = runSync(
+		const result = executeSync(
 			{ file: 'node', arguments: [resolveChildFixture(), 'args', 'a&b'] },
 			{ workspace: process.cwd(), strict: false },
 		)
@@ -1125,7 +1131,7 @@ describe('runSync', () => {
 	it('threads the spawn cause onto the rejected process error', () => {
 		let thrown: unknown
 		try {
-			runSync(
+			executeSync(
 				{ file: 'orkestrel-nonexistent-binary.exe', arguments: [] },
 				{ workspace: process.cwd() },
 			)
@@ -1137,7 +1143,7 @@ describe('runSync', () => {
 	})
 
 	it('reports null rather than an errno when the command cannot be spawned', () => {
-		const result = runSync(
+		const result = executeSync(
 			{ file: 'orkestrel-nonexistent-binary.exe', arguments: [] },
 			{ workspace: process.cwd(), strict: false },
 		)
@@ -1150,7 +1156,7 @@ describe('runSync', () => {
 		const nul = String.fromCodePoint(0)
 		let thrown: unknown
 		try {
-			runSync(childCommand('exit', '0'), {
+			executeSync(childCommand('exit', '0'), {
 				workspace: process.cwd(),
 				environment: { PROCESS_TEST_KEY: `a${nul}b` },
 			})
