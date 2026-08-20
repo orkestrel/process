@@ -73,6 +73,10 @@ export class Process implements ProcessInterface {
 	#requested = false
 	#paused = false
 	#truncated = false
+	// A guard reads `#terminating`, never `#stopping !== undefined`. `#kill` assigns the boolean in
+	// its synchronous prefix, which runs while `stop` is still evaluating
+	// `this.#stopping = this.#kill()`, so the boolean also covers the retention and backpressure
+	// decisions taken while `#stopping` is still `undefined`.
 	#terminating = false
 	#closed = false
 	#ended = false

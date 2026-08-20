@@ -44,6 +44,9 @@ export class ProcessManager implements ProcessManagerInterface {
 	readonly #emitter: Emitter<ProcessManagerEventMap>
 	readonly #children = new Map<string, ProcessInterface>()
 	readonly #ids = new Set<string>()
+	// A guard reads `#destroying`, never `#ending !== undefined`. `destroy` assigns the boolean before
+	// it assigns the barrier, so the boolean also covers the synchronous prefix of the teardown, which
+	// runs while `#ending` is still `undefined`.
 	#destroying = false
 	#ending: Promise<void> | undefined
 

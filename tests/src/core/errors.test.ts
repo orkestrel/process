@@ -1,47 +1,28 @@
-import * as entry from '@src/core'
+import { PROCESS_ERROR_CODES, ProcessError, createDuplicateError, isProcessError } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { isConstructor, isFunction, isRecord } from '@orkestrel/contract'
 
-describe('src core entry', () => {
-	it('exposes the process contract surface', () => {
-		expect(Object.keys(entry).sort()).toStrictEqual([
-			'PROCESS_BACKLOG',
-			'PROCESS_CONFIRMATION',
-			'PROCESS_ERROR_CODES',
-			'PROCESS_EVIDENCE',
-			'PROCESS_GRACE',
-			'PROCESS_OUTPUT',
-			'PROCESS_PATHEXT',
-			'PROCESS_TIMER',
-			'ProcessError',
-			'createDuplicateError',
-			'createExecuteError',
-			'createInvalidError',
-			'createProtocolError',
-			'isProcessError',
-		])
-	})
-
+describe('process error', () => {
 	it('narrows its own error and refuses a plain Error', () => {
-		const error = entry.createDuplicateError('unit')
-		expect(entry.isProcessError(error)).toBe(true)
+		const error = createDuplicateError('unit')
+		expect(isProcessError(error)).toBe(true)
 		expect(error.code).toBe('duplicate')
 		expect(error.context).toStrictEqual({ id: 'unit' })
-		expect(entry.isProcessError(new Error('spawn failed'))).toBe(false)
+		expect(isProcessError(new Error('spawn failed'))).toBe(false)
 	})
 
 	// The guard's admitted set is compared against the declared tuple, and the refusal control is
 	// drawn from outside it, so the pair pins the exact set rather than re-deriving it.
 	it('admits every declared code and refuses one the tuple does not declare', () => {
-		for (const code of entry.PROCESS_ERROR_CODES) {
-			expect(entry.isProcessError(new entry.ProcessError('declared', { code }))).toBe(true)
+		for (const code of PROCESS_ERROR_CODES) {
+			expect(isProcessError(new ProcessError('declared', { code }))).toBe(true)
 		}
 		const undeclared = Object.defineProperty(
 			Object.assign(new Error('undeclared'), { code: 'stalled', name: 'ProcessError' }),
 			Symbol.for('@orkestrel/process.error'),
 			{ value: true },
 		)
-		expect(entry.isProcessError(undeclared)).toBe(false)
+		expect(isProcessError(undeclared)).toBe(false)
 	})
 
 	// The same recognition across the two built module formats is proved in

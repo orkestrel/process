@@ -548,7 +548,8 @@ A run with no `timeout` and no `signal` is unbounded, and what it waits for is s
 rather than process exit. A descendant that inherits the child's stdio holds those pipes open after
 the child itself has exited, and the run stays pending for as long as the descendant lives. Give
 `execute` a `timeout` wherever the command may start a descendant that inherits its stdio; the bound
-below applies to a terminated run and cannot rescue one that was never bounded.
+that the later [Where the two runners differ](#where-the-two-runners-differ) section describes
+applies to a terminated run and cannot rescue one that was never bounded.
 
 ### The result family
 
@@ -719,10 +720,10 @@ await manager.destroy()
 returned, and its fault surfaces through its own `exit` and `error` event rather than from `launch`.
 
 - A `duplicate`-coded `ProcessError` when the id is already live.
-- A `protocol`-coded `ProcessError` after `destroy` has begun. The check runs again once the child
+- A `protocol`-coded `ProcessError` after `destroy` has begun. The check runs again after the child
   exists, because reading an option runs your own code and that code can start the teardown; a
-  registry being destroyed adopts nothing, so the child it just spawned is destroyed and the launch
-  is still refused. That second refusal carries a bounded residual: the child is torn down
+  registry being destroyed adopts nothing, so the child it has already spawned is destroyed and the
+  launch is still refused. That second refusal carries a bounded residual: the child is torn down
   asynchronously, within `grace` plus the confirmation window, and the `destroy` barrier settled
   before the refusal, so awaiting it does not cover that teardown.
 - An `invalid`-coded `ProcessError` when an option or command string is malformed. The id is
@@ -985,8 +986,10 @@ npx vitest run --config vite.config.ts --no-cache --project src:server
 
 The pure decision rows do not prove Windows end to end. They prove the decisions.
 
-- [`tests/src/core/index.test.ts`](../tests/src/core/index.test.ts) — the core barrel re-exports the
-  types, constants, and error surface.
+- [`tests/src/core/errors.test.ts`](../tests/src/core/errors.test.ts) — the error surface:
+  `isProcessError` narrowing its own error and refusing a plain `Error`, the codes the guard admits
+  compared against the declared `PROCESS_ERROR_CODES` tuple with a refusal control drawn from
+  outside it, and recognition of an error constructed by a second source copy of the module.
 - [`tests/src/server/Process.test.ts`](../tests/src/server/Process.test.ts) — the supervised child:
   line framing including a trailing partial line, the bounded backlog under both consumer policies
   and under a flood of empty lines, the byte-bounded `evidence` tail and live `stderr` event, `send`
@@ -1002,8 +1005,6 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   name, both platform inputs to the quoted batch builder and its percent-sign refusal, the
   environment merge under both platform inputs, the UTF-8-safe byte bounds, the validators, and the
   termination helpers.
-- [`tests/src/server/index.test.ts`](../tests/src/server/index.test.ts) — the server barrel
-  re-exports the factories, runners, engine classes, and helpers.
 - [`tests/guides.test.ts`](../tests/guides.test.ts) — this guide: every documented name resolves,
   every public export is documented, and every flagship fence returns what its comments claim.
 - [`tests/distribution.test.ts`](../tests/distribution.test.ts) — the artifact a consumer installs:
