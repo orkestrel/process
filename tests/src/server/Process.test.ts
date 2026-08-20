@@ -404,12 +404,16 @@ describe('Process', () => {
 		expect(exit).toEqual({ code: 0, signal: null })
 	})
 
-	it('reports no process id for a spawn that produced no child, and still settles exit', async () => {
+	it('declares the pid, code, and signal members, reports no id and a null live pair for a spawn that produced no child, and settles exit with the fault code', async () => {
 		const child = createProcess({
 			command: { file: 'orkestrel-nonexistent-binary', arguments: [] },
 			workspace: process.cwd(),
 			grace: 20,
 		})
+
+		// An absent member also reads undefined, so presence is pinned apart from the value: the
+		// getters live on the class, and this line is false on a class that never declared them.
+		expect('pid' in child && 'code' in child && 'signal' in child).toBe(true)
 
 		const spawned = child.pid
 		const live = { code: child.code, signal: child.signal }
