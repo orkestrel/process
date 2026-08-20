@@ -7,9 +7,9 @@
 > returns without waiting. `ProcessManager` is a keyed registry of live children, launched and
 > stopped by id and observed through its own emitter. No spawn in this package uses an implicit
 > shell, and an argument a batch target could corrupt is refused rather than passed, so a
-> metacharacter in an argument is data rather than syntax. Every contract is host-independent; the
-> Node implementations ship from `@orkestrel/process/server`, and the errors, constants, and types
-> from `@orkestrel/process`.
+> metacharacter in an argument is data rather than syntax. The host-independent contracts, errors,
+> constants, and types ship from `@orkestrel/process`. The Node implementations and Node-side
+> contracts ship from `@orkestrel/process/server`.
 >
 > Source: [`src/core`](../src/core) (the contracts) and [`src/server`](../src/server) (the Node
 > engine).
@@ -727,9 +727,9 @@ returned, and its fault surfaces through its own `exit` and `error` event rather
 - A `protocol`-coded `ProcessError` after `destroy` has begun. The check runs again after the child
   exists, because reading an option runs your own code and that code can start the teardown; a
   registry being destroyed adopts nothing, so the child it has already spawned is destroyed and the
-  launch is still refused. That later refusal carries a bounded residual: the child is torn down
-  asynchronously, within `grace` plus the confirmation window, and the `destroy` barrier settled
-  before the refusal, so awaiting it does not cover that teardown.
+  launch is still refused. That later refusal carries a bounded residual. The `protocol` refusal
+  throws synchronously before the `destroy` barrier settles. The barrier does not cover the child's
+  asynchronous teardown, which finishes within `grace` plus the confirmation window.
 - An `invalid`-coded `ProcessError` when an option or command string is malformed. The id is
   reserved before the child is constructed and released when construction throws, so a refused launch
   strands no key.

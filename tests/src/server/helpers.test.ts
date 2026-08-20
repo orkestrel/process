@@ -422,8 +422,10 @@ describe('validateCommand', () => {
 			validateCommand({ file: 'git', arguments: [], environment: { KEY: `a${nul}b` } }),
 		).toThrow(ProcessError)
 	})
+})
 
-	it('codes a refused command as invalid and carries the rejected value', () => {
+describe('validateWorkspace', () => {
+	it('codes a refused workspace as invalid and carries the rejected value', () => {
 		let thrown: unknown
 		try {
 			validateWorkspace('')

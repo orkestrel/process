@@ -6,6 +6,7 @@
 
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
+import { getEventListeners } from 'node:events'
 import { existsSync, readFileSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -87,6 +88,81 @@ const MODULES = Object.freeze({
 	'@orkestrel/process': 'src/core',
 	'@orkestrel/process/server': 'src/server',
 })
+/** The names each face must refuse from its neighbouring face. */
+const REFUSALS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+	'@orkestrel/process': Object.freeze([
+		'CaptureCounts',
+		'Process',
+		'ProcessChild',
+		'ProcessManager',
+		'buildExecutableCandidates',
+		'buildExecuteResult',
+		'buildPlatformSpawn',
+		'buildSpawn',
+		'createProcess',
+		'createProcessManager',
+		'detach',
+		'execute',
+		'executeSync',
+		'formatCommand',
+		'isExited',
+		'isFile',
+		'killProcess',
+		'killTree',
+		'mergeEnvironment',
+		'mergePlatformEnvironment',
+		'quoteArgument',
+		'readPlatformVariable',
+		'readVariable',
+		'resolveExecutable',
+		'retainChunk',
+		'snapshotCommand',
+		'stopChild',
+		'trimHead',
+		'trimTail',
+		'validateBytes',
+		'validateCommand',
+		'validateEnvironment',
+		'validateText',
+		'validateTimer',
+		'validateWorkspace',
+		'waitForExit',
+	]),
+	'@orkestrel/process/server': Object.freeze([
+		'DetachOptions',
+		'ExecutableOptions',
+		'ExecuteInput',
+		'ExecuteOptions',
+		'ExecuteResult',
+		'ExecuteSyncOptions',
+		'PROCESS_BACKLOG',
+		'PROCESS_CONFIRMATION',
+		'PROCESS_ERROR_CODES',
+		'PROCESS_EVIDENCE',
+		'PROCESS_GRACE',
+		'PROCESS_OUTPUT',
+		'PROCESS_PATHEXT',
+		'PROCESS_TIMER',
+		'ProcessCommand',
+		'ProcessError',
+		'ProcessErrorCode',
+		'ProcessErrorContext',
+		'ProcessErrorOptions',
+		'ProcessEventMap',
+		'ProcessExit',
+		'ProcessInterface',
+		'ProcessManagerEventMap',
+		'ProcessManagerInterface',
+		'ProcessManagerOptions',
+		'ProcessOptions',
+		'SpawnInput',
+		'createDuplicateError',
+		'createExecuteError',
+		'createInvalidError',
+		'createProtocolError',
+		'isProcessError',
+	]),
+})
 /**
  * Declarations deliberately kept out of a barrel, as `symbolKey` strings.
  *
@@ -136,33 +212,19 @@ it('manifest lists at least one guide', () => {
 })
 
 describe('public package faces', () => {
-	// One refusal row per face, bound against its neighbour. The control is every name the
-	// neighbour publishes and this face does not, read off the neighbour's live Source: a literal
-	// covers one ordered pair and goes stale silently, while the derived difference cannot.
-	// Asserting that difference non-empty is the precondition the refusal needs to mean anything,
-	// and it is what a widened `module` breaks — a face that swallows its neighbour's module leaves
-	// that neighbour nothing of its own to refuse.
+	// Each literal refusal list is independent of the live Source that the assertion reads. A
+	// widened `module` can therefore leak a neighbouring face without changing its expectation.
 	for (const face of FACES) {
-		const own = createSource({ files, module: face.module })
-			.surface()
-			.map((symbol) => symbol.name)
-		const neighbours = FACES.filter((other) => other !== face).map((other) =>
-			Array.from(
-				new Set(
-					createSource({ files, module: other.module })
-						.surface()
-						.map((symbol) => symbol.name),
-				),
-			).filter((name) => !own.includes(name)),
+		const foreign = requireValue(
+			REFUSALS[face.specifier],
+			`Missing refusal list: ${face.specifier}`,
 		)
 
 		it(`publishes none of a neighbouring face's names on ${face.specifier}`, () => {
 			const source = requireValue(SOURCES.get(face.specifier), 'Unmapped specifier')
 			const published = source.surface().map((symbol) => symbol.name)
-			for (const foreign of neighbours) {
-				expect(foreign.length).toBeGreaterThan(0)
-				expect(foreign.filter((name) => published.includes(name))).toEqual([])
-			}
+			expect(foreign.length).toBeGreaterThan(0)
+			expect(foreign.filter((name) => published.includes(name))).toEqual([])
 		})
 	}
 
@@ -735,6 +797,40 @@ describe('flagship fences', () => {
 		expect(executeSync(snapshot, { strict: false }).failed).toBe(false)
 	})
 
+	it('states and proves the protocol refusal precedes the destroy barrier', async () => {
+		const guide = requireValue(
+			files['guides/process.md'],
+			'Missing file: guides/process.md',
+		).replace(/\s+/gu, ' ')
+		expect(guide).toContain(
+			'The `protocol` refusal throws synchronously before the `destroy` barrier settles.',
+		)
+
+		const manager = createProcessManager()
+		const order: string[] = []
+		let ending: Promise<void> | undefined
+		let thrown: unknown
+		try {
+			manager.launch('racer', {
+				command: { file: process.execPath, arguments: ['-e', ''] },
+				workspace: process.cwd(),
+				get grace() {
+					ending = manager.destroy()
+					void ending.then(() => order.push('barrier'))
+					return 20
+				},
+			})
+		} catch (error) {
+			thrown = error
+			order.push('refusal')
+		}
+		if (ending === undefined) throw new Error('The getter did not start destruction')
+		await ending
+
+		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('protocol')
+		expect(order).toEqual(['refusal', 'barrier'])
+	})
+
 	it('releases the abort listener destroy registered and the exit listener waitForExit registered', async () => {
 		const guide = requireValue(
 			files['guides/process.md'],
@@ -750,23 +846,28 @@ describe('flagship fences', () => {
 			grace: 20,
 			signal: controller.signal,
 		})
-		await child.destroy()
+		try {
+			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(1)
+			await child.destroy()
 
-		const listeners: Array<() => void> = []
-		await waitForExit(
-			{
-				exitCode: null,
-				signalCode: null,
-				once: (_event, listener) => listeners.push(listener),
-				off: (_event, listener) => listeners.splice(listeners.indexOf(listener), 1),
-			},
-			20,
-		)
+			const listeners: Array<() => void> = []
+			await waitForExit(
+				{
+					exitCode: null,
+					signalCode: null,
+					once: (_event, listener) => listeners.push(listener),
+					off: (_event, listener) => listeners.splice(listeners.indexOf(listener), 1),
+				},
+				20,
+			)
 
-		expect(listeners).toEqual([])
-		// A released abort listener leaves the signal with nothing to run, so a later abort is inert.
-		controller.abort()
-		expect(controller.signal.aborted).toBe(true)
+			expect(listeners).toEqual([])
+			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
+			controller.abort()
+			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
+		} finally {
+			await child.destroy()
+		}
 	})
 
 	it('recognizes a branded error by brand and refuses an unbranded one', () => {
