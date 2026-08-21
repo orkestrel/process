@@ -2,11 +2,10 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { holds } from '@orkestrel/contract'
-import { waitForDelay } from '@orkestrel/test'
+import { waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { isProcessError } from '@src/core'
 import { detach } from '@src/server'
-import { waitForCondition } from '../../../setup.js'
 import { childCommand, resolveChildFixture } from '../../../setupServer.js'
 
 describe('detach', () => {
@@ -106,11 +105,12 @@ describe('detach', () => {
 					{ workspace: process.cwd() },
 				)
 				await waitForCondition(
+					'the supervisor pid file and the grouped and detached heartbeat markers appearing on disk',
 					() =>
 						existsSync(supervisorPid) &&
 						existsSync(`${grouped}.beat`) &&
 						existsSync(`${detached}.beat`),
-					10_000,
+					{ budget: 10_000 },
 				)
 				const supervisor = Number.parseInt(readFileSync(supervisorPid, 'utf8'), 10)
 				const survivor = Number.parseInt(readFileSync(`${detached}.pid`, 'utf8'), 10)
@@ -120,7 +120,11 @@ describe('detach', () => {
 					process.kill(-supervisor, 'SIGINT')
 
 					// The control fires first: the child still in the group receives the interrupt.
-					await waitForCondition(() => existsSync(`${grouped}.sigint`), 10_000)
+					await waitForCondition(
+						'the grouped child recording the interrupt it received',
+						() => existsSync(`${grouped}.sigint`),
+						{ budget: 10_000 },
+					)
 					await waitForDelay(200)
 					expect(existsSync(`${detached}.sigint`)).toBe(false)
 

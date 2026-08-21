@@ -2,11 +2,10 @@ import { Buffer } from 'node:buffer'
 import { existsSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { waitForDelay } from '@orkestrel/test'
+import { waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { isProcessError } from '@src/core'
 import { execute, executeSync } from '@src/server'
-import { waitForCondition } from '../../../setup.js'
 import { childCommand, resolveChildFixture } from '../../../setupServer.js'
 
 describe('executeSync', () => {
@@ -34,8 +33,16 @@ describe('executeSync', () => {
 				// grandchild finished starting rather than whether termination reached it. Waiting for the
 				// fixture's readiness line removes that race: measured without it, three of six trials
 				// never wrote at all.
-				await waitForCondition(() => existsSync(`${blockingMarker}.ready`), 6_000)
-				await waitForCondition(() => existsSync(blockingMarker), 6_000)
+				await waitForCondition(
+					"the blocking grandchild's readiness marker appearing on disk",
+					() => existsSync(`${blockingMarker}.ready`),
+					{ budget: 6_000 },
+				)
+				await waitForCondition(
+					'the blocking grandchild writing its marker file',
+					() => existsSync(blockingMarker),
+					{ budget: 6_000 },
+				)
 				expect(existsSync(blockingMarker)).toBe(true)
 
 				// The root deadline has to clear the grandchild's own bootstrap and still fall inside the
@@ -53,7 +60,11 @@ describe('executeSync', () => {
 				// The readiness marker is what separates "termination reached an established grandchild"
 				// from "the grandchild never started". Without it the negative below passes for either
 				// reason; with it, a grandchild killed during bootstrap rejects here instead.
-				await waitForCondition(() => existsSync(`${streamedMarker}.ready`), 6_000)
+				await waitForCondition(
+					"the streamed grandchild's readiness marker appearing on disk",
+					() => existsSync(`${streamedMarker}.ready`),
+					{ budget: 6_000 },
+				)
 
 				// Tree termination reaches the grandchild, so its marker never appears. A fixed wait is the
 				// right instrument for a negative: it bounds how long absence must hold, sized above the
