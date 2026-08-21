@@ -7,7 +7,13 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
 import { Emitter } from '@orkestrel/emitter'
-import { PROCESS_BACKLOG, PROCESS_CONFIRMATION, PROCESS_EVIDENCE, PROCESS_GRACE } from '@src/core'
+import {
+	ProcessError,
+	PROCESS_BACKLOG,
+	PROCESS_CONFIRMATION,
+	PROCESS_EVIDENCE,
+	PROCESS_GRACE,
+} from '@src/core'
 import {
 	buildSpawn,
 	mergeEnvironment,
@@ -34,8 +40,11 @@ import {
  * overshoot it by the line that crossed it plus the rest of its delivered chunk. Termination never
  * reapplies backpressure, and retained lines are capped at twice `backlog`; later lines are dropped
  * and `truncated` reports the omission. Standard error is decoded and forwarded live as the `stderr`
- * event while a byte-bounded raw tail is retained as `evidence`. The typed `emitter` also carries the
- * child `error` cause on a spawn fault and the terminal `exit`, alongside the `exit` promise. `pid`,
+ * event while a byte-bounded raw tail is retained as `evidence`. The typed `emitter` also carries a
+ * child `error` cause on a spawn fault, a `protocol` {@link ProcessError} on a host-reported stdin
+ * fault after the constructor input phase, and the terminal `exit`, alongside the `exit` promise.
+ * A fault arising from the constructor-supplied `input` write or its closing `end` stays quiet
+ * because the package initiated that sequence. `pid`,
  * `code`, and `signal` read the spawned child directly, so the native exit is readable before the
  * `exit` promise settles on stdio close. `stop` ends the whole tree and reports whether the native
  * exit was observed; `destroy` stops the child, destroys stdin so every pending `send` settles, and
@@ -61,6 +70,7 @@ export class Process implements ProcessInterface {
 	readonly #grace: number
 	readonly #evidence: number
 	readonly #backlog: number
+	readonly #delivery: number
 	readonly #decoder = new StringDecoder('utf8')
 	readonly #exit = Promise.withResolvers<ProcessExit>()
 	readonly #lines: AsyncIterable<string>
@@ -68,6 +78,10 @@ export class Process implements ProcessInterface {
 	readonly #waiters: Array<PromiseWithResolvers<IteratorResult<string, void>>> = []
 	readonly #signal: AbortSignal | undefined
 	readonly #abort: EventListener | undefined
+	readonly #writes = new Map<
+		PromiseWithResolvers<boolean>,
+		ReturnType<typeof setTimeout> | undefined
+	>()
 	#tail: Buffer = Buffer.alloc(0)
 	#head = 0
 	#pending = 0
@@ -81,6 +95,8 @@ export class Process implements ProcessInterface {
 	#terminating = false
 	#closed = false
 	#ended = false
+	#input = 0
+	#failure: Error | undefined
 	#stopping: Promise<boolean> | undefined
 	#ending: Promise<void> | undefined
 
@@ -100,6 +116,7 @@ export class Process implements ProcessInterface {
 		const grace = options.grace
 		const evidence = options.evidence
 		const backlog = options.backlog
+		const delivery = options.delivery
 		const writable = options.writable
 		const signal = options.signal
 		const on = options.on
@@ -109,6 +126,7 @@ export class Process implements ProcessInterface {
 		validateCommand(command)
 		validateWorkspace(workspace)
 		validateTimer(grace, "option 'grace'")
+		validateTimer(delivery, "option 'delivery'")
 		validateBytes(evidence, "option 'evidence'", 0)
 		validateBytes(backlog, "option 'backlog'", 1)
 		this.#emitter = new Emitter<ProcessEventMap>({
@@ -118,6 +136,7 @@ export class Process implements ProcessInterface {
 		this.#grace = grace ?? PROCESS_GRACE
 		this.#evidence = evidence ?? PROCESS_EVIDENCE
 		this.#backlog = backlog ?? PROCESS_BACKLOG
+		this.#delivery = delivery ?? 0
 		this.#signal = signal
 		this.#lines = Object.freeze({ [Symbol.asyncIterator]: this.#iterate.bind(this) })
 		const childEnvironment = mergeEnvironment(command.isolated === true, command.environment)
@@ -135,10 +154,16 @@ export class Process implements ProcessInterface {
 		this.#reader.once('close', this.#finish.bind(this))
 		this.#child.once('error', (cause: unknown) => this.#emitter.emit('error', cause))
 		this.#child.once('close', this.#close.bind(this))
-		this.#child.stdin.on('error', () => undefined)
+		this.#child.stdin.on('error', (cause: Error) => this.#failInputStream(cause))
 		this.#child.stderr.on('data', this.#retain.bind(this))
-		if (input !== undefined) this.#child.stdin.write(input)
-		if (writable !== true) this.#child.stdin.end()
+		if (input !== undefined) {
+			this.#input += 1
+			this.#child.stdin.write(input, this.#completeInput.bind(this))
+		}
+		if (writable !== true) {
+			this.#input += 1
+			this.#child.stdin.end(this.#completeInput.bind(this))
+		}
 		if (signal !== undefined) {
 			this.#abort = this.#terminate.bind(this)
 			signal.addEventListener('abort', this.#abort, { once: true })
@@ -190,24 +215,36 @@ export class Process implements ProcessInterface {
 	 * Write one line to the open standard-input channel.
 	 *
 	 * @remarks
-	 * Never rejects. The promise settles when the host reports the line handled, so a line written to
-	 * a child that is not reading stays pending until the child drains it or the channel closes. Every
-	 * terminal teardown path destroys stdin, so a pending write always settles by teardown; a caller
-	 * that needs its own deadline arms a timer and calls `stop`.
+	 * Never rejects. `true` means the host accepted the bytes without reporting a fault; it does not
+	 * prove that the child read them. An ordinary write settles when the kernel accepts it. Only a
+	 * full pipe can hold the write unconfirmed. The `delivery` option can bound that wait, and every
+	 * terminal teardown path settles pending writes. On Windows 11 with Node v24.18.1, measured on
+	 * 2026-08-21, a child that closes its own file descriptor 0 can leave the parent pipe writable:
+	 * the write can settle `true` without a callback error or a stream error while the child remains
+	 * alive. After `stop` or `destroy` begins, a later call settles `false`. Version 0.0.4 could settle
+	 * that call `true` before teardown destroyed the pipe; returning `false` avoids claiming delivery
+	 * for bytes the package is about to discard.
 	 *
 	 * @param text - The line text without its trailing newline
-	 * @returns True when the line reached the host without error; false when the channel was closed, destroyed, ended, or the write failed
+	 * @returns True when the host accepted the bytes without reporting a fault; false when the channel was closed, destroyed, ended, failed, or remained unconfirmed through `delivery`
 	 */
 	send(text: string): Promise<boolean> {
 		const stdin = this.#child.stdin
-		if (this.#closed || !stdin.writable) return Promise.resolve(false)
-		const settled = Promise.withResolvers<boolean>()
-		try {
-			stdin.write(`${text}\n`, (error?: Error | null) => {
-				settled.resolve(error === undefined || error === null)
-			})
-		} catch {
+		if (this.#closed || this.#terminating || this.#failure !== undefined || !stdin.writable) {
 			return Promise.resolve(false)
+		}
+		const settled = Promise.withResolvers<boolean>()
+		this.#writes.set(settled, undefined)
+		try {
+			stdin.write(`${text}\n`, this.#confirmWrite.bind(this, settled))
+		} catch {
+			this.#settleWrite(settled, false)
+			return settled.promise
+		}
+		if (this.#delivery > 0 && this.#writes.has(settled)) {
+			const timer = setTimeout(() => this.#settleWrite(settled, false), this.#delivery)
+			timer.unref()
+			this.#writes.set(settled, timer)
 		}
 		return settled.promise
 	}
@@ -345,6 +382,51 @@ export class Process implements ProcessInterface {
 		this.#signal.removeEventListener('abort', this.#abort)
 	}
 
+	#confirmWrite(settled: PromiseWithResolvers<boolean>, error?: Error | null): void {
+		if (error === undefined || error === null) {
+			this.#settleWrite(settled, true)
+			return
+		}
+		this.#failInputCallback(error)
+	}
+
+	#completeInput(): void {
+		this.#input -= 1
+	}
+
+	#settleWrite(settled: PromiseWithResolvers<boolean>, accepted: boolean): void {
+		if (!this.#writes.has(settled)) return
+		const timer = this.#writes.get(settled)
+		this.#writes.delete(settled)
+		clearTimeout(timer)
+		settled.resolve(accepted)
+	}
+
+	#settleWrites(): void {
+		for (const settled of this.#writes.keys()) this.#settleWrite(settled, false)
+	}
+
+	#failInputStream(cause: Error): void {
+		// `writableEnded` keeps a package-ended or consumer-ended channel quiet after its input phase
+		// settles. A `writable: true` channel never sets it until ended, so a later host fault remains
+		// classifiable after `#input` reaches zero.
+		if (this.#child.stdin.writableEnded || this.#input > 0) {
+			this.#settleWrites()
+			return
+		}
+		this.#failInputCallback(cause)
+	}
+
+	#failInputCallback(cause: Error): void {
+		if (this.#failure !== undefined || this.#terminating) return
+		this.#failure = cause
+		this.#settleWrites()
+		this.#emitter.emit(
+			'error',
+			new ProcessError('The standard-input channel failed', { code: 'protocol', cause }),
+		)
+	}
+
 	#capBacklog(): void {
 		const limit = this.#backlog * 2
 		while (this.#pending > limit && this.#queue.length > this.#head) {
@@ -363,6 +445,7 @@ export class Process implements ProcessInterface {
 		this.#capBacklog()
 		this.#relieve()
 		const confirmed = await stopChild(this.#child, this.#grace, PROCESS_CONFIRMATION)
+		this.#settleWrites()
 		this.#child.stdin.destroy()
 		return confirmed
 	}

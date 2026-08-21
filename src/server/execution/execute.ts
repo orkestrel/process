@@ -2,7 +2,13 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { ExecuteOptions, ExecuteResult, ProcessCommand } from '@src/core'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
-import { createExecuteError, PROCESS_CONFIRMATION, PROCESS_GRACE, PROCESS_OUTPUT } from '@src/core'
+import {
+	createExecuteError,
+	PROCESS_CONFIRMATION,
+	PROCESS_GRACE,
+	PROCESS_OUTPUT,
+	ProcessError,
+} from '@src/core'
 import { Retention } from '../Retention.js'
 import {
 	buildExecuteResult,
@@ -33,9 +39,13 @@ import {
  * rather than on process exit, so a descendant that inherited the child's stdio holds the run open
  * after the child itself has gone. Give such a run a `timeout`. The child's `environment` merges over
  * the parent unless the command is `isolated`, then `options.environment` on top, and `options.input`
- * overrides `command.input`. Unless `strict` is `false`, a failed run rejects with a
- * {@link createExecuteError} carrying the {@link ExecuteResult}. An invalid option or command string rejects
- * before the child is spawned, because an async function cannot throw synchronously.
+ * overrides `command.input`. A host fault while writing that input terminates the run by design and
+ * marks its result failed; a strict rejection carries the host fault as its cause. This differs
+ * from `Process` constructor input, whose package-initiated input phase stays quiet. Unless `strict`
+ * is `false`, a failed run rejects with a {@link ProcessError} carrying the {@link ExecuteResult};
+ * {@link createExecuteError} constructs every rejection outside the input-fault door. An invalid
+ * option or command string rejects before the child is spawned, because an async function cannot
+ * throw synchronously.
  *
  * @param command - The executable, arguments, and optional environment and input
  * @param options - Working directory, timeout, grace, signal, capture limit, and failure delivery
@@ -83,6 +93,7 @@ export async function execute(
 	const terminate = new AbortController()
 	const cleanup = new AbortController()
 	const finish = new AbortController()
+	const inputFailure = new AbortController()
 	const outChunks: Buffer[] = []
 	const errChunks: Buffer[] = []
 	const outRetention = new Retention()
@@ -140,7 +151,17 @@ export async function execute(
 		{ once: true },
 	)
 
-	child.stdin.on('error', () => undefined)
+	inputFailure.signal.addEventListener(
+		'abort',
+		() => {
+			if (finish.signal.aborted) return
+			cause = inputFailure.signal.reason
+			terminate.abort()
+		},
+		{ once: true },
+	)
+
+	child.stdin.on('error', (error: Error) => inputFailure.abort(error))
 	child.stdout.on('data', (chunk: unknown) => {
 		const retained = outRetention.retain(chunk, limit)
 		if (retained !== undefined) outChunks.push(retained)
@@ -159,7 +180,11 @@ export async function execute(
 	})
 	child.once('close', () => finish.abort())
 
-	if (text !== undefined) child.stdin.write(text)
+	if (text !== undefined) {
+		child.stdin.write(text, (error?: Error | null) => {
+			if (error !== undefined && error !== null) inputFailure.abort(error)
+		})
+	}
 	child.stdin.end()
 	if (timeout > 0) {
 		timeoutTimer = setTimeout(() => {
@@ -183,6 +208,16 @@ export async function execute(
 	}
 
 	const result = await settled.promise
-	if (result.failed && strict) throw createExecuteError(result, cause)
+	if (result.failed && strict) {
+		if (cause !== undefined && cause === inputFailure.signal.reason) {
+			throw new ProcessError(`Command '${result.command}' failed while writing standard input`, {
+				code: 'input',
+				context: { command: result.command, code: result.code, signal: result.signal },
+				cause: inputFailure.signal.reason,
+				result,
+			})
+		}
+		throw createExecuteError(result, cause)
+	}
 	return result
 }

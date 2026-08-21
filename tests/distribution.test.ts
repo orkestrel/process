@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
 import * as ts from 'typescript'
 
+// The `prepublishOnly` gate runs `build` before `test:distribution`, so suppressing `prepack` here
+// packs that built artifact; a standalone run reads the artifact already on disk.
 // The consumer this proof builds is the only subject that answers for the published artifact. A
 // specifier resolved from this repository reaches the repository's own manifest, or the copy of an
 // earlier release installed under `node_modules`, so every assertion below is rooted in the
@@ -25,10 +27,14 @@ it('installs the packed artifact and drives its entries, declarations, and resol
 	const scratch = mkdtempSync(join(tmpdir(), 'orkestrel-process-distribution-'))
 
 	try {
-		const pack = spawnSync('npm', ['pack', '--json', '--pack-destination', scratch], {
-			cwd: root,
-			encoding: 'utf8',
-		})
+		const pack = spawnSync(
+			'npm',
+			['pack', '--json', '--ignore-scripts', '--pack-destination', scratch],
+			{
+				cwd: root,
+				encoding: 'utf8',
+			},
+		)
 		if (pack.error !== undefined || pack.status !== 0) {
 			throw new Error(`npm pack failed: ${pack.error?.message ?? pack.stderr}`)
 		}

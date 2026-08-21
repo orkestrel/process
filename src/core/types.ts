@@ -89,14 +89,18 @@ export interface ExecutableOptions {
  *
  * @remarks
  * Declared as a `type` alias so it satisfies the emitter's `EventMap` constraint structurally. The
- * `error` event carries a child fault — a failure to spawn or a process-level error. It is distinct
- * from the `error` handler in {@link ProcessOptions}: a listener throw is isolated by the emitter and
+ * `error` event carries a child fault — a failure to spawn, a process-level error, or a
+ * host-reported standard-input channel fault after the constructor input phase. A fault arising
+ * from the constructor-supplied `input` write or its closing `end` stays quiet because the package
+ * initiated that sequence. A surfaced standard-input fault is wrapped in a
+ * {@link ProcessError} coded `protocol` with the host fault as its cause. The event is distinct from
+ * the `error` handler in {@link ProcessOptions}: a listener throw is isolated by the emitter and
  * routed to that handler, never emitted as this `error` event.
  */
 export type ProcessEventMap = {
 	/** A decoded standard-error chunk arrived. */
 	readonly stderr: readonly [chunk: string]
-	/** The child emitted an error — a spawn fault or process-level failure — carrying its cause. */
+	/** The child or its open standard-input channel reported a fault, carrying the host cause directly or through a `protocol` {@link ProcessError}. */
 	readonly error: readonly [error: unknown]
 	/** The child settled — its terminal state, delivered once. */
 	readonly exit: readonly [exit: ProcessExit]
@@ -130,6 +134,8 @@ export interface ProcessOptions {
 	readonly evidence?: number
 	/** Soft high-water mark in bytes for the unconsumed `lines` backlog; termination retains at most twice this value. Default: {@link PROCESS_BACKLOG}. */
 	readonly backlog?: number
+	/** Milliseconds an unconfirmed {@link ProcessInterface.send} waits before resolving `false`. `0` or omitted disables the bound. */
+	readonly delivery?: number
 	/** If `true`, stdin stays open for {@link ProcessInterface.send}; if `false` or omitted, stdin closes after any initial `input`. */
 	readonly writable?: boolean
 	/** Aborting this signal terminates the child through the same bounded `stop`. */
@@ -172,7 +178,16 @@ export interface ProcessInterface {
 	readonly signal: string | null
 	/** The typed lifecycle observation surface. */
 	readonly emitter: EmitterInterface<ProcessEventMap>
-	/** The captured stdout lines, in arrival order, for one consumer, ending when the child's stdout closes. */
+	/**
+	 * The captured stdout lines, in arrival order, for one consumer, ending when the child's stdout closes.
+	 *
+	 * @remarks
+	 * A line feed, a CRLF pair, and a bare carriage return each terminate a line, and a CRLF split
+	 * across delivered chunks joins as one break. A child that redraws a progress bar with a carriage
+	 * return therefore yields one line per redraw, and consecutive carriage returns yield an empty
+	 * line between them. A final line written with no trailing terminator is delivered when stdout
+	 * closes.
+	 */
 	readonly lines: AsyncIterable<string>
 	/** The decoded byte-bounded stderr tail. */
 	readonly evidence: string
@@ -184,13 +199,18 @@ export interface ProcessInterface {
 	 * Write one line to the open standard-input channel.
 	 *
 	 * @remarks
-	 * Never rejects. The promise settles when the host reports the line handled, so a line written
-	 * to a child that is not reading stays pending until the child drains it or the channel closes.
-	 * Every terminal teardown path destroys stdin, so a pending write always settles by teardown. A
-	 * caller that needs its own deadline arms a timer and calls `stop`.
+	 * Never rejects. `true` means the host accepted the bytes without reporting a fault; it does not
+	 * prove that the child read them. An ordinary write settles when the kernel accepts it. Only a
+	 * full pipe can hold the write unconfirmed. The `delivery` option can bound that wait, and every
+	 * terminal teardown path settles pending writes. On Windows 11 with Node v24.18.1, measured on
+	 * 2026-08-21, a child that closes its own file descriptor 0 can leave the parent pipe writable:
+	 * the write can settle `true` without a callback error or a stream error while the child remains
+	 * alive. After `stop` or `destroy` begins, a later call settles `false`. Version 0.0.4 could settle
+	 * that call `true` before teardown destroyed the pipe; returning `false` avoids claiming delivery
+	 * for bytes the package is about to discard.
 	 *
 	 * @param text - The line text without its trailing newline
-	 * @returns True when the line reached the host without error; false when the channel was closed, destroyed, ended, or the write failed
+	 * @returns True when the host accepted the bytes without reporting a fault; false when the channel was closed, destroyed, ended, failed, or remained unconfirmed through `delivery`
 	 */
 	send(text: string): Promise<boolean>
 	/**
@@ -222,13 +242,15 @@ export interface ProcessInterface {
  * The settled outcome of a one-shot run: the buffered output and the terminal state.
  *
  * @remarks
- * `failed` is `true` when the child exited non-zero, was killed by a signal, expired, was aborted, or
- * failed to spawn. `expired` and `aborted` name the ways the run ended the child rather than the
- * child ending itself, and only the earliest observed is recorded. `truncated` is independent of
- * both: it reports that a captured stream omitted output because it exceeded `limit`, which fails a
- * synchronous run and does not fail an asynchronous one. `ProcessInterface` carries the same name for
- * the same fact against a supervised child's retention bounds. A spawn fault reports the host's negative errno for `execute`. A spawn fault reports
- * `null` for `executeSync`.
+ * `failed` is `true` when the run timed out, was aborted, ended on a host fault, was ended by a
+ * signal, or exited with a code other than `0`. `expired` and `aborted` name the ways the run ended
+ * the child rather than the child ending itself, and only the earliest observed is recorded.
+ * `truncated` reports that a captured stream omitted output because it exceeded `limit`, which
+ * fails a synchronous run and does not fail an asynchronous one. `ProcessInterface` carries the
+ * same name for the same fact against a supervised child's retention bounds. For a `strict: false`
+ * caller, `failed: true` with `expired`, `aborted`, and `truncated` false, `code: 0`, and
+ * `signal: null` is the residual signature that a host fault ended the run. A spawn fault reports
+ * the host's negative errno for `execute`. A spawn fault reports `null` for `executeSync`.
  */
 export interface ExecuteResult {
 	/** The command line that was run, for diagnostics. */

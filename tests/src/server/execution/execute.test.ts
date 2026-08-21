@@ -159,17 +159,22 @@ describe('execute', () => {
 		expect(result.code).toBe(0)
 	})
 
-	it('threads the spawn cause onto the rejected process error', async () => {
+	it('rejects an unspawnable command with spawn code and the host cause', async () => {
 		let thrown: unknown
 		try {
 			await execute(
-				{ file: 'orkestrel-nonexistent-binary.exe', arguments: [] },
+				{
+					file: 'orkestrel-nonexistent-binary.exe',
+					arguments: [],
+					input: 'unspawnable input',
+				},
 				{ workspace: process.cwd() },
 			)
 		} catch (error) {
 			thrown = error
 		}
 		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('spawn')
 		expect(isProcessError(thrown) ? thrown.cause : undefined).toBeInstanceOf(Error)
 	})
 
@@ -186,6 +191,44 @@ describe('execute', () => {
 		const code = result.code
 		if (code === null) throw new Error('execute reported no code for a spawn fault')
 		expect(code).toBeLessThan(0)
+	})
+
+	it('reports a pending input write fault as the cause of a failed run', async () => {
+		const input = 'x'.repeat(4 * 1_024 * 1_024)
+		const faulting = {
+			file: process.execPath,
+			arguments: ['-e', 'setTimeout(() => process.exit(0), 150)'],
+		}
+		const reading = {
+			file: process.execPath,
+			arguments: ['-e', 'process.stdin.resume()'],
+		}
+
+		const result = await execute(faulting, { input, strict: false })
+		let thrown: unknown
+		try {
+			await execute(faulting, { input })
+		} catch (error) {
+			thrown = error
+		}
+		const control = await execute(reading, { input })
+
+		expect(result.failed).toBe(true)
+		expect(result).toMatchObject({
+			expired: false,
+			aborted: false,
+			truncated: false,
+			code: 0,
+			signal: null,
+		})
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.cause : undefined).toBeInstanceOf(Error)
+		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('input')
+		expect(isProcessError(thrown) ? thrown.message : undefined).toBe(
+			`Command '${result.command}' failed while writing standard input`,
+		)
+		expect(control.failed).toBe(false)
+		expect(control.code).toBe(0)
 	})
 
 	it('refuses a NUL in a per-run environment override before spawning', async () => {

@@ -23,6 +23,7 @@ export const PROCESS_PATHEXT = '.COM;.EXE;.BAT;.CMD'
 export const PROCESS_ERROR_CODES = Object.freeze([
 	'spawn',
 	'timeout',
+	'input',
 	'duplicate',
 	'protocol',
 	'invalid',

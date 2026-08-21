@@ -87,6 +87,82 @@ describe('Process', () => {
 		expect(lines).toEqual(['first-line', 'final-partial-line'])
 	})
 
+	// The framing contract, driven through the shipped `readline` path. Each child writes its bytes
+	// with `-e` rather than through a fixture mode, so the exact terminators under test sit beside
+	// the lines they must produce. The lone-CR rows are what discriminate this framer from a
+	// line-feed-only one: a framer that ignored a bare carriage return would yield `a\rb` for the
+	// `carriage` child and one whole line for the redrawing child.
+	it('terminates a line on a line feed, a CRLF pair, and a bare carriage return alike', async () => {
+		const feed = createProcess({
+			command: { file: process.execPath, arguments: ['-e', 'process.stdout.write("a\\nb\\n")'] },
+			workspace: process.cwd(),
+			grace: 20,
+		})
+		const carriage = createProcess({
+			command: { file: process.execPath, arguments: ['-e', 'process.stdout.write("a\\rb\\n")'] },
+			workspace: process.cwd(),
+			grace: 20,
+		})
+		const pair = createProcess({
+			command: { file: process.execPath, arguments: ['-e', 'process.stdout.write("a\\r\\nb\\n")'] },
+			workspace: process.cwd(),
+			grace: 20,
+		})
+		const consecutive = createProcess({
+			command: { file: process.execPath, arguments: ['-e', 'process.stdout.write("a\\r\\rb\\n")'] },
+			workspace: process.cwd(),
+			grace: 20,
+		})
+		const trailing = createProcess({
+			command: { file: process.execPath, arguments: ['-e', 'process.stdout.write("x\\ry\\rz")'] },
+			workspace: process.cwd(),
+			grace: 20,
+		})
+
+		expect(await collect(feed.lines)).toEqual(['a', 'b'])
+		expect(await collect(carriage.lines)).toEqual(['a', 'b'])
+		expect(await collect(pair.lines)).toEqual(['a', 'b'])
+		// A carriage return terminates in every position, so the run between two of them frames an
+		// empty line rather than collapsing.
+		expect(await collect(consecutive.lines)).toEqual(['a', '', 'b'])
+		// No trailing terminator: the last redraw still arrives as its own line when stdout closes.
+		expect(await collect(trailing.lines)).toEqual(['x', 'y', 'z'])
+	})
+
+	// The consequence a consumer meets: a child redrawing one status line yields one line per redraw
+	// rather than one line for the bar.
+	it('yields one line per carriage-return redraw', async () => {
+		const child = createProcess({
+			command: {
+				file: process.execPath,
+				arguments: ['-e', 'process.stdout.write("10%\\r50%\\r100%\\n")'],
+			},
+			workspace: process.cwd(),
+			grace: 20,
+		})
+
+		expect(await collect(child.lines)).toEqual(['10%', '50%', '100%'])
+	})
+
+	// The join half of the framing rule, which needs the pair to arrive in separate chunks: the child
+	// writes the carriage return, yields to its own event loop, then writes the line feed. A framer
+	// that treated each chunk independently would report an empty line between `a` and `b`.
+	it('joins a CRLF pair split across delivered chunks into one break', async () => {
+		const child = createProcess({
+			command: {
+				file: process.execPath,
+				arguments: [
+					'-e',
+					'process.stdout.write("a\\r"); setTimeout(() => { process.stdout.write("\\nb\\n"); process.exit(0) }, 60)',
+				],
+			},
+			workspace: process.cwd(),
+			grace: 20,
+		})
+
+		expect(await collect(child.lines)).toEqual(['a', 'b'])
+	})
+
 	it('forwards complete stderr live while retaining only the byte-bounded tail', async () => {
 		const chunks = createRecorder<readonly [string]>()
 		const child = createProcess({
@@ -168,6 +244,27 @@ describe('Process', () => {
 		expect(refused).toBe(false)
 	})
 
+	it('keeps an ended channel quiet after its input phase settles and a later host fault arrives', async () => {
+		const errors = createRecorder<readonly [unknown]>()
+		const child = createProcess({
+			command: {
+				file: process.execPath,
+				arguments: ['-e', 'setTimeout(() => process.exit(0), 150)'],
+				input: 'x'.repeat(4 * 1_024 * 1_024),
+			},
+			workspace: process.cwd(),
+			grace: 20,
+			on: { error: errors.handler },
+		})
+
+		await child.exit
+		const refused = await child.send('after end')
+		await child.destroy()
+
+		expect(refused).toBe(false)
+		expect(errors.count).toBe(0)
+	})
+
 	it('settles a write the child never reads once teardown destroys the channel', async () => {
 		const child = createProcess({
 			command: childCommand('sleep'),
@@ -182,6 +279,132 @@ describe('Process', () => {
 
 		expect(raced).toBe('pending')
 		expect(await delivery).toBe(false)
+	})
+
+	// The bound `delivery` puts on an unconfirmed write. Its control is the proof named `settles a
+	// write the child never reads once teardown destroys the channel`: the same 4 MB write to the same
+	// non-reading child, with no `delivery`, stays pending until teardown destroys the channel. Here
+	// the write settles while the child is still live and nothing has been torn down, which is the
+	// whole of what the option adds.
+	it('settles an unconfirmed write false at the delivery bound while the child is still live', async () => {
+		const errors = createRecorder<readonly [unknown]>()
+		const child = createProcess({
+			command: childCommand('sleep'),
+			workspace: process.cwd(),
+			grace: 20,
+			writable: true,
+			delivery: 50,
+			on: { error: errors.handler },
+		})
+
+		const settled = await child.send('x'.repeat(4 * 1_024 * 1_024))
+		const live = { code: child.code, signal: child.signal }
+		await child.destroy()
+
+		expect(settled).toBe(false)
+		expect(errors.count).toBe(0)
+		// The terminal pair is still null, so no exit and no teardown settled this write: the bound did.
+		expect(live).toEqual({ code: null, signal: null })
+	})
+
+	it('confirms a write to a reading child when delivery is bounded', async () => {
+		const child = createProcess({
+			command: childCommand('echo'),
+			workspace: process.cwd(),
+			grace: 20,
+			writable: true,
+			delivery: 250,
+		})
+
+		const accepted = await child.send('ping')
+		await child.send('stop')
+		await child.exit
+
+		expect(accepted).toBe(true)
+	})
+
+	// A host-reported channel fault, driven through the door this host offers: a write the child never
+	// read, still pending when the child exits on its own. The parent's pipe then fails — `write EOF`
+	// on Windows, `EPIPE` on POSIX — and the contract is the same either way, so this asserts the
+	// engine's shape rather than the host's errno. Its quiet counterpart is the proof named `settles a
+	// pending write false inside teardown and emits no error`: the same pending write, settled by the
+	// package's own teardown instead, emits nothing.
+	it('refuses the write and emits one protocol error when the host reports a stdin fault', async () => {
+		const errors = createRecorder<readonly [unknown]>()
+		const child = createProcess({
+			command: {
+				file: process.execPath,
+				arguments: ['-e', 'console.log("ready"); setTimeout(() => process.exit(0), 150)'],
+				input: 'initial input',
+			},
+			workspace: process.cwd(),
+			grace: 20,
+			writable: true,
+			on: { error: errors.handler },
+		})
+		const iterator = child.lines[Symbol.asyncIterator]()
+		const ready = await iterator.next()
+
+		const settled = await child.send('x'.repeat(4 * 1_024 * 1_024))
+		const refused = await child.send('after the fault')
+		await child.exit
+		await child.destroy()
+
+		expect(ready.value).toBe('ready')
+		expect(settled).toBe(false)
+		// One failure state per channel: the write callback and the stream error report it once, and
+		// every later write is refused with no further event.
+		expect(refused).toBe(false)
+		expect(errors.count).toBe(1)
+		const fault = errors.calls[0]?.[0]
+		expect(isProcessError(fault)).toBe(true)
+		expect(isProcessError(fault) ? fault.code : undefined).toBe('protocol')
+		expect(fault instanceof Error && fault.cause instanceof Error).toBe(true)
+	})
+
+	// Package-initiated closure stays quiet. Nothing host-reported happened, so there is nothing to
+	// report: the pending write resolves false and no `error` event fires. The order is pinned beside
+	// it, because the settle belongs to the stop path rather than to whatever runs after `destroy`.
+	it('settles a pending write false inside teardown and emits no error', async () => {
+		const errors = createRecorder<readonly [unknown]>()
+		const order: string[] = []
+		const child = createProcess({
+			command: childCommand('sleep'),
+			workspace: process.cwd(),
+			grace: 20,
+			writable: true,
+			on: { error: errors.handler },
+		})
+
+		const pending = child.send('x'.repeat(4 * 1_024 * 1_024)).then((accepted) => {
+			order.push('write')
+			return accepted
+		})
+		const raced = await Promise.race([pending, waitForDelay(150).then(() => 'pending')])
+		await child.destroy()
+		order.push('teardown')
+
+		expect(raced).toBe('pending')
+		expect(await pending).toBe(false)
+		expect(order).toEqual(['write', 'teardown'])
+		expect(errors.count).toBe(0)
+	})
+
+	// Version 0.0.4 accepted a write issued after `stop` began, then destroyed the pipe. The retained
+	// contract refuses that write because teardown cannot confirm delivery it is about to discard.
+	it('refuses a send after teardown begins', async () => {
+		const child = createProcess({
+			command: childCommand('sleep'),
+			workspace: process.cwd(),
+			grace: 20,
+			writable: true,
+		})
+
+		const stopping = child.stop()
+		const accepted = await child.send('after stop')
+		await stopping
+
+		expect(accepted).toBe(false)
 	})
 
 	it('collapses repeated stops and a concurrent abort onto one termination', async () => {
@@ -245,7 +468,32 @@ describe('Process', () => {
 		},
 	)
 
+	// The flooding child traps the stop signal, so what its exit reports is whatever this host reports
+	// for a trapped child — which is host-varying and therefore read at runtime rather than assumed.
+	// The reading is taken through the same `stop` door the proof uses, from a real child that installs
+	// a handler, with an untrapped child beside it as the control that proves the reading discriminates.
+	// Where the two disagree the host delivers a cooperative signal a child can ignore, the grace window
+	// elapses, and `SIGKILL` follows. Where they agree the host's stop path offers no signal to trap, so
+	// no escalation exists to observe: measured on Windows 11 with Node v24.18.1 on 2026-08-21,
+	// `taskkill /F /T` ends a trapped and an untrapped child alike at `{ code: 1, signal: null }`.
 	it('caps retained lines while termination drains a flooding child', async () => {
+		const trapping = createProcess({
+			command: childCommand('trap'),
+			workspace: process.cwd(),
+			grace: 50,
+		})
+		const trappingIterator = trapping.lines[Symbol.asyncIterator]()
+		const trapped = await trappingIterator.next()
+		await trapping.stop()
+		const trappedExit = await trapping.exit
+		const untrapped = createProcess({
+			command: childCommand('hang'),
+			workspace: process.cwd(),
+			grace: 50,
+		})
+		await untrapped.stop()
+		const untrappedExit = await untrapped.exit
+
 		const backlog = 1_024
 		const child = createProcess({
 			command: childCommand('flood'),
@@ -262,9 +510,20 @@ describe('Process', () => {
 		const retained = await collect(child.lines)
 		const bytes = retained.reduce((total, line) => total + Buffer.byteLength(line) + 1, 0)
 
+		expect(trapped.value).toBe('trapped')
 		expect(ready.value).toBe('ready')
 		expect(confirmed).toBe(true)
-		expect(exit.signal).toBe('SIGKILL')
+		// The probe against its control: either trapping the stop signal changes the terminal pair, and
+		// the trapped child carries the escalation, or the two children report alike and this host's stop
+		// path offers no signal to trap. A host that reported a trapped child differently without
+		// escalating to `SIGKILL` fails here.
+		expect(
+			trappedExit.signal === 'SIGKILL' ||
+				(trappedExit.code === untrappedExit.code && trappedExit.signal === untrappedExit.signal),
+		).toBe(true)
+		// The flooding child traps the same signal, so it ends exactly as this host ends a trapped child.
+		// Where the host escalates, that reading is `SIGKILL` and this line carries the POSIX expectation.
+		expect(exit).toEqual(trappedExit)
 		expect(bytes).toBeLessThanOrEqual(backlog * 2)
 		expect(child.truncated).toBe(true)
 	})
