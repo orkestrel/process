@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import {
 	cpSync,
 	existsSync,
+	globSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -13,6 +14,15 @@ import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
+
+// Windows resolves the npm launcher only as `npm.cmd`: a bare `npm` reaches `spawnSync`
+// without shell resolution and fails `ENOENT`, so the binary is named per platform.
+const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+// Windows needs a shell to launch that `.cmd`: Node refuses one directly since the
+// batch-argument hardening and returns `EINVAL` with a null status rather than an exit
+// code. Every npm call here takes it. Each argument is a literal or a path this file
+// built, so the shell has nothing to escape.
+const shell = process.platform === 'win32'
 import * as ts from 'typescript'
 
 // The `prepublishOnly` gate runs `build` before `test:distribution`, so suppressing `prepack` here
@@ -28,24 +38,25 @@ it('installs the packed artifact and drives its entries, declarations, and resol
 
 	try {
 		const pack = spawnSync(
-			'npm',
+			npm,
 			['pack', '--json', '--ignore-scripts', '--pack-destination', scratch],
 			{
 				cwd: root,
 				encoding: 'utf8',
+				windowsHide: true,
+				shell,
 			},
 		)
 		if (pack.error !== undefined || pack.status !== 0) {
 			throw new Error(`npm pack failed: ${pack.error?.message ?? pack.stderr}`)
 		}
-		const packed: unknown = JSON.parse(pack.stdout)
-		if (!Array.isArray(packed)) throw new Error('npm pack returned no artifact list')
-		const [packedArtifact] = packed
-		if (typeof packedArtifact !== 'object' || packedArtifact === null) {
-			throw new Error('npm pack returned no artifact record')
-		}
-		const filename = Object.getOwnPropertyDescriptor(packedArtifact, 'filename')?.value
-		if (typeof filename !== 'string') throw new Error('npm pack returned no artifact filename')
+		// The artifact is read from the directory rather than from `--json`, whose shape npm has
+		// moved: a record keyed by package name today, an array before it. This scratch directory
+		// is the file's own and holds exactly what this pack wrote.
+		const archives = globSync('*.tgz', { cwd: scratch })
+		if (archives.length !== 1) throw new Error('npm pack wrote no single artifact')
+		const [filename] = archives
+		if (filename === undefined) throw new Error('npm pack wrote no artifact filename')
 		const tarball = join(scratch, filename)
 
 		const consumer = join(scratch, 'consumer')
@@ -55,9 +66,9 @@ it('installs the packed artifact and drives its entries, declarations, and resol
 			JSON.stringify({ name: 'process-distribution-consumer', private: true, type: 'module' }),
 		)
 		const install = spawnSync(
-			'npm',
+			npm,
 			['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball],
-			{ cwd: consumer, encoding: 'utf8' },
+			{ cwd: consumer, encoding: 'utf8', windowsHide: true, shell },
 		)
 		const packageRoot = join(consumer, 'node_modules', '@orkestrel', 'process')
 		if (install.status !== 0 || install.error !== undefined) {

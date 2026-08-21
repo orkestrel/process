@@ -81,22 +81,22 @@
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test && npm run test:distribution -- --mode release"
 	},
 	"dependencies": {
-		"@orkestrel/contract": "^0.0.12",
+		"@orkestrel/contract": "^0.0.13",
 		"@orkestrel/emitter": "^0.0.7"
 	},
 	"devDependencies": {
-		"@microsoft/api-extractor": "^7.58.12",
+		"@microsoft/api-extractor": "^7.59.0",
 		"@orkestrel/guide": "^0.0.12",
-		"@orkestrel/probe": "^0.0.1",
+		"@orkestrel/probe": "^0.0.2",
 		"@orkestrel/scaffold": "^0.0.47",
-		"@orkestrel/test": "^0.0.7",
+		"@orkestrel/test": "^0.0.8",
 		"@types/node": "^26.2.0",
-		"oxfmt": "^0.62.0",
-		"oxlint": "^1.77.0",
+		"oxfmt": "^0.64.0",
+		"oxlint": "^1.79.0",
 		"typescript": "^6.0.3",
-		"vite": "~8.2.0",
+		"vite": "^8.2.2",
 		"vite-plugin-dts": "^5.0.3",
-		"vitest": "^4.1.10"
+		"vitest": "^4.1.11"
 	},
 	"engines": {
 		"node": ">=22.12.0"
