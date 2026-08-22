@@ -89,7 +89,7 @@
 		"@orkestrel/guide": "^0.0.12",
 		"@orkestrel/probe": "^0.0.2",
 		"@orkestrel/scaffold": "^0.0.47",
-		"@orkestrel/test": "^0.0.8",
+		"@orkestrel/test": "^0.0.9",
 		"@types/node": "^26.2.0",
 		"oxfmt": "^0.64.0",
 		"oxlint": "^1.79.0",
