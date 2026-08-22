@@ -141,6 +141,7 @@ export async function execute(
 	terminate.signal.addEventListener(
 		'abort',
 		() => {
+			if (finish.signal.aborted) return
 			clearTimeout(timeoutTimer)
 			cleanup.abort()
 			void stopChild(child, grace, PROCESS_CONFIRMATION).then(() => {

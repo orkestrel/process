@@ -5,8 +5,8 @@ import { join } from 'node:path'
 import type { ProcessChild } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { holds } from '@orkestrel/contract'
-import { createRecorder, waitForDelay } from '@orkestrel/test'
-import { createScratch } from '@orkestrel/test/server'
+import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
+import { createScratch, isRunning } from '@orkestrel/test/server'
 import { isProcessError, ProcessError } from '@src/core'
 import {
 	buildExecutableCandidates,
@@ -35,6 +35,7 @@ import {
 	validateText,
 	validateTimer,
 	validateWorkspace,
+	waitForClose,
 	waitForExit,
 } from '@src/server'
 import { resolveChildFixture } from '../../setupServer.js'
@@ -483,6 +484,48 @@ describe('waitForExit', () => {
 	})
 })
 
+describe('waitForClose', () => {
+	it('reports a close that arrived inside the deadline, a deadline that elapsed first, and leaves the child holding neither listener', async () => {
+		const closing = spawn(process.execPath, [resolveChildFixture(), 'exit', '0'], {
+			stdio: 'ignore',
+		})
+		// The control is the same call against a child whose close cannot arrive inside the deadline:
+		// the fixture holds its handles until something ends it, so only the bound can end this wait.
+		const holding = spawn(process.execPath, [resolveChildFixture(), 'sleep'], { stdio: 'ignore' })
+		const closingBaseline = closing.listenerCount('close')
+		const holdingBaseline = holding.listenerCount('close')
+
+		try {
+			const arrived = await waitForClose(closing, 10_000)
+			const started = performance.now()
+			const expired = await waitForClose(holding, 50)
+			const elapsed = performance.now() - started
+
+			expect(arrived).toBe(true)
+			expect(closing.listenerCount('close')).toBe(closingBaseline)
+			expect(expired).toBe(false)
+			expect(elapsed).toBeGreaterThanOrEqual(40)
+			expect(isExited(holding)).toBe(false)
+			expect(holding.listenerCount('close')).toBe(holdingBaseline)
+		} finally {
+			holds(() => holding.kill('SIGKILL'))
+		}
+	})
+
+	it('accumulates no listener across repeated deadlines', async () => {
+		const child = spawn(process.execPath, [resolveChildFixture(), 'sleep'], { stdio: 'ignore' })
+		const baseline = child.listenerCount('close')
+
+		try {
+			for (let call = 0; call < 12; call += 1) await waitForClose(child, 1)
+
+			expect(child.listenerCount('close')).toBe(baseline)
+		} finally {
+			holds(() => child.kill('SIGKILL'))
+		}
+	})
+})
+
 describe('stopChild', () => {
 	it('signals nothing once the host has recorded the native exit', async () => {
 		const signals = createRecorder<readonly [NodeJS.Signals]>()
@@ -522,6 +565,118 @@ describe('stopChild', () => {
 
 		expect(confirmed).toBe(false)
 		expect(signals.count).toBeGreaterThan(0)
+	})
+
+	// `taskkill /F /T` is the only route to a descendant on this host, and `stopChild` selects it by
+	// reading `process.platform`, so no POSIX host reaches the branch under test. The fixture also
+	// detaches its descendant on `win32` alone, because a non-detached one there dies with its root
+	// and would prove nothing about the tree kill.
+	it.skipIf(process.platform !== 'win32')(
+		'reaches a detached descendant while the root is alive and leaves one whose root already exited',
+		async () => {
+			const rooted = spawn(process.execPath, [resolveChildFixture(), 'tree'], {
+				stdio: ['ignore', 'pipe', 'ignore'],
+			})
+			// The control is the same descendant shape whose root ends itself first. Nothing addresses
+			// the descendant once its root is gone, which is the residual limit the guide records.
+			const orphaned = spawn(process.execPath, [resolveChildFixture(), 'orphan'], {
+				stdio: ['ignore', 'pipe', 'ignore'],
+			})
+			let rootedOutput = ''
+			let orphanedOutput = ''
+			rooted.stdout.on('data', (chunk: Buffer) => {
+				rootedOutput += chunk.toString('utf8')
+			})
+			orphaned.stdout.on('data', (chunk: Buffer) => {
+				orphanedOutput += chunk.toString('utf8')
+			})
+			let held = 0
+			let abandoned = 0
+
+			try {
+				await waitForCondition(
+					'both fixtures announce the descendant they spawned',
+					() => rootedOutput.includes('\n') && orphanedOutput.includes('\n'),
+					{ budget: 10_000 },
+				)
+				const [rootedLine = ''] = rootedOutput.split('\n')
+				const [orphanedLine = ''] = orphanedOutput.split('\n')
+				held = Number.parseInt(rootedLine.replace('grandchild:', ''), 10)
+				abandoned = Number.parseInt(orphanedLine.replace('grandchild:', ''), 10)
+				await waitForCondition(
+					'the orphan root exits and abandons its descendant',
+					() => isExited(orphaned),
+					{ budget: 10_000 },
+				)
+
+				const rootedConfirmed = await stopChild(rooted, 20, 5_000)
+				const orphanedConfirmed = await stopChild(orphaned, 20, 5_000)
+				await waitForCondition(
+					'the descendant of the live root leaves the host',
+					() => !isRunning(held),
+					{ budget: 10_000 },
+				)
+
+				expect(rootedConfirmed).toBe(true)
+				expect(isRunning(held)).toBe(false)
+				expect(orphanedConfirmed).toBe(true)
+				expect(isRunning(abandoned)).toBe(true)
+			} finally {
+				if (held > 0) holds(() => process.kill(held, 'SIGKILL'))
+				if (abandoned > 0) holds(() => process.kill(abandoned, 'SIGKILL'))
+				holds(() => rooted.kill('SIGKILL'))
+				holds(() => orphaned.kill('SIGKILL'))
+			}
+		},
+	)
+
+	// A pid identifies a process only while something holds that process open. An exited boundary
+	// carries a pid the host has already reaped and may already have handed to something else, so the
+	// live process spawned here stands in for whatever now owns that number. Every route out of the
+	// helper — the POSIX signal, the Windows tree kill, the direct kill — addresses the pid, so that
+	// process staying alive is what reports that no route ran. The boundary is a value rather than a
+	// spawned child because a real child cannot both report an exit and still own its pid.
+	it('addresses nothing for an already-exited child whose pid a live process now carries', async () => {
+		const signals = createRecorder<readonly [NodeJS.Signals]>()
+		const reused = spawn(process.execPath, [resolveChildFixture(), 'sleep'], {
+			stdio: 'ignore',
+		})
+		// The control is an identical child no boundary names: it reports what this fixture does when
+		// nothing addresses it, so the addressed process surviving is the guard rather than the shape.
+		const untouched = spawn(process.execPath, [resolveChildFixture(), 'sleep'], {
+			stdio: 'ignore',
+		})
+		const stale = reused.pid
+		const bystander = untouched.pid
+		if (stale === undefined || bystander === undefined) {
+			throw new Error('a fixture child reported no process id')
+		}
+
+		try {
+			const confirmed = await stopChild(
+				{
+					pid: stale,
+					exitCode: 0,
+					signalCode: null,
+					kill: (signal) => (signals.handler(signal), true),
+					once: () => undefined,
+					off: () => undefined,
+				},
+				20,
+				5_000,
+			)
+			// Long enough for a `taskkill.exe` spawn to have started, run, and reaped the tree it was
+			// given, so the survival below is a route that never ran rather than one still running.
+			await waitForDelay(500)
+
+			expect(confirmed).toBe(true)
+			expect(signals.count).toBe(0)
+			expect(isRunning(stale)).toBe(true)
+			expect(isRunning(bystander)).toBe(true)
+		} finally {
+			holds(() => reused.kill('SIGKILL'))
+			holds(() => untouched.kill('SIGKILL'))
+		}
 	})
 })
 

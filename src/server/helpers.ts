@@ -685,17 +685,45 @@ export function waitForExit(
 }
 
 /**
+ * Waits for one child process's streams to close, bounded by a deadline.
+ *
+ * @param child - The child boundary
+ * @param timeout - The milliseconds to wait before giving up
+ * @returns True when the host close arrived inside the deadline; false otherwise
+ *
+ * @example
+ * ```ts
+ * const closed = await waitForClose(child, 5_000)
+ * ```
+ */
+export function waitForClose(
+	child: Pick<ProcessChild, 'once' | 'off'>,
+	timeout: number,
+): Promise<boolean> {
+	const closed = Promise.withResolvers<void>()
+	const expired = Promise.withResolvers<boolean>()
+	const timer = setTimeout(() => expired.resolve(false), timeout)
+	child.once('close', closed.resolve)
+	return Promise.race([closed.promise.then(() => true), expired.promise]).finally(() => {
+		clearTimeout(timer)
+		child.off('close', closed.resolve)
+	})
+}
+
+/**
  * Terminates one child process tree and reports whether its native exit was observed.
  *
  * @remarks
- * Windows ends the whole tree at once through {@link killTree}, falling back to a direct kill after
- * the utility fails, because the host has no cooperative termination to offer. A POSIX host signals
- * the process group `SIGTERM`, falls back to the direct child when no group owns its pid, waits
- * `grace`, then sends `SIGKILL` through the same route. No signal is initiated after the native exit
- * is observed; the window between initiating a signal and the host delivering it belongs to the
- * operating system. `confirm` bounds each awaited step rather than the call as a whole: on Windows
- * it bounds the `taskkill` call and then the final wait, and on a POSIX host `grace` bounds the
- * cooperative wait and `confirm` the final one. Never rejects.
+ * An already-exited child is returned on before any route to its pid runs, because the host has
+ * reaped that number and may have handed it to another process. Windows ends the whole tree at once
+ * through {@link killTree}, falling back to a direct kill after the utility fails, because the host
+ * has no cooperative termination to offer. A POSIX host signals the process group `SIGTERM`, falls
+ * back to the direct child when no group owns its pid, waits `grace`, then sends `SIGKILL` through
+ * the same route. No signal is initiated after the native exit is observed; the window between
+ * initiating a signal and the host delivering it belongs to the operating system. `confirm` bounds
+ * each awaited step rather than the call as a whole: on Windows it bounds the `taskkill` call and
+ * then the final wait, and on a POSIX host `grace` bounds the cooperative wait and `confirm` the
+ * final one. Never rejects.
  *
  * @param child - The child boundary
  * @param grace - The cooperative POSIX window in milliseconds between `SIGTERM` and `SIGKILL`

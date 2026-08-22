@@ -3,8 +3,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { holds } from '@orkestrel/contract'
-import { createRecorder, waitForDelay } from '@orkestrel/test'
-import { createScratch } from '@orkestrel/test/server'
+import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
+import { createScratch, isRunning } from '@orkestrel/test/server'
 import { isProcessError, ProcessError } from '@src/core'
 import { createProcessManager } from '@src/server'
 import { childCommand } from '../../setupServer.js'
@@ -68,7 +68,7 @@ describe('ProcessManager', () => {
 
 		expect(manager.count).toBe(0)
 		expect(manager.process('job')).toBeUndefined()
-		expect(exited.calls).toEqual([['job', { code: 0, signal: null }]])
+		expect(exited.calls).toEqual([['job', { code: 0, signal: null, drained: true }]])
 
 		await manager.destroy()
 	})
@@ -102,7 +102,7 @@ describe('ProcessManager', () => {
 			grace: 20,
 		})
 
-		child.emitter.emit('exit', { code: 0, signal: null })
+		child.emitter.emit('exit', { code: 0, signal: null, drained: true })
 		await waitForDelay()
 
 		expect(manager.count).toBe(1)
@@ -250,6 +250,70 @@ describe('ProcessManager', () => {
 		}
 	})
 
+	// The registry refuses this launch and tears its child down itself, so nothing else can observe
+	// that child. The barrier is therefore the only thing that can carry the teardown, and this asks
+	// whether it does: the terminal moment of the child the registry started tearing down must have
+	// arrived by the time the caller resumes.
+	it('reaches the terminal moment of a child spawned during a destroy race before its barrier resolves', async () => {
+		const manager = createProcessManager()
+		const scratch = createScratch()
+		const marker = join(scratch.path, 'raced.pid')
+		const raced = createRecorder<readonly [ProcessExit]>()
+		const teardown: Array<Promise<void>> = []
+		let pid = 0
+
+		try {
+			let thrown: unknown
+			try {
+				manager.launch('racer', {
+					command: childCommand('announce', marker),
+					workspace: process.cwd(),
+					on: { exit: raced.handler },
+					// Reading an option is the one point a caller's own code runs between the destroy
+					// check and the spawned child, so a getter is the narrowest form of that window.
+					get grace() {
+						if (teardown.length === 0) teardown.push(manager.destroy())
+						return 20
+					},
+				})
+			} catch (error) {
+				thrown = error
+			}
+			await Promise.all(teardown)
+			const settled = raced.count
+
+			// The control is the same fixture, the same recorder, and the same barrier with the race
+			// removed: a registered child's terminal moment lands before `destroy` resolves, so the
+			// recorder reads one there whenever the barrier carried the teardown.
+			const covered = createProcessManager()
+			const registered = createRecorder<readonly [ProcessExit]>()
+			covered.launch('registered', {
+				command: childCommand('announce', join(scratch.path, 'registered.pid')),
+				workspace: process.cwd(),
+				grace: 20,
+				on: { exit: registered.handler },
+			})
+			await covered.destroy()
+
+			// The refused launch really spawned a child that really ends, so a terminal moment absent
+			// at the barrier is one the barrier did not wait for rather than one that never arrives.
+			await waitForCondition(
+				'the refused launch tears down the child it spawned',
+				() => raced.count === 1,
+				{ budget: 10_000 },
+			)
+			if (existsSync(marker)) pid = Number.parseInt(readFileSync(marker, 'utf8'), 10)
+
+			expect(isProcessError(thrown) ? thrown.code : undefined).toBe('protocol')
+			expect(registered.count).toBe(1)
+			expect(raced.count).toBe(1)
+			expect(settled).toBe(1)
+		} finally {
+			if (pid > 0) holds(() => process.kill(pid, 'SIGKILL'))
+			scratch.destroy()
+		}
+	})
+
 	it('stops one child, a named set, and reports liveness through the boolean overloads', async () => {
 		const manager = createProcessManager()
 		const first = manager.launch('a', {
@@ -317,5 +381,58 @@ describe('ProcessManager', () => {
 
 		expect(manager.count).toBe(0)
 		expect(manager.emitter.destroyed).toBe(true)
+	})
+
+	// Version 0.0.5 left this registry holding a child whose `exit` promise a descendant deferred for
+	// that descendant's whole life, so the departure never landed. The bound is what ends it now, and
+	// the departure carries which way the terminal moment arrived.
+	it('evicts a child whose descendant holds the pipe at the drain cutoff and reports the departure undrained', async () => {
+		const manager = createProcessManager()
+		const exited = createRecorder<readonly [string, ProcessExit]>()
+		manager.emitter.on('exit', exited.handler)
+		const holder = manager.launch('holder', {
+			command: childCommand('orphan'),
+			workspace: process.cwd(),
+			grace: 20,
+			drain: 200,
+		})
+		// The control is an ordinary child in the same registry, torn down by the same call and the
+		// same bound. Its own streams close, so it departs through the close rather than the cutoff.
+		manager.launch('ordinary', {
+			command: childCommand('sleep'),
+			workspace: process.cwd(),
+			grace: 20,
+			drain: 200,
+		})
+		const iterator = holder.lines[Symbol.asyncIterator]()
+		const first = await iterator.next()
+		const held = Number.parseInt(String(first.value).replace('grandchild:', ''), 10)
+
+		try {
+			await waitForCondition(
+				'the orphan root exits and leaves its descendant holding the pipe',
+				() => holder.code !== null,
+				{ budget: 5_000 },
+			)
+
+			const started = performance.now()
+			await manager.destroy()
+			const elapsed = performance.now() - started
+			// Nothing closed the pipe: the holder is alive at the instant the barrier resolved.
+			const holding = isRunning(held)
+			const holderExit = exited.calls.find((call) => call[0] === 'holder')?.[1]
+			const ordinaryExit = exited.calls.find((call) => call[0] === 'ordinary')?.[1]
+
+			expect(holding).toBe(true)
+			expect(exited.count).toBe(2)
+			expect(ordinaryExit?.drained).toBe(true)
+			expect(holderExit?.drained).toBe(false)
+			expect(manager.count).toBe(0)
+			// The registry owed one bounded tree kill plus the 200ms bound. Without the bound it owes
+			// the descendant's whole life and never returns.
+			expect(elapsed).toBeLessThan(2_000)
+		} finally {
+			holds(() => process.kill(held, 'SIGKILL'))
+		}
 	})
 })

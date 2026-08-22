@@ -11,6 +11,7 @@ import {
 	ProcessError,
 	PROCESS_BACKLOG,
 	PROCESS_CONFIRMATION,
+	PROCESS_DRAIN,
 	PROCESS_EVIDENCE,
 	PROCESS_GRACE,
 } from '@src/core'
@@ -24,32 +25,27 @@ import {
 	validateCommand,
 	validateTimer,
 	validateWorkspace,
+	waitForClose,
 } from './helpers.js'
 
 /**
- * One supervised child process with framed output, a bounded backlog, and bounded termination.
+ * Supervises one child while keeping every observation channel aligned at termination.
  *
  * @remarks
- * Standard output is framed through `readline` into a single-consumer stream: each line goes to
- * exactly one waiting iterator, so concurrent iterators split the output rather than each receiving
- * all of it. While no consumer has ever requested an iterator, stdout keeps draining so `exit` still
- * resolves, and retention stops at the `backlog` mark: a
- * consumer attaching later receives the retained head, a gap, then the live stream. After an iterator
- * has been requested, stdout pauses at the mark and resumes at half of it, so that consumer loses
- * nothing before termination and the child feels real backpressure. The mark is soft — the ordinary backlog can
- * overshoot it by the line that crossed it plus the rest of its delivered chunk. Termination never
- * reapplies backpressure, and retained lines are capped at twice `backlog`; later lines are dropped
- * and `truncated` reports the omission. Standard error is decoded and forwarded live as the `stderr`
- * event while a byte-bounded raw tail is retained as `evidence`. The typed `emitter` also carries a
- * child `error` cause on a spawn fault, a `protocol` {@link ProcessError} on a host-reported stdin
- * fault after the constructor input phase, and the terminal `exit`, alongside the `exit` promise.
- * A fault arising from the constructor-supplied `input` write or its closing `end` stays quiet
- * because the package initiated that sequence. `pid`,
- * `code`, and `signal` read the spawned child directly, so the native exit is readable before the
- * `exit` promise settles on stdio close. `stop` ends the whole tree and reports whether the native
- * exit was observed; `destroy` stops the child, destroys stdin so every pending `send` settles, and
- * destroys the emitter last. `destroy` resolving does not imply the child's stdio has closed, so
- * `exit` and `lines` can still be outstanding when a descendant holds an inherited pipe.
+ * The child's ending and the supervision's ending are distinct. `pid`, `code`, and `signal` read
+ * the host child directly, so they expose native exit as soon as the host records it. `settled`,
+ * `exit`, `evidence`, and `lines` reach one terminal moment after the read channels close or the
+ * bounded `drain` window cuts them off. That window is armed by the child's native exit and by a
+ * termination this package initiated, so every way a child can end reaches the moment. The terminal
+ * routine freezes `evidence` and ends `lines` before it destroys stdout, stderr, or the emitter, so
+ * the push channel never disappears while a pull channel can still change or wait indefinitely.
+ *
+ * Standard output is framed through `readline` into a single-consumer stream. Lines already framed
+ * and queued remain available through the terminal moment, while bytes arriving after a requested
+ * termination may be cut off. Standard error is forwarded through the live `stderr` event and
+ * retained as a byte-bounded raw tail until that same moment. `stop` ends the child tree and the
+ * observation surfaces. `destroy` performs that stop and then destroys the emitter after the
+ * frozen terminal state exists.
  *
  * @example
  * ```ts
@@ -68,6 +64,7 @@ export class Process implements ProcessInterface {
 	readonly #child: ChildProcessWithoutNullStreams
 	readonly #reader: ReadLineInterface
 	readonly #grace: number
+	readonly #drain: number
 	readonly #evidence: number
 	readonly #backlog: number
 	readonly #delivery: number
@@ -88,16 +85,17 @@ export class Process implements ProcessInterface {
 	#requested = false
 	#paused = false
 	#truncated = false
-	// A guard reads `#terminating`, never `#stopping !== undefined`. `#kill` assigns the boolean in
+	// A guard reads `#stopping`, never `#termination !== undefined`. `#kill` assigns the boolean in
 	// its synchronous prefix, which runs while `stop` is still evaluating
-	// `this.#stopping = this.#kill()`, so the boolean also covers the retention and backpressure
-	// decisions taken while `#stopping` is still `undefined`.
-	#terminating = false
-	#closed = false
+	// `this.#termination = this.#kill()`, so the boolean also covers the retention and backpressure
+	// decisions taken while `#termination` is still `undefined`.
+	#stopping = false
+	#settled = false
 	#ended = false
 	#input = 0
 	#failure: Error | undefined
-	#stopping: Promise<boolean> | undefined
+	#waiting: Promise<void> | undefined
+	#termination: Promise<boolean> | undefined
 	#ending: Promise<void> | undefined
 
 	/**
@@ -114,6 +112,7 @@ export class Process implements ProcessInterface {
 		const source = options.command
 		const workspace = options.workspace
 		const grace = options.grace
+		const drain = options.drain
 		const evidence = options.evidence
 		const backlog = options.backlog
 		const delivery = options.delivery
@@ -126,6 +125,7 @@ export class Process implements ProcessInterface {
 		validateCommand(command)
 		validateWorkspace(workspace)
 		validateTimer(grace, "option 'grace'")
+		validateTimer(drain, "option 'drain'")
 		validateTimer(delivery, "option 'delivery'")
 		validateBytes(evidence, "option 'evidence'", 0)
 		validateBytes(backlog, "option 'backlog'", 1)
@@ -134,6 +134,7 @@ export class Process implements ProcessInterface {
 			...(error === undefined ? {} : { error }),
 		})
 		this.#grace = grace ?? PROCESS_GRACE
+		this.#drain = drain ?? PROCESS_DRAIN
 		this.#evidence = evidence ?? PROCESS_EVIDENCE
 		this.#backlog = backlog ?? PROCESS_BACKLOG
 		this.#delivery = delivery ?? 0
@@ -153,6 +154,7 @@ export class Process implements ProcessInterface {
 		this.#reader.on('line', this.#push.bind(this))
 		this.#reader.once('close', this.#finish.bind(this))
 		this.#child.once('error', (cause: unknown) => this.#emitter.emit('error', cause))
+		this.#child.once('exit', this.#expire.bind(this))
 		this.#child.once('close', this.#close.bind(this))
 		this.#child.stdin.on('error', (cause: Error) => this.#failInputStream(cause))
 		this.#child.stderr.on('data', this.#retain.bind(this))
@@ -191,12 +193,12 @@ export class Process implements ProcessInterface {
 		return this.#emitter
 	}
 
-	/** The captured stdout lines, in arrival order, ending when the child's stdout closes. */
+	/** The captured stdout lines, in arrival order, ending after queued lines at the terminal moment. */
 	get lines(): AsyncIterable<string> {
 		return this.#lines
 	}
 
-	/** The decoded byte-bounded stderr tail. */
+	/** The decoded byte-bounded stderr tail, frozen at the terminal moment. */
 	get evidence(): string {
 		return this.#tail.toString('utf8')
 	}
@@ -206,7 +208,17 @@ export class Process implements ProcessInterface {
 		return this.#truncated
 	}
 
-	/** The terminal child state, observed once from the close event. */
+	/** True after the terminal moment arrived and `exit` settled. */
+	get settled(): boolean {
+		return this.#settled
+	}
+
+	/** True after termination began, including after the terminal moment. */
+	get stopping(): boolean {
+		return this.#stopping
+	}
+
+	/** The terminal child state, observed once after stream close or the drain cutoff. */
 	get exit(): Promise<ProcessExit> {
 		return this.#exit.promise
 	}
@@ -230,7 +242,7 @@ export class Process implements ProcessInterface {
 	 */
 	send(text: string): Promise<boolean> {
 		const stdin = this.#child.stdin
-		if (this.#closed || this.#terminating || this.#failure !== undefined || !stdin.writable) {
+		if (this.#settled || this.#stopping || this.#failure !== undefined || !stdin.writable) {
 			return Promise.resolve(false)
 		}
 		const settled = Promise.withResolvers<boolean>()
@@ -250,30 +262,33 @@ export class Process implements ProcessInterface {
 	}
 
 	/**
-	 * Terminate the child process tree and await its observed exit.
+	 * Terminates the child process tree and reaches the terminal observation moment.
 	 *
 	 * @remarks
-	 * Never rejects, and every call shares one termination.
+	 * Never rejects, and every call shares one termination. After the termination sequence returns,
+	 * confirmed or not, it waits at most `drain` for the read channels to close, then cuts them off
+	 * and settles `exit` when they remain open. A cutoff reached before the native exit reports the
+	 * `code` and `signal` the host had recorded by then, which is `null` for a child still running.
 	 *
 	 * @returns True when the child's native exit was observed; false when the confirmation deadline elapsed without it
 	 */
 	stop(): Promise<boolean> {
-		if (this.#stopping !== undefined) return this.#stopping
-		this.#stopping = this.#kill()
-		return this.#stopping
+		if (this.#termination !== undefined) return this.#termination
+		this.#termination = this.#kill()
+		return this.#termination
 	}
 
 	/**
-	 * Stop the child, close its standard-input channel, and destroy the observation emitter.
+	 * Stops the child and destroys the observation emitter after the terminal state freezes.
 	 *
 	 * @remarks
-	 * Always resolves, including when termination was never confirmed.
+	 * Always resolves, including when termination was never confirmed. Every call shares one barrier.
 	 *
 	 * @returns The stable barrier shared by every call
 	 */
 	destroy(): Promise<void> {
 		if (this.#ending !== undefined) return this.#ending
-		this.#ending = this.#teardown()
+		this.#ending = this.#end()
 		return this.#ending
 	}
 
@@ -320,8 +335,8 @@ export class Process implements ProcessInterface {
 		// With no consumer ever attached, retention stops at the mark and the stream keeps draining
 		// so the child can exit; a consumer attaching later receives the head, a gap, then the live
 		// stream.
-		const limit = this.#terminating ? this.#backlog * 2 : this.#backlog
-		if ((!this.#requested || this.#terminating) && this.#pending + bytes > limit) {
+		const limit = this.#stopping ? this.#backlog * 2 : this.#backlog
+		if ((!this.#requested || this.#stopping) && this.#pending + bytes > limit) {
 			this.#truncated = true
 			return
 		}
@@ -331,7 +346,7 @@ export class Process implements ProcessInterface {
 	}
 
 	#restrain(): void {
-		if (this.#paused || this.#terminating || !this.#requested) return
+		if (this.#paused || this.#stopping || !this.#requested) return
 		if (this.#pending < this.#backlog) return
 		this.#paused = true
 		this.#reader.pause()
@@ -339,7 +354,7 @@ export class Process implements ProcessInterface {
 
 	#relieve(): void {
 		if (!this.#paused || this.#ended) return
-		if (!this.#terminating && this.#pending > this.#backlog / 2) return
+		if (!this.#stopping && this.#pending > this.#backlog / 2) return
 		this.#paused = false
 		this.#reader.resume()
 	}
@@ -355,22 +370,53 @@ export class Process implements ProcessInterface {
 	}
 
 	#retain(chunk: unknown): void {
-		if (!Buffer.isBuffer(chunk) || this.#closed) return
+		if (!Buffer.isBuffer(chunk) || this.#settled) return
 		this.#tail = trimTail(Buffer.concat([this.#tail, chunk]), this.#evidence)
 		const text = this.#decoder.write(chunk)
 		if (text.length > 0) this.#emitter.emit('stderr', text)
 	}
 
-	#close(code: number | null, signal: NodeJS.Signals | null): void {
-		if (this.#closed) return
+	#close(): void {
+		if (this.#settled) return
+		this.#settle(true)
+	}
+
+	// A native exit does not close the read ends: a descendant that inherited them holds them open
+	// for its own remaining life, and one that never ends never closes them at all. Arming the same
+	// bounded wait a requested termination awaits is what makes every ending reach the terminal
+	// moment.
+	#expire(): void {
+		if (this.#settled) return
+		void this.#wait()
+	}
+
+	// One bounded wait per close, created once and shared: the native exit arms it and a termination
+	// awaits the same one, so a close never carries two overlapping bounds. `waitForClose` clears its
+	// own timer on either outcome. The constructor registers `#close` before this listener exists, so
+	// a natural close settles drained and the continuation below finds the latch already set.
+	#wait(): Promise<void> {
+		this.#waiting ??= waitForClose(this.#child, this.#drain).then(() => {
+			if (!this.#settled) this.#settle(false)
+		})
+		return this.#waiting
+	}
+
+	#settle(drained: boolean): void {
+		// Flush the decoder while the stderr event channel is still live.
 		const suffix = this.#decoder.end()
 		if (suffix.length > 0) this.#emitter.emit('stderr', suffix)
-		this.#closed = true
+		// Latch before the terminal value is resolved and delivered below, so a consumer handed that
+		// value never reads a child still reporting itself unfinished.
+		this.#settled = true
 		this.#removeAbortListener()
+		// Closing readline ends pending reads while preserving lines already framed and queued.
 		this.#reader.close()
-		const exit = Object.freeze({ code, signal })
+		const exit = Object.freeze({ code: this.code, signal: this.signal, drained })
 		this.#exit.resolve(exit)
 		this.#emitter.emit('exit', exit)
+		// Release read handles only after every public pull surface is final.
+		this.#child.stdout.destroy()
+		this.#child.stderr.destroy()
 	}
 
 	#terminate(): void {
@@ -418,7 +464,7 @@ export class Process implements ProcessInterface {
 	}
 
 	#failInputCallback(cause: Error): void {
-		if (this.#failure !== undefined || this.#terminating) return
+		if (this.#failure !== undefined || this.#stopping) return
 		this.#failure = cause
 		this.#settleWrites()
 		this.#emitter.emit(
@@ -441,17 +487,18 @@ export class Process implements ProcessInterface {
 		// A paused stdout holds the child's own write, and therefore its exit. Bound the retained head,
 		// then release backpressure before signalling; later lines drop at the teardown cap instead of
 		// pausing the reader again.
-		this.#terminating = true
+		this.#stopping = true
 		this.#capBacklog()
 		this.#relieve()
 		const confirmed = await stopChild(this.#child, this.#grace, PROCESS_CONFIRMATION)
 		this.#settleWrites()
 		this.#child.stdin.destroy()
+		if (!this.#settled) await this.#wait()
+		if (!this.#settled) this.#settle(false)
 		return confirmed
 	}
 
-	async #teardown(): Promise<void> {
-		this.#removeAbortListener()
+	async #end(): Promise<void> {
 		await this.stop()
 		this.#emitter.destroy()
 	}

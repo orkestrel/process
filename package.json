@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/process",
-	"version": "0.0.5",
+	"version": "0.0.6",
 	"description": "A typed child-process toolkit with supervised streaming, bounded output capture and termination, detached spawns, and keyed child registries.",
 	"keywords": [
 		"child-process",

@@ -35,6 +35,7 @@ import {
 	isProcessError,
 	PROCESS_BACKLOG,
 	PROCESS_CONFIRMATION,
+	PROCESS_DRAIN,
 	PROCESS_ERROR_CODES,
 	PROCESS_EVIDENCE,
 	PROCESS_GRACE,
@@ -74,6 +75,7 @@ import {
 	validateText,
 	validateTimer,
 	validateWorkspace,
+	waitForClose,
 	waitForExit,
 } from '@src/server'
 
@@ -134,6 +136,7 @@ const REFUSALS: Readonly<
 			'validateText',
 			'validateTimer',
 			'validateWorkspace',
+			'waitForClose',
 			'waitForExit',
 		]),
 		shared: Object.freeze([]),
@@ -148,6 +151,7 @@ const REFUSALS: Readonly<
 			'ExecuteSyncOptions',
 			'PROCESS_BACKLOG',
 			'PROCESS_CONFIRMATION',
+			'PROCESS_DRAIN',
 			'PROCESS_ERROR_CODES',
 			'PROCESS_EVIDENCE',
 			'PROCESS_GRACE',
@@ -502,6 +506,7 @@ for (const entry of manifest) {
 const CONSTANTS: Readonly<Record<string, number | string | readonly string[]>> = Object.freeze({
 	PROCESS_GRACE,
 	PROCESS_CONFIRMATION,
+	PROCESS_DRAIN,
 	PROCESS_EVIDENCE,
 	PROCESS_BACKLOG,
 	PROCESS_OUTPUT,
@@ -738,6 +743,35 @@ describe('flagship fences', () => {
 		expect(confirmed).toBe(true)
 	})
 
+	it('closes the paired stop fence inside its bound', async () => {
+		const collector = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 50)'], {
+			detached: process.platform !== 'win32',
+		})
+
+		const closing = waitForClose(collector, 1_000)
+		await stopChild(collector, 5_000, 5_000)
+		const closed = await closing
+		expect(closed).toBe(true)
+	})
+
+	// The terminal-moment fence, whose point is that every surface reports one moment, so each is
+	// read back. The child ends itself, which is the path a reader meets first and the one where
+	// `stopping` stays false.
+	it('reports one terminal moment across every surface of the terminal-moment fence', async () => {
+		const child = createProcess({
+			command: { file: 'node', arguments: ['-e', 'console.error("done")'] },
+			workspace: process.cwd(),
+			drain: 1_000,
+		})
+
+		const exit = await child.exit
+		expect(exit.drained).toBe(true)
+		expect(child.settled).toBe(true)
+		expect(child.stopping).toBe(false)
+		expect(child.evidence).toBe('done\n')
+		await child.destroy()
+	})
+
 	it('drives the termination-helper fence through the host sequence', async () => {
 		const reporter = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 50)'], {
 			detached: process.platform !== 'win32',
@@ -837,13 +871,17 @@ describe('flagship fences', () => {
 		expect(executeSync(snapshot, { strict: false }).failed).toBe(false)
 	})
 
+	// The recorded order settles each claim the sentence carries: the refusal reaches the caller
+	// before the barrier resolves, and the barrier waits for the refused child's terminal moment.
+	// The refused child is returned to nobody, so its own `exit` listener is the only thing that can
+	// report that moment, and a barrier that skipped the teardown resolves ahead of it.
 	it('states and proves the protocol refusal precedes the destroy barrier', async () => {
 		const guide = requireValue(
 			files['guides/process.md'],
 			'Missing file: guides/process.md',
 		).replace(/\s+/gu, ' ')
 		expect(guide).toContain(
-			'The `protocol` refusal throws synchronously before the `destroy` barrier settles.',
+			'The `protocol` refusal throws synchronously, and the `destroy` barrier covers that child',
 		)
 
 		const manager = createProcessManager()
@@ -854,6 +892,7 @@ describe('flagship fences', () => {
 			manager.launch('racer', {
 				command: { file: process.execPath, arguments: ['-e', ''] },
 				workspace: process.cwd(),
+				on: { exit: () => order.push('terminal') },
 				get grace() {
 					ending = manager.destroy()
 					void ending.then(() => order.push('barrier'))
@@ -868,7 +907,7 @@ describe('flagship fences', () => {
 		await ending
 
 		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('protocol')
-		expect(order).toEqual(['refusal', 'barrier'])
+		expect(order).toEqual(['refusal', 'terminal', 'barrier'])
 	})
 
 	it('releases the abort listener destroy registered and the exit listener waitForExit registered', async () => {

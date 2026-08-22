@@ -43,12 +43,24 @@ export interface ProcessCommand {
 	readonly isolated?: boolean
 }
 
-/** The observed terminal state of a child process: its exit code, or the signal that ended it. */
+/**
+ * The observed terminal state of a child process: its exit code or the signal that ended it, and
+ * how its observation ended.
+ *
+ * @remarks
+ * This value exists only at the terminal moment, so every field on it is already final and no
+ * consumer can read one too early. `drained` reports whether the diagnostics are complete;
+ * {@link ProcessInterface.truncated} reports that the `lines` stream omitted stdout lines. They are
+ * independent facts about different streams, and one child reports both when a retention bound
+ * dropped lines and the drain bound cut stderr off.
+ */
 export interface ProcessExit {
 	/** The exit code, or `null` when a signal ended the process. A spawn fault reports the host's negative errno for `Process` and `execute`. */
 	readonly code: number | null
 	/** The terminating signal name, or `null` when the process exited on its own. */
 	readonly signal: string | null
+	/** True when the terminal moment arrived because the child's streams closed; false when the `drain` bound elapsed first and later diagnostics may have existed. */
+	readonly drained: boolean
 }
 
 /**
@@ -111,8 +123,17 @@ export type ProcessEventMap = {
  *
  * @remarks
  * `grace` is the cooperative window between `SIGTERM` and `SIGKILL` on a POSIX host; Windows has no
- * cooperative phase, so the value is unused there. There is no completion deadline — a caller that
- * wants one arms its own timer and calls `stop`. `backlog` bounds the unconsumed `lines` backlog.
+ * cooperative phase, so the value is unused there. There is no completion deadline for a running
+ * child: nothing here ends a child that is still working, the `exit` promise carries no deadline of
+ * its own, and a caller that wants one arms its own timer and calls `stop`. `drain` does not weaken
+ * that. It bounds a single window — between the child's ending and the release of that child's read
+ * ends — so it cannot end a running child. The child's native exit arms it, and so does the return
+ * of a termination this package initiated through `stop`, `destroy`, or an abort of `signal`; a
+ * termination whose confirmation window elapsed can therefore reach the cutoff while the child still
+ * runs. The bound exists because a descendant holding an inherited pipe defers the host's stream
+ * close for that descendant's whole life, which the package cannot reach and cannot outwait: without
+ * the bound, a child that ended would hand the caller an unbounded wait.
+ * `backlog` bounds the unconsumed `lines` backlog.
  * During termination, retained lines are capped at twice `backlog`; later lines are dropped without
  * pausing stdout, and {@link ProcessInterface.truncated} reports the omission. `on` installs initial
  * {@link ProcessEventMap} listeners and `error` receives isolated listener failures. Every numeric
@@ -130,6 +151,8 @@ export interface ProcessOptions {
 	readonly workspace: string
 	/** Cooperative POSIX window in milliseconds between `SIGTERM` and `SIGKILL`. Default: {@link PROCESS_GRACE}. */
 	readonly grace?: number
+	/** Milliseconds the package waits for the child's read ends to close after the native exit or an initiated termination, before cutting them off; `0` cuts them off as soon as the bound is armed. Default: {@link PROCESS_DRAIN}. */
+	readonly drain?: number
 	/** Maximum retained stderr tail in bytes. Default: {@link PROCESS_EVIDENCE}. */
 	readonly evidence?: number
 	/** Soft high-water mark in bytes for the unconsumed `lines` backlog; termination retains at most twice this value. Default: {@link PROCESS_BACKLOG}. */
@@ -160,14 +183,22 @@ export interface ProcessOptions {
  * its own capture `limit`. The typed `emitter` carries the live `stderr` chunks, the child `error` cause, and the
  * terminal `exit`, alongside the `exit` promise. `stop` and `destroy` are idempotent and never reject.
  *
+ * The same terminal moment governs every observation surface. It arrives when the child's streams close,
+ * or when the `drain` bound armed by the native exit or by a termination this package initiated
+ * elapses first, and
+ * {@link ProcessExit.drained} reports which. At that moment `evidence` freezes, `lines` ends, `exit`
+ * settles, and `settled` turns true — together, so a consumer reading `evidence` and a consumer
+ * iterating `lines` never see a different child. `stop`, `destroy`, an abort of the `signal` option,
+ * a natural exit, and a spawn fault all reach it.
+ *
  * The spawn is eager, so `pid` is fixed by the time construction returns; a spawn that produced no
  * child reports `undefined` for that child's whole lifetime. An assigned id survives the exit and
  * reports no liveness on its own, because the host reuses a dead child's id. Derive liveness as
  * `pid !== undefined && code === null && signal === null`, and derive it again before every use of
  * the id. `code` and `signal` mirror the host child's own terminal record, so they carry the native
- * exit as soon as the host has it, while the `exit` promise settles on stdio close — a descendant
- * holding inherited stdio keeps that close pending past the native exit, and a supervisor inside
- * that window reads the terminal state here.
+ * exit as soon as the host has it, while the `exit` promise settles at the terminal moment — a
+ * descendant holding inherited stdio keeps the stream close pending past the native exit, and a
+ * supervisor inside that window reads the terminal state here.
  */
 export interface ProcessInterface {
 	/** The host process id, fixed when construction returns, or `undefined` when the spawn produced none. */
@@ -179,7 +210,7 @@ export interface ProcessInterface {
 	/** The typed lifecycle observation surface. */
 	readonly emitter: EmitterInterface<ProcessEventMap>
 	/**
-	 * The captured stdout lines, in arrival order, for one consumer, ending when the child's stdout closes.
+	 * The captured stdout lines, in arrival order, for one consumer, ending at the terminal moment.
 	 *
 	 * @remarks
 	 * A line feed, a CRLF pair, and a bare carriage return each terminate a line, and a CRLF split
@@ -187,13 +218,58 @@ export interface ProcessInterface {
 	 * return therefore yields one line per redraw, and consecutive carriage returns yield an empty
 	 * line between them. A final line written with no trailing terminator is delivered when stdout
 	 * closes.
+	 *
+	 * The stream ends at the terminal moment rather than throwing there, so teardown is not an error
+	 * path: a pending `next()` resolves `done: true` and a `for await` loop exits normally. Lines
+	 * already framed and queued are delivered before that end, so a consumer that stops a chatty
+	 * child still reads what the child had produced, and only bytes that would have arrived after the
+	 * terminal moment are lost — whether that moment came from the read ends closing, from the
+	 * `drain` bound after a native exit, or from a requested termination. An unframed trailing partial
+	 * written before an undrained cutoff is not promised, because only the stream's own end flushes
+	 * one. A read started after the end yields nothing further.
 	 */
 	readonly lines: AsyncIterable<string>
-	/** The decoded byte-bounded stderr tail. */
+	/**
+	 * The decoded byte-bounded stderr tail.
+	 *
+	 * @remarks
+	 * The live tail before the terminal moment and the frozen value after it, on every path — a
+	 * natural exit, `stop`, `destroy`, an abort of the `signal` option, and a spawn fault. Every read
+	 * after that moment returns the same string, so a consumer needs no private copy and cannot
+	 * observe the tail moving under it. When {@link ProcessExit.drained} is false the frozen value is
+	 * the tail as of the cutoff, and later diagnostics may have existed.
+	 */
 	readonly evidence: string
 	/** True when the `lines` stream omitted output because a retention bound was reached. */
 	readonly truncated: boolean
-	/** The terminal child state, observed once from the close event. */
+	/**
+	 * True after the `exit` promise settled.
+	 *
+	 * @remarks
+	 * The terminal moment has arrived: `evidence` is frozen, `lines` has ended, and the
+	 * {@link ProcessExit} value exists. Reached on every path, including a spawn that produced no
+	 * child.
+	 */
+	readonly settled: boolean
+	/**
+	 * True after a termination began.
+	 *
+	 * @remarks
+	 * Monotonic. It turns true when `stop`, `destroy`, or an abort of the `signal` option begins a
+	 * termination, and it stays true from then on, including after `settled` turns true. It reports
+	 * that a termination was initiated, not that one is in flight, because the initiation is the fact
+	 * a consumer acts on: a child that was asked to end is not a child to send new work to. A child
+	 * that exited on its own reports `false` here with `settled` true.
+	 */
+	readonly stopping: boolean
+	/**
+	 * The terminal child state, delivered once.
+	 *
+	 * @remarks
+	 * Never rejects. It settles at the terminal moment: when the child's streams close, or when the
+	 * `drain` bound elapsed first. The native exit arms that bound as well as an initiated
+	 * termination, so a child nobody terminates still settles it within `drain` of ending.
+	 */
 	readonly exit: Promise<ProcessExit>
 	/**
 	 * Write one line to the open standard-input channel.
@@ -214,7 +290,7 @@ export interface ProcessInterface {
 	 */
 	send(text: string): Promise<boolean>
 	/**
-	 * Terminate the child process tree and await its observed exit.
+	 * Terminate the child process tree, await its observed exit, and reach the terminal moment.
 	 *
 	 * @remarks
 	 * Never rejects. On Windows the whole tree is killed immediately through `taskkill`, with a
@@ -222,16 +298,25 @@ export interface ProcessInterface {
 	 * `SIGKILL` after `grace`. No signal is initiated after the child's native exit is observed; the
 	 * window between initiating a signal and the host delivering it belongs to the operating system.
 	 *
+	 * Observation ends here as well as under `destroy`, bounded by `drain`: `evidence` freezes,
+	 * `lines` ends, and `exit` settles. A caller that stops a child and keeps reading it therefore
+	 * reaches the end of the stream instead of waiting on a child it already ended, and needs no
+	 * second call to release it.
+	 *
 	 * @returns True when the child's native exit was observed; false when the confirmation deadline elapsed without it
 	 */
 	stop(): Promise<boolean>
 	/**
-	 * Stop the child, close its standard-input channel, and destroy the observation emitter.
+	 * Stop the child, close its standard-input channel, reach the terminal moment, and destroy the
+	 * observation emitter.
 	 *
 	 * @remarks
-	 * Always resolves, including when termination was never confirmed. Resolving does not imply the
-	 * child's stdio has closed: a descendant holding an inherited pipe keeps the close event pending,
-	 * so `exit` and `lines` can still be outstanding after this barrier settles.
+	 * Always resolves, including when termination was never confirmed. The barrier settles after the
+	 * terminal moment, so `evidence` is frozen, `lines` has ended, and `exit` has settled by the time
+	 * a caller resumes. The wait for the child's streams is bounded by `drain`, so a descendant
+	 * holding an inherited pipe cannot hold this barrier open, and {@link ProcessExit.drained} reports
+	 * which way the moment arrived. The emitter is destroyed after the frozen state exists, so a
+	 * consumer watching the `stderr` event and a consumer reading `evidence` end on the same bytes.
 	 *
 	 * @returns The stable barrier shared by every call
 	 */
@@ -435,11 +520,11 @@ export interface ProcessManagerInterface {
 	 * @remarks
 	 * Every option is read before the child is spawned, so a caller's own option getter runs while
 	 * nothing has started and a throw from one strands no process. A getter that begins `destroy`
-	 * without throwing is the one remaining race, and it leaves a bounded residual: the child is
-	 * already spawned, so the launch is refused with `protocol` and that child is torn down
-	 * asynchronously, bounded by `grace` plus the confirmation window. The `protocol` refusal throws
-	 * synchronously before the `destroy` barrier settles. The barrier does not cover that child's
-	 * asynchronous teardown.
+	 * without throwing is the one remaining race: the child is already spawned, so the launch is
+	 * refused with `protocol` and that child is destroyed rather than adopted, its teardown bounded
+	 * by `grace` plus the confirmation window. The `protocol` refusal throws synchronously, and the
+	 * `destroy` barrier covers that teardown, so the refused child reaches its terminal moment before
+	 * the barrier resolves.
 	 *
 	 * @param id - The registry key, unique among live children
 	 * @param options - The child construction options

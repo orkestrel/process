@@ -23,9 +23,9 @@ import { Process } from './Process.js'
  * the child registered. `launch` throws a {@link createDuplicateError} when the id is already live
  * and a {@link createProtocolError} after `destroy` has begun, including when the caller's own option
  * getter begins that teardown mid-construction — a spawn fault surfaces through the returned child's
- * `exit`, never from `launch`. `destroy` awaits every child's own teardown, which destroys each
- * child's observation emitter and leaves every subscription on it silently inert, then destroys the
- * registry emitter last.
+ * `exit`, never from `launch`. `destroy` awaits every child's own teardown, including the teardown
+ * of a child a lost race refused, which destroys each child's observation emitter and leaves every
+ * subscription on it silently inert, then destroys the registry emitter last.
  *
  * @example
  * ```ts
@@ -44,6 +44,9 @@ export class ProcessManager implements ProcessManagerInterface {
 	readonly #emitter: Emitter<ProcessManagerEventMap>
 	readonly #children = new Map<string, ProcessInterface>()
 	readonly #ids = new Set<string>()
+	// The children a launch spawned into a registry that was already being destroyed. They are never
+	// registered, so `#teardown` cannot reach them through `#children`, and it drains this set instead.
+	readonly #orphans = new Set<ProcessInterface>()
 	// A guard reads `#destroying`, never `#ending !== undefined`. `destroy` assigns the boolean before
 	// it assigns the barrier, so the boolean also covers the synchronous prefix of the teardown, which
 	// runs while `#ending` is still `undefined`.
@@ -99,11 +102,11 @@ export class ProcessManager implements ProcessManagerInterface {
 	 * @remarks
 	 * {@link Process} reads every option before it spawns, so a caller's own option getter runs while
 	 * nothing has started and a throw from one strands no process. A getter that begins `destroy`
-	 * without throwing is the one remaining race, and it leaves a bounded residual: the child is
-	 * already spawned, so the launch is refused with a {@link createProtocolError} and that child is
-	 * torn down asynchronously, bounded by `grace` plus the confirmation window. The `protocol`
-	 * refusal throws synchronously before the `destroy` barrier settles. The barrier does not cover
-	 * that child's asynchronous teardown.
+	 * without throwing is the one remaining race: the child is already spawned, so the launch is
+	 * refused with a {@link createProtocolError} and that child is destroyed rather than adopted, its
+	 * teardown bounded by `grace` plus the confirmation window. The `protocol` refusal throws
+	 * synchronously, and the `destroy` barrier covers that teardown, so the refused child reaches its
+	 * terminal moment before the barrier resolves.
 	 *
 	 * @param id - The registry key, unique among live children
 	 * @param options - The child construction options
@@ -117,9 +120,12 @@ export class ProcessManager implements ProcessManagerInterface {
 		const child = this.#construct(id, options)
 		// Reading an option runs the caller's own code, so teardown can begin between the check above
 		// and the child that is now spawned. A registry being destroyed adopts nothing: the child is
-		// torn down here, the reservation goes back, and the launch is refused.
+		// torn down here, the reservation goes back, and the launch is refused. The child joins
+		// `#orphans` before its teardown starts, so `#teardown` covers it however far that teardown
+		// has already progressed.
 		if (this.#destroying) {
 			this.#ids.delete(id)
+			this.#orphans.add(child)
 			void child.destroy()
 			throw createProtocolError(id)
 		}
@@ -206,6 +212,19 @@ export class ProcessManager implements ProcessManagerInterface {
 
 	async #teardown(): Promise<void> {
 		await Promise.allSettled([...this.#children.values()].map((child) => child.destroy()))
+		// A launch that lost the race spawns its child after the line above read the registry, so the
+		// barrier picks those children up here. Each pass takes the whole set and empties it, so a
+		// child that arrives while an earlier pass is still awaiting is covered by the next one and no
+		// child is awaited twice; the loop ends only on a pass that found the set empty. `destroy` on
+		// a child is idempotent, so awaiting it here joins the teardown `launch` already began rather
+		// than starting a second one. Every loser of the race is therefore covered, however many of
+		// them one turn produces: a loser can only be a `launch` that passed the guard before
+		// `#destroying` was set, and every such call is already on the stack when this runs.
+		while (this.#orphans.size > 0) {
+			const orphans = [...this.#orphans]
+			this.#orphans.clear()
+			await Promise.allSettled(orphans.map((child) => child.destroy()))
+		}
 		// A destroyed registry holds nothing: a child whose stdio a descendant still holds would
 		// otherwise linger here until a close event that may never arrive.
 		this.#children.clear()

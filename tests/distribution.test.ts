@@ -136,8 +136,8 @@ it('installs the packed artifact and drives its entries, declarations, and resol
 		expect(targetCount).toBeGreaterThan(0)
 
 		const declarations = [
-			{ entry: 'core', path: 'dist/src/core/index.d.ts', count: 14 },
-			{ entry: 'server', path: 'dist/src/server/index.d.ts', count: 34 },
+			{ entry: 'core', path: 'dist/src/core/index.d.ts', count: 15 },
+			{ entry: 'server', path: 'dist/src/server/index.d.ts', count: 35 },
 		]
 		const declared = new Map<string, readonly string[]>()
 		for (const declaration of declarations) {
@@ -210,8 +210,8 @@ it('installs the packed artifact and drives its entries, declarations, and resol
 			}
 			expect(core).toEqual(declared.get('core'))
 			expect(server).toEqual(declared.get('server'))
-			expect(core).toHaveLength(14)
-			expect(server).toHaveLength(34)
+			expect(core).toHaveLength(15)
+			expect(server).toHaveLength(35)
 			expect(coreCall).toBe(false)
 			expect(serverCall).toBe('node --version')
 		}
@@ -254,7 +254,7 @@ it('installs the packed artifact and drives its entries, declarations, and resol
 				"import { formatCommand } from '@orkestrel/process/server'",
 				"export const recognized: boolean = isProcessError(new Error('plain'))",
 				"export const line: string = formatCommand({ file: 'node', arguments: ['--version'] })",
-				'export const settled: ProcessExit = { code: 0, signal: null }',
+				'export const settled: ProcessExit = { code: 0, signal: null, drained: true }',
 			].join('\n'),
 		)
 		const modes = [
