@@ -1,73 +1,42 @@
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { waitForDelay } from '@orkestrel/test'
-import { waitForCondition } from './setup.js'
+import { childCommand, resolveChildFixture } from './setupServer.js'
 
-describe('waitForCondition', () => {
-	it('resolves as soon as a synchronous condition holds', async () => {
-		let held = false
-		setTimeout(() => {
-			held = true
-		}, 40)
-		const started = performance.now()
-		await waitForCondition(() => held, 1_000, 5)
-		const elapsed = performance.now() - started
-		expect(held).toBe(true)
-		// The property is that it returns near the event rather than near the budget, so it is
-		// asserted as a relationship to the budget rather than as the number one run produced.
-		expect(elapsed).toBeLessThan(500)
+// The helper anchors the fixture to the working directory, so this file anchors it to its own
+// module URL instead. The two mechanisms disagree whenever the suite runs from anywhere but the
+// workspace root, which is the failure the helper's callers would otherwise meet as a spawn fault.
+const fixture = fileURLToPath(new URL('./src/server/fixtures/child.mjs', import.meta.url))
+
+describe('resolveChildFixture', () => {
+	it('resolves the fixture the suite spawns, independently of the working directory', () => {
+		expect(resolveChildFixture()).toBe(fixture)
 	})
 
-	it('awaits a condition that resolves asynchronously', async () => {
-		let held = false
-		setTimeout(() => {
-			held = true
-		}, 40)
-		await waitForCondition(
-			async () => {
-				await waitForDelay(1)
-				return held
-			},
-			1_000,
-			5,
-		)
-		expect(held).toBe(true)
+	it('resolves a path that exists on disk', () => {
+		expect(existsSync(resolveChildFixture())).toBe(true)
+	})
+})
+
+describe('childCommand', () => {
+	it('spawns the running runtime rather than a name the host resolver has to find', () => {
+		const command = childCommand('exit')
+		expect(command.file).toBe(process.execPath)
+		expect(existsSync(command.file)).toBe(true)
 	})
 
-	it('rejects with the budget named when the condition never holds', async () => {
-		const started = performance.now()
-		const error = await waitForCondition(() => false, 60, 5).then(
-			() => undefined,
-			(thrown: unknown) => thrown,
-		)
-		const elapsed = performance.now() - started
-		expect(error).toBeInstanceOf(Error)
-		expect(String(error)).toContain('60ms')
-		expect(elapsed).toBeGreaterThanOrEqual(60)
+	it('leads the argument vector with the fixture and follows it with the mode', () => {
+		expect(childCommand('tree-write').arguments).toEqual([fixture, 'tree-write'])
 	})
 
-	it('polls at least twice before giving up, so a late condition is still observed', async () => {
-		let polls = 0
-		let held = false
-		setTimeout(() => {
-			held = true
-		}, 30)
-		await waitForCondition(
-			() => {
-				polls += 1
-				return held
-			},
-			1_000,
-			5,
-		)
-		expect(polls).toBeGreaterThan(1)
+	it('appends the detail only when the caller supplies one', () => {
+		expect(childCommand('exit', '3').arguments).toEqual([fixture, 'exit', '3'])
 	})
 
-	it('returns without polling twice when the condition already holds', async () => {
-		let polls = 0
-		await waitForCondition(() => {
-			polls += 1
-			return true
-		})
-		expect(polls).toBe(1)
+	it('returns an argument vector per call, so one command never reaches another', () => {
+		const first = childCommand('exit', '3')
+		const second = childCommand('tree-write')
+		expect(first.arguments).not.toBe(second.arguments)
+		expect(first.arguments).not.toEqual(second.arguments)
 	})
 })

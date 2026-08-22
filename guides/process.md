@@ -1298,8 +1298,9 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   it packs the package, installs the tarball into a directory outside this repository, and compares
   the runtime exports of each built format against the declarations the compiler parses, under each
   supported `moduleResolution` mode.
-- [`tests/setup.test.ts`](../tests/setup.test.ts) — `waitForCondition`, the polled wait this suite
-  uses in place of a fixed delay: when it returns, when it rejects, and the budget it names.
+- [`tests/setup.test.ts`](../tests/setup.test.ts) — `resolveChildFixture` and `childCommand`, the
+  fixture command builders this suite spawns through: where the fixture resolves, and the argument
+  vector each mode produces.
 
 ## See also
 
