@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { holds } from '@orkestrel/contract'
-import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
+import { createRecorder, retryUntil, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch, isRunning } from '@orkestrel/test/server'
 import { isProcessError, ProcessError } from '@src/core'
 import { createProcessManager } from '@src/server'
@@ -147,61 +147,70 @@ describe('ProcessManager', () => {
 		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('protocol')
 	})
 
-	it('refuses a launch whose own options destroyed the registry mid-construction', async () => {
-		const manager = createProcessManager()
-		const scratch = createScratch()
-		const marker = join(scratch.path, 'launched.pid')
-		const teardown: Array<Promise<void>> = []
-		let pid = 0
-		let markerValid = false
-		let terminationValid = true
+	it(
+		'refuses a launch whose own options destroyed the registry mid-construction',
+		// The timeout is sized for the wait budgets plus the real child spawn cost.
+		{ timeout: 5_000 },
+		async () => {
+			const manager = createProcessManager()
+			const scratch = createScratch()
+			const marker = join(scratch.path, 'launched.pid')
+			const teardown: Array<Promise<void>> = []
+			let pid = 0
+			let markerValid = false
+			let terminationValid = true
 
-		try {
-			let thrown: unknown
 			try {
-				manager.launch('racer', {
-					command: childCommand('announce', marker),
-					workspace: process.cwd(),
-					// Reading an option is the one point a caller's own code runs between the destroy
-					// check and the spawned child, so a getter is the narrowest form of that window.
-					get grace() {
-						if (teardown.length === 0) teardown.push(manager.destroy())
-						return 20
-					},
-				})
-			} catch (error) {
-				thrown = error
-			}
-			await Promise.all(teardown)
-
-			expect(isProcessError(thrown)).toBe(true)
-			expect(isProcessError(thrown) ? thrown.code : undefined).toBe('protocol')
-			expect(manager.count).toBe(0)
-
-			if (process.platform === 'win32') {
-				for (let attempt = 0; attempt < 60; attempt += 1) {
-					if (pid === 0 && existsSync(marker)) {
-						pid = Number.parseInt(readFileSync(marker, 'utf8'), 10)
-					}
-					if (pid > 0 && !holds(() => process.kill(pid, 0))) break
-					await waitForDelay(50)
+				let thrown: unknown
+				try {
+					manager.launch('racer', {
+						command: childCommand('announce', marker),
+						workspace: process.cwd(),
+						// Reading an option is the one point a caller's own code runs between the destroy
+						// check and the spawned child, so a getter is the narrowest form of that window.
+						get grace() {
+							if (teardown.length === 0) teardown.push(manager.destroy())
+							return 20
+						},
+					})
+				} catch (error) {
+					thrown = error
 				}
-				markerValid = pid > 0
-				terminationValid = pid > 0 && !holds(() => process.kill(pid, 0))
-			} else {
-				// This branch proves only that the marker stays absent during the window. A change that
-				// stopped spawning the child would also pass it.
-				await waitForDelay(100)
-				markerValid = !existsSync(marker)
-			}
+				await Promise.all(teardown)
 
-			expect(markerValid).toBe(true)
-			expect(terminationValid).toBe(true)
-		} finally {
-			if (pid > 0) holds(() => process.kill(pid, 'SIGKILL'))
-			scratch.destroy()
-		}
-	})
+				expect(isProcessError(thrown)).toBe(true)
+				expect(isProcessError(thrown) ? thrown.code : undefined).toBe('protocol')
+				expect(manager.count).toBe(0)
+
+				if (process.platform === 'win32') {
+					pid = await retryUntil(
+						'the announced child publishes its process id',
+						() => (existsSync(marker) ? Number.parseInt(readFileSync(marker, 'utf8'), 10) : 0),
+						(value) => value > 0,
+						{ budget: 1_500, interval: 50 },
+					)
+					await waitForCondition(
+						'the registry terminates the child it spawned during the destroy race',
+						() => !holds(() => process.kill(pid, 0)),
+						{ budget: 1_500, interval: 50 },
+					)
+					markerValid = existsSync(marker) && Number.parseInt(readFileSync(marker, 'utf8'), 10) > 0
+					terminationValid = !holds(() => process.kill(pid, 0))
+				} else {
+					// This branch proves only that the marker stays absent during the window. A change that
+					// stopped spawning the child would also pass it.
+					await waitForDelay(100)
+					markerValid = !existsSync(marker)
+				}
+
+				expect(markerValid).toBe(true)
+				expect(terminationValid).toBe(true)
+			} finally {
+				if (pid > 0) holds(() => process.kill(pid, 'SIGKILL'))
+				scratch.destroy()
+			}
+		},
+	)
 
 	it('strands no child when an option getter destroys the registry and then throws', async () => {
 		const manager = createProcessManager()
@@ -229,19 +238,14 @@ describe('ProcessManager', () => {
 				thrown = error
 			}
 			await Promise.all(teardown)
-			for (let attempt = 0; attempt < 20; attempt += 1) {
-				if (existsSync(marker)) {
-					pid = Number.parseInt(readFileSync(marker, 'utf8'), 10)
-					break
-				}
-				await waitForDelay(50)
-			}
+			// The fixture publishes its own process id the moment it starts, so an absent marker after
+			// the child-startup window proves that the refused launch spawned nothing at all.
+			await waitForDelay(1_000)
+			if (existsSync(marker)) pid = Number.parseInt(readFileSync(marker, 'utf8'), 10)
 
 			expect(thrown).toBeInstanceOf(Error)
 			expect(isProcessError(thrown)).toBe(false)
 			expect(manager.count).toBe(0)
-			// The fixture publishes its own process id the moment it starts, so an absent marker is
-			// the proof that the refused launch spawned nothing at all.
 			expect(existsSync(marker)).toBe(false)
 			expect(pid).toBe(0)
 		} finally {
