@@ -1316,6 +1316,9 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
 - [`tests/setup.test.ts`](../tests/setup.test.ts) — `resolveChildFixture` and `childCommand`, the
   fixture command builders this suite spawns through: where the fixture resolves, and the argument
   vector each mode produces.
+- [`tests/setupServer.test.ts`](../tests/setupServer.test.ts) — the same builders spawned for real:
+  the fixture's own exit code, stdout, and stderr for a supplied detail, its own default when the
+  caller omits one, and the argument vector reaching it unmodified.
 
 ## See also
 
