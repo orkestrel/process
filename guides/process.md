@@ -1226,6 +1226,21 @@ Each name on this surface that reads against a house rule is settled here rather
 
 ## Tests
 
+Every proof that starts a real child runs in the `src:server` project, because spawning is this
+package's server subject. Such a proof is an expensive one, and the fixed isolated projects carry
+different subjects: the `distribution` project proves what the packed artifact installs, and the
+`service` project proves a live external service. This package drives no external service, so it
+declares no `service` project at all. Filing a spawn proof under either subject moves it out of the
+default gate, and the package's own behavior then goes unproven until a publish.
+
+Size every budget in a spawning suite — a case timeout, a termination wait, a condition budget —
+from a full contended run rather than from an isolated one. Those suites start real children
+concurrently, so each case pays for the children every other file starts beside it. On Linux with
+Node v22.22.2 on 2026-08-25, `npm run test:src` reported a 6.94s wall duration over 12.86s of
+aggregate test time, while the `tests/src/server/ProcessManager.test.ts` file alone reported 1.97s.
+A budget sized from the isolated cost turns that contention into a red gate reporting a timeout, and
+a timeout carries no diagnostic about the code.
+
 The pure platform-decision rows execute both `win32` and POSIX inputs on every host. They cover
 environment-key folding and merging, `PATHEXT` candidate order, batch routing, argument quoting, and
 the percent-sign refusal. Those rows were last proven on Linux on 2026-08-20. The live POSIX rows
