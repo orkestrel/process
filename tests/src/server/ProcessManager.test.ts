@@ -148,13 +148,15 @@ describe('ProcessManager', () => {
 	})
 
 	// The refusal hands the caller nothing and tears its own child down, so a hook the refused options
-	// carried is the only observer that child ever has. Its terminal event is what separates a refusal
-	// that spawned and cleaned up from a refusal that never spawned at all: every other observable
-	// here reads the same either way.
+	// carried is the only observer that child ever has. Its terminal event answers the two questions
+	// nothing else here can separate: whether the launch spawned a child at all, and whether the
+	// destroy barrier carried that child's teardown. The refusal, the empty registry, and the absent
+	// handle read the same for a refusal that spawned and cleaned up, a refusal that spawned nothing,
+	// and a refusal whose child outlived the barrier.
 	it(
-		'refuses a launch whose own options destroyed the registry mid-construction, and tears down the child that launch spawned',
-		// The fixture exits on `SIGTERM`, so the refused child's teardown is bounded by `grace` and the
-		// confirmation of that exit rather than by the `SIGKILL` window. The condition budget outlasts
+		'refuses a launch whose own options destroyed the registry mid-construction, and reaches the terminal moment of the child that launch spawned before its barrier resolves',
+		// The fixture handles `SIGTERM`, so the refused child's teardown is bounded by `grace` plus the
+		// confirmation of its exit rather than by the `SIGKILL` window. The condition budget outlasts
 		// that bound, so its expiry reports a terminal moment that never arrived rather than one that
 		// arrived late. The timeout clears the budget, the refused launch's barrier, the control's
 		// barrier, and the real spawns, sized from this file's cost inside a full contended
@@ -182,11 +184,14 @@ describe('ProcessManager', () => {
 				thrown = error
 			}
 			await Promise.all(teardown)
+			// The recorder as the barrier resolved. Every later read waits, so this snapshot is the only
+			// value that can report whether the barrier itself carried the teardown.
 			const settled = refused.count
 
 			// The control is the same fixture, the same hook, and the same barrier with the race removed.
-			// A registered child delivers its terminal moment to an `on` hook, so an empty recorder above
-			// reports a child that never existed rather than a hook this path never installs.
+			// A registered child delivers its terminal moment to an `on` hook before `destroy` resolves,
+			// so an empty recorder above reports a child that never existed rather than a hook this path
+			// never installs.
 			const covered = createProcessManager()
 			const registered = createRecorder<readonly [ProcessExit]>()
 			covered.launch('registered', {
@@ -196,20 +201,31 @@ describe('ProcessManager', () => {
 				on: { exit: registered.handler },
 			})
 			await covered.destroy()
+			// Read the control before waiting on the refused recorder, so an uninstalled hook and an
+			// absent refused child fail at different lines.
+			expect(registered.count).toBe(1)
 
-			// Read the terminal moment again on its own budget before asserting the snapshot, so a
-			// snapshot that was empty at the barrier is diagnosed as barrier timing rather than as a
-			// child that never terminated.
+			// Read the refused recorder again on its own budget, so a snapshot that was empty at the
+			// barrier is diagnosed as barrier timing rather than as a child that never terminated.
 			await waitForCondition(
 				'the refused launch reaches the terminal moment of the child it spawned',
 				() => refused.count === 1,
 				{ budget: 5_000 },
 			)
+			const terminal = refused.calls[0]?.[0]
 
 			expect(isProcessError(thrown)).toBe(true)
 			expect(isProcessError(thrown) ? thrown.code : undefined).toBe('protocol')
 			expect(manager.count).toBe(0)
-			expect(registered.count).toBe(1)
+			// A launch that spawned nothing reaches the terminal moment too: a spawn fault settles the
+			// host's negative errno as the code, and a cutoff that confirmed nothing settles both fields
+			// null. Only a code the child itself returned or a signal that ended it reports a child that
+			// really ran, and this fixture ends one of those two ways on every host.
+			expect(terminal).toSatisfy(
+				(pair: ProcessExit | undefined) =>
+					pair !== undefined && ((pair.code !== null && pair.code >= 0) || pair.signal !== null),
+				'the refused launch recorded the terminal pair of a child that ran',
+			)
 			expect(settled).toBe(1)
 		},
 	)
@@ -250,70 +266,6 @@ describe('ProcessManager', () => {
 			expect(manager.count).toBe(0)
 			expect(existsSync(marker)).toBe(false)
 			expect(pid).toBe(0)
-		} finally {
-			if (pid > 0) holds(() => process.kill(pid, 'SIGKILL'))
-			scratch.destroy()
-		}
-	})
-
-	// The registry refuses this launch and tears its child down itself, so nothing else can observe
-	// that child. The barrier is therefore the only thing that can carry the teardown, and this asks
-	// whether it does: the terminal moment of the child the registry started tearing down must have
-	// arrived by the time the caller resumes.
-	it('reaches the terminal moment of a child spawned during a destroy race before its barrier resolves', async () => {
-		const manager = createProcessManager()
-		const scratch = createScratch()
-		const marker = join(scratch.path, 'raced.pid')
-		const raced = createRecorder<readonly [ProcessExit]>()
-		const teardown: Array<Promise<void>> = []
-		let pid = 0
-
-		try {
-			let thrown: unknown
-			try {
-				manager.launch('racer', {
-					command: childCommand('announce', marker),
-					workspace: process.cwd(),
-					on: { exit: raced.handler },
-					// Reading an option is the one point a caller's own code runs between the destroy
-					// check and the spawned child, so a getter is the narrowest form of that window.
-					get grace() {
-						if (teardown.length === 0) teardown.push(manager.destroy())
-						return 20
-					},
-				})
-			} catch (error) {
-				thrown = error
-			}
-			await Promise.all(teardown)
-			const settled = raced.count
-
-			// The control is the same fixture, the same recorder, and the same barrier with the race
-			// removed: a registered child's terminal moment lands before `destroy` resolves, so the
-			// recorder reads one there whenever the barrier carried the teardown.
-			const covered = createProcessManager()
-			const registered = createRecorder<readonly [ProcessExit]>()
-			covered.launch('registered', {
-				command: childCommand('announce', join(scratch.path, 'registered.pid')),
-				workspace: process.cwd(),
-				grace: 20,
-				on: { exit: registered.handler },
-			})
-			await covered.destroy()
-
-			// The refused launch really spawned a child that really ends, so a terminal moment absent
-			// at the barrier is one the barrier did not wait for rather than one that never arrives.
-			await waitForCondition(
-				'the refused launch tears down the child it spawned',
-				() => raced.count === 1,
-				{ budget: 10_000 },
-			)
-			if (existsSync(marker)) pid = Number.parseInt(readFileSync(marker, 'utf8'), 10)
-
-			expect(isProcessError(thrown) ? thrown.code : undefined).toBe('protocol')
-			expect(registered.count).toBe(1)
-			expect(raced.count).toBe(1)
-			expect(settled).toBe(1)
 		} finally {
 			if (pid > 0) holds(() => process.kill(pid, 'SIGKILL'))
 			scratch.destroy()
