@@ -92,6 +92,9 @@ if (mode === 'write') {
 	// Write one marker to the inherited stderr and append the same bytes to the caller's file at the
 	// same instant. A caller that sees the file grow after a barrier knows bytes reached the pipe
 	// after it too, so a frozen tail is a frozen tail rather than an absence of anything to read.
+	// The held pipe's destruction must not end the file-side proof, so swallow the stream error it
+	// otherwise raises.
+	process.stderr.on('error', () => undefined)
 	let index = 0
 	setInterval(() => {
 		const marker = `late:${String(index)}\n`
