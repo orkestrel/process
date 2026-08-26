@@ -2,8 +2,9 @@ import { Buffer } from 'node:buffer'
 import { existsSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { waitForCondition, waitForDelay } from '@orkestrel/test'
-import { createScratch } from '@orkestrel/test/server'
+import { holds } from '@orkestrel/contract'
+import { waitForCondition } from '@orkestrel/test'
+import { createScratch, isRunning } from '@orkestrel/test/server'
 import { isProcessError } from '@src/core'
 import { execute, executeSync } from '@src/server'
 import { childCommand, resolveChildFixture } from '../../../setupServer.js'
@@ -11,12 +12,16 @@ import { childCommand, resolveChildFixture } from '../../../setupServer.js'
 describe('executeSync', () => {
 	it(
 		'leaves an established grandchild running after a root-only timeout where asynchronous execution ends the tree',
-		{ timeout: 20_000 },
+		// Sized from a contended run rather than an isolated one: this proof drives real process
+		// creation, which cost 75-163 ms per interpreter unloaded on this host and reached 2.5 s for
+		// the same spawn under load, so a budget sized from the isolated 4.2 s cost of this file would
+		// report contention as a timeout carrying no diagnostic about the code.
+		{ timeout: 40_000 },
 		async () => {
 			const scratch = createScratch()
+			let held = 0
 			try {
 				const blockingMarker = join(scratch.path, 'blocking.txt')
-				const streamedMarker = join(scratch.path, 'streamed.txt')
 
 				// The root must outlive the grandchild's interpreter startup, or this measures bootstrap
 				// rather than termination. Node bootstraps in 45.7-49.9 ms on this host, so the former
@@ -45,33 +50,43 @@ describe('executeSync', () => {
 				)
 				expect(existsSync(blockingMarker)).toBe(true)
 
-				// The root deadline has to clear the grandchild's own bootstrap and still fall inside the
-				// fixture's 250 ms write delay. The grandchild announces readiness 91-105 ms after the
-				// call on this host and writes ~250 ms after that, so 200 ms sits between them with
-				// margin at both ends, where the former 50 ms sat inside the bootstrap window.
-				const streamed = await execute(childCommand('tree-write', streamedMarker), {
+				// The asynchronous contrast reads the descendant itself rather than a marker file. A
+				// marker cannot report termination here: the `delayed-write` descendant writes 250 ms
+				// after announcing readiness, while a Windows tree kill has to launch `taskkill.exe` as
+				// its own process, and that launch alone costs 343-835 ms against a nonexistent pid on
+				// this host before any tree is walked. Measured through this `execute` call with the
+				// descendant's write delay as the only variable, a 250 ms delay left the marker written
+				// and a 5 s delay left it absent, with the descendant gone in each case. So the marker's
+				// absence measures process-creation latency, and the descendant's own departure measures
+				// what this test claims.
+				const streamed = await execute(childCommand('tree'), {
 					workspace: process.cwd(),
-					timeout: 200,
+					timeout: 3_000,
 					grace: 20,
 					strict: false,
 				})
 				expect(streamed.expired).toBe(true)
 
-				// The readiness marker is what separates "termination reached an established grandchild"
-				// from "the grandchild never started". Without it the negative below passes for either
-				// reason; with it, a grandchild killed during bootstrap rejects here instead.
-				await waitForCondition(
-					"the streamed grandchild's readiness marker appearing on disk",
-					() => existsSync(`${streamedMarker}.ready`),
-					{ budget: 6_000 },
-				)
+				// The published pid is what makes the descendant ESTABLISHED: the fixture writes it after
+				// its own spawn returns, so a run reporting one had the descendant in its tree before the
+				// deadline fired. The deadline has to outlast that spawn, and asserting the publication is
+				// what keeps a host too slow to reach it failing here rather than passing below for a
+				// descendant that never existed.
+				const [line = ''] = streamed.stdout.split('\n')
+				held = Number.parseInt(line.replace('grandchild:', ''), 10)
+				expect(Number.isInteger(held)).toBe(true)
 
-				// Tree termination reaches the grandchild, so its marker never appears. A fixed wait is the
-				// right instrument for a negative: it bounds how long absence must hold, sized above the
-				// ~295 ms a surviving grandchild takes to write.
-				await waitForDelay(600)
-				expect(existsSync(streamedMarker)).toBe(false)
+				// The descendant holds `sleep`, which exits for nothing but a kill, and nothing addresses
+				// it after its root is gone. Its departure is therefore the tree kill's own work, and the
+				// budget bounds how long that kill may take rather than asserting how fast it is.
+				await waitForCondition(
+					'the descendant of the terminated root leaves the host',
+					() => !isRunning(held),
+					{ budget: 15_000 },
+				)
+				expect(isRunning(held)).toBe(false)
 			} finally {
+				if (held > 0) holds(() => process.kill(held, 'SIGKILL'))
 				scratch.destroy()
 			}
 		},
