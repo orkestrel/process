@@ -267,7 +267,9 @@ name ids and `void` when you stop every child.
 `readline`, including a final line written without a trailing newline. A line feed, a CRLF pair, and
 a bare carriage return each terminate a line, and a CRLF split across delivered chunks joins as one
 break. A child that redraws a progress bar with a carriage return therefore yields one line per
-redraw, and consecutive carriage returns yield an empty line between them. Standard error is decoded
+redraw, and consecutive carriage returns yield an empty line between them. This line stream is the
+package's progress surface: a consumer reads a child's progress off the lines it already receives,
+so the package exposes no separate progress channel. Standard error is decoded
 and forwarded live as the `stderr` event, while a byte-bounded raw tail is retained as `evidence` —
 the diagnostic to attach to a failed exit. The typed `emitter` also carries the child `error` cause
 on a spawn fault, a `ProcessError` coded `protocol` whose cause is a host-reported standard-input
