@@ -181,12 +181,20 @@ const REFUSALS: Readonly<
 	}),
 })
 /**
- * Declarations deliberately kept out of a barrel, as `symbolKey` strings.
+ * Declarations deliberately kept out of a barrel, as `symbolKey` strings, keyed by the face whose
+ * module declares each one.
  *
- * Naming one here is what makes it intentional rather than forgotten, and the assertion over
- * this list fails when a name here stops being stranded, so the list cannot rot.
+ * Naming one here is what makes it intentional rather than forgotten, and the assertions over this
+ * table fail when a name here stops being stranded, so the table cannot rot. `Supervisor` is the
+ * supervision engine each published face composes: its constructor takes the composing face's own
+ * callbacks, which no consumer holds, so a consumer cannot construct one.
  */
-const INTERNAL: readonly string[] = Object.freeze([])
+const INTERNALS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+	'@orkestrel/process': Object.freeze([]),
+	'@orkestrel/process/server': Object.freeze(['class Supervisor']),
+})
+/** Every deliberately stranded declaration, read as one scope the way a guide's source is. */
+const INTERNAL: readonly string[] = Object.freeze(Object.values(INTERNALS).flat())
 /**
  * Test files no guide's Tests section lists, as repository-relative paths.
  *
@@ -297,7 +305,7 @@ const POPULATIONS = Object.freeze([
 		name: `${face.specifier} barrel`,
 		files,
 		module: face.module,
-		stranded: [],
+		stranded: requireValue(INTERNALS[face.specifier], `Missing internal list: ${face.specifier}`),
 		phantom: [],
 	})),
 	{
