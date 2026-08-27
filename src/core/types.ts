@@ -11,6 +11,10 @@ import type { PROCESS_ERROR_CODES } from './constants.js'
  *   backlog, a byte-bounded stderr tail, a live stderr event, a writable stdin channel, a typed
  *   lifecycle {@link ProcessEventMap} emitter, and bounded termination. The low-level streaming
  *   primitive.
+ * - **{@link SessionInterface}** — the same supervised child observed as raw bytes: an owned
+ *   `Uint8Array` per stdout chunk, an open stdin channel closed by `end` rather than by a switch,
+ *   the child's own `ending` beside the terminal `exit`, and a typed {@link SessionEventMap}
+ *   emitter. The transport primitive, for a child speaking a framed protocol.
  * - **{@link ExecuteResult} / execute** — a one-shot spawn that buffers a child to completion and settles
  *   with its output and exit, the ergonomic layer for fire-and-collect commands.
  * - **{@link ProcessManagerInterface}** — a keyed registry of live {@link ProcessInterface}
@@ -317,6 +321,238 @@ export interface ProcessInterface {
 	 * holding an inherited pipe cannot hold this barrier open, and {@link ProcessExit.drained} reports
 	 * which way the moment arrived. The emitter is destroyed after the frozen state exists, so a
 	 * consumer watching the `stderr` event and a consumer reading `evidence` end on the same bytes.
+	 *
+	 * @returns The stable barrier shared by every call
+	 */
+	destroy(): Promise<void>
+}
+
+/**
+ * The push observation surface of a {@link SessionInterface} — the moments a byte-oriented observer
+ * subscribes to, alongside the `ending` and `exit` promises.
+ *
+ * @remarks
+ * Declared as a `type` alias so it satisfies the emitter's `EventMap` constraint structurally.
+ *
+ * `stdout` carries one owned `Uint8Array` per chunk the host delivered, in arrival order, framed by
+ * nothing and decoded by nothing. The array is the session's own copy and a plain `Uint8Array`
+ * rather than the host buffer the read produced, so a consumer keeps it, mutates it, concatenates
+ * it, and reads its whole backing buffer without reaching memory the host still manages and without
+ * depending on a host type. A chunk boundary is the host's, so one event is not one message and a
+ * line feed inside a payload starts no new event; a consumer that needs messages frames the
+ * concatenated bytes itself.
+ *
+ * `stderr` carries decoded text instead, because a diagnostic stream is read rather than parsed, and
+ * {@link SessionInterface.evidence} bounds those same bytes. The `error` event carries a child fault
+ * — a failure to spawn, a process-level error, or a host-reported standard-input channel fault. A
+ * surfaced standard-input fault is wrapped in a {@link ProcessError} coded `protocol` with the host
+ * fault as its cause. The event is distinct from the `error` handler in {@link SessionOptions}: a
+ * listener throw is isolated by the emitter and routed to that handler, never emitted as this
+ * `error` event.
+ */
+export type SessionEventMap = {
+	/** A standard-output chunk arrived, as an owned `Uint8Array` the consumer may keep and mutate. */
+	readonly stdout: readonly [chunk: Uint8Array]
+	/** A decoded standard-error chunk arrived. */
+	readonly stderr: readonly [chunk: string]
+	/** The child or its open standard-input channel reported a fault, carrying the host cause directly or through a `protocol` {@link ProcessError}. */
+	readonly error: readonly [error: unknown]
+	/** The child settled — its terminal state, delivered once. */
+	readonly exit: readonly [exit: ProcessExit]
+}
+
+/**
+ * Construction options for one raw byte session over a supervised child.
+ *
+ * @remarks
+ * This is {@link ProcessOptions} without `backlog` and without `writable`. A session frames nothing
+ * and retains no lines, so no backlog bound applies to it; its standard-input channel is open from
+ * the spawn until {@link SessionInterface.end}, so no switch selects whether one exists. `grace`,
+ * `drain`, `evidence`, `delivery`, and `signal` carry the meanings {@link ProcessOptions} documents
+ * for them, and `command.input` is still written immediately after the spawn. `on` installs initial
+ * {@link SessionEventMap} listeners and `error` receives isolated listener failures.
+ *
+ * Every option and command property is read once, before the child is spawned, so a caller's own
+ * getter runs while nothing has started and a getter that throws strands no process. Every numeric
+ * option is validated in that same window: a timer value outside `[0, PROCESS_TIMER]`, or a negative
+ * or fractional byte value, throws a {@link ProcessError} coded `invalid` before anything is
+ * spawned.
+ */
+export interface SessionOptions {
+	readonly on?: EmitterHooks<SessionEventMap>
+	readonly error?: EmitterErrorHandler
+	readonly command: ProcessCommand
+	/** The working directory the child runs in. */
+	readonly workspace: string
+	/** Cooperative POSIX window in milliseconds between `SIGTERM` and `SIGKILL`. Default: {@link PROCESS_GRACE}. */
+	readonly grace?: number
+	/** Milliseconds the package waits for the child's read ends to close after the native exit or an initiated termination, before cutting them off; `0` cuts them off as soon as the bound is armed. Default: {@link PROCESS_DRAIN}. */
+	readonly drain?: number
+	/** Maximum retained stderr tail in bytes. Default: {@link PROCESS_EVIDENCE}. */
+	readonly evidence?: number
+	/** Milliseconds an unconfirmed {@link SessionInterface.write} waits before resolving `false`. `0` or omitted disables the bound. */
+	readonly delivery?: number
+	/** Aborting this signal terminates the child through the same bounded `stop`. */
+	readonly signal?: AbortSignal
+}
+
+/**
+ * One supervised child process read as raw bytes, with an open standard-input channel and bounded
+ * termination.
+ *
+ * @remarks
+ * A session is the transport face of the same supervision {@link ProcessInterface} exposes. It
+ * publishes the child's standard output as `stdout` events carrying owned bytes rather than framed
+ * lines, so a consumer speaking a length-prefixed or delimiter-framed protocol reads the bytes the
+ * child wrote and frames them itself. Nothing here retains output: a session holds no backlog and
+ * pauses nothing, so it omits `lines`, `truncated`, `backlog`, and `send` rather than reporting them
+ * as facts that do not apply. `evidence` is the decoded, byte-bounded stderr tail — the diagnostic to
+ * attach to a failed exit — and the typed `emitter` carries the live `stdout` and `stderr` payloads,
+ * the child `error` cause, and the terminal `exit`.
+ *
+ * **Two endings, named apart.** `ending` settles at the child's own native exit and resolves no
+ * value, because `code` and `signal` already carry the terminal facts as soon as the host records
+ * them. `exit` settles at the terminal moment, which is the native exit plus at most `drain` when a
+ * descendant that inherited the child's stdio still holds the read ends open. A caller racing a
+ * cooperative shutdown window therefore awaits `ending`, and a caller collecting the final
+ * observation awaits `exit`. `settled`, the `exit` event, and `evidence` freezing all name that same
+ * terminal moment, exactly as they do on {@link ProcessInterface}.
+ *
+ * **`end` is not a termination.** It closes the standard-input channel and leaves the child running,
+ * which is how a cooperative protocol asks a child to finish its own work. `stop` and `destroy` are
+ * the terminations, they are idempotent, and none of the three rejects.
+ *
+ * The spawn is eager, so `pid` is fixed by the time construction returns; a spawn that produced no
+ * child reports `undefined` for that child's whole lifetime. An assigned id survives the exit and
+ * reports no liveness on its own, because the host reuses a dead child's id. Derive liveness as
+ * `pid !== undefined && code === null && signal === null`, and derive it again before every use of
+ * the id.
+ */
+export interface SessionInterface {
+	/** The host process id, fixed when construction returns, or `undefined` when the spawn produced none. */
+	readonly pid: number | undefined
+	/** The exit code the host recorded, or `null` while the child has not exited and when a signal ended it. A spawn fault reports the host's negative errno. */
+	readonly code: number | null
+	/** The terminating signal name the host recorded, or `null` while the child has not exited and when it exited on its own. */
+	readonly signal: string | null
+	/** The typed lifecycle observation surface. */
+	readonly emitter: EmitterInterface<SessionEventMap>
+	/**
+	 * The decoded byte-bounded stderr tail.
+	 *
+	 * @remarks
+	 * The live tail before the terminal moment and the frozen value after it, on every path — a
+	 * natural exit, `stop`, `destroy`, an abort of the `signal` option, and a spawn fault. Every read
+	 * after that moment returns the same string. When {@link ProcessExit.drained} is false the frozen
+	 * value is the tail as of the cutoff, and later diagnostics may have existed.
+	 */
+	readonly evidence: string
+	/**
+	 * True after the `exit` promise settled.
+	 *
+	 * @remarks
+	 * The terminal moment has arrived: `evidence` is frozen, no further `stdout` or `stderr` event
+	 * fires, and the {@link ProcessExit} value exists. Reached on every path, including a spawn that
+	 * produced no child.
+	 */
+	readonly settled: boolean
+	/**
+	 * True after a termination began.
+	 *
+	 * @remarks
+	 * Monotonic. It turns true when `stop`, `destroy`, or an abort of the `signal` option begins a
+	 * termination, and it stays true from then on, including after `settled` turns true. `end` never
+	 * turns it true, because closing the input channel terminates nothing. A child that exited on its
+	 * own reports `false` here with `settled` true.
+	 */
+	readonly stopping: boolean
+	/**
+	 * The child's own ending, awaited without the terminal moment's drain window.
+	 *
+	 * @remarks
+	 * Never rejects, and resolves no value: `code` and `signal` carry the terminal facts as soon as
+	 * the host records them, so a second copy of those facts here could only drift from them. It
+	 * settles at the native exit, and at the terminal moment for a spawn that produced no native exit
+	 * at all, so it can never outlive the supervision. Await this rather than `exit` when a
+	 * cooperative shutdown window is racing the child's own exit: `exit` waits out `drain` for a
+	 * descendant holding the pipe, and a caller racing that promise escalates against a child that
+	 * already ended.
+	 */
+	readonly ending: Promise<void>
+	/**
+	 * The terminal child state, delivered once.
+	 *
+	 * @remarks
+	 * Never rejects. It settles at the terminal moment: when the child's streams close, or when the
+	 * `drain` bound elapsed first. The native exit arms that bound as well as an initiated
+	 * termination, so a child nobody terminates still settles it within `drain` of ending.
+	 */
+	readonly exit: Promise<ProcessExit>
+	/**
+	 * Write raw bytes to the open standard-input channel.
+	 *
+	 * @remarks
+	 * Never rejects, and adds no framing: the bytes reach the child exactly as given, with no
+	 * terminator appended, so a caller speaking a framed protocol composes its own header and
+	 * delimiter. `true` means the host accepted the bytes without reporting a fault; it does not
+	 * prove that the child read them. An ordinary write settles when the kernel accepts it, and only
+	 * a full pipe can hold one unconfirmed, which the `delivery` option bounds.
+	 *
+	 * It resolves `false` without throwing when the channel was closed by `end`, destroyed by a
+	 * termination, failed, or left the write unconfirmed through `delivery`, and when `stop` or
+	 * `destroy` has begun, because teardown cannot confirm delivery for bytes it is about to discard.
+	 *
+	 * The host can queue the payload, so treat the array as owned by the channel until the returned
+	 * promise settles: bytes mutated inside that window are the bytes the child receives.
+	 *
+	 * @param bytes - The payload to write, already framed by the caller
+	 * @returns True when the host accepted the bytes without reporting a fault; false when the channel was closed, destroyed, ended, failed, or remained unconfirmed through `delivery`
+	 */
+	write(bytes: Uint8Array): Promise<boolean>
+	/**
+	 * Close the standard-input channel and leave the child running.
+	 *
+	 * @remarks
+	 * Never rejects, and terminates nothing: `stopping` stays false, no signal is sent, no drain
+	 * window is armed, and the terminal moment does not arrive. The child observes end of input, which
+	 * is how a cooperative protocol asks it to finish and exit on its own; await `ending` for that
+	 * exit and `stop` when it does not come.
+	 *
+	 * Every call shares one barrier, and it resolves after the host flushes the writes it had already
+	 * accepted. A `write` after this call resolves `false`, because the channel is no longer writable.
+	 * The closed channel then stays quiet for its remaining life: a later host fault on it settles
+	 * pending writes and emits no `error` event. After `stop` or `destroy` has begun the call resolves
+	 * and changes nothing.
+	 *
+	 * @returns The stable barrier shared by every call
+	 */
+	end(): Promise<void>
+	/**
+	 * Terminate the child process tree, await its observed exit, and reach the terminal moment.
+	 *
+	 * @remarks
+	 * Never rejects. On Windows the whole tree is killed immediately through `taskkill`, with a
+	 * direct kill as the fallback; on a POSIX host the process group receives `SIGTERM`, then
+	 * `SIGKILL` after `grace`. No signal is initiated after the child's native exit is observed.
+	 *
+	 * Observation ends here as well as under `destroy`, bounded by `drain`: `evidence` freezes, the
+	 * `stdout` and `stderr` events stop, and `exit` settles. A caller that stops a child and keeps
+	 * listening therefore reaches the end of the stream and needs no second call to release it.
+	 *
+	 * @returns True when the child's native exit was observed; false when the confirmation deadline elapsed without it
+	 */
+	stop(): Promise<boolean>
+	/**
+	 * Stop the child, close its standard-input channel, reach the terminal moment, and destroy the
+	 * observation emitter.
+	 *
+	 * @remarks
+	 * Always resolves, including when termination was never confirmed. The barrier settles after the
+	 * terminal moment, so `evidence` is frozen and `exit` has settled by the time a caller resumes.
+	 * The wait for the child's streams is bounded by `drain`, so a descendant holding an inherited
+	 * pipe cannot hold this barrier open, and {@link ProcessExit.drained} reports which way the moment
+	 * arrived. The emitter is destroyed after the frozen state exists, so a consumer watching the
+	 * `stderr` event and a consumer reading `evidence` end on the same bytes.
 	 *
 	 * @returns The stable barrier shared by every call
 	 */

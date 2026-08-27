@@ -49,12 +49,14 @@ import {
  * channel faults, `relieve` reports that a termination began so the face can release whatever
  * backpressure it holds, `close` ends the face's read pipeline at the terminal moment, `terminal`
  * carries the frozen {@link ProcessExit}, and `teardown` releases the face's own surface after the
- * termination completes.
+ * termination completes. `relieve` is optional because a face that never pauses the child's output
+ * holds no backpressure to release, and a face with nothing to do there would otherwise declare an
+ * empty method to say so.
  */
 export class Supervisor {
 	readonly #chunk: (text: string) => void
 	readonly #fault: (cause: unknown) => void
-	readonly #relieve: () => void
+	readonly #relieve: (() => void) | undefined
 	readonly #close: () => void
 	readonly #terminal: (exit: ProcessExit) => void
 	readonly #teardown: () => void
@@ -82,6 +84,7 @@ export class Supervisor {
 	#input = 0
 	#failure: Error | undefined
 	#waiting: Promise<void> | undefined
+	#closure: Promise<void> | undefined
 	#termination: Promise<boolean> | undefined
 	#destruction: Promise<void> | undefined
 
@@ -104,7 +107,7 @@ export class Supervisor {
 		face: {
 			readonly chunk: (text: string) => void
 			readonly fault: (cause: unknown) => void
-			readonly relieve: () => void
+			readonly relieve?: () => void
 			readonly close: () => void
 			readonly terminal: (exit: ProcessExit) => void
 			readonly teardown: () => void
@@ -260,6 +263,29 @@ export class Supervisor {
 	}
 
 	/**
+	 * Closes the standard-input channel while leaving the child running.
+	 *
+	 * @remarks
+	 * Never rejects, and terminates nothing: no signal is sent, `stopping` stays false, no drain
+	 * window is armed, and the terminal moment does not arrive. The child observes end of input and
+	 * decides for itself what to do about it, which is what separates this from `stop`.
+	 *
+	 * Every call shares one barrier, and it resolves after the host flushes the writes it had already
+	 * accepted, or reports that it cannot. A `deliver` after this call resolves `false`, because the
+	 * host stops reporting the channel writable the moment it is ended. That same flag keeps the
+	 * ended channel quiet for its remaining life, so a later host fault on it settles pending writes
+	 * and reaches no face. After `stop` or `destroy` has begun, or after the terminal moment, the
+	 * call resolves and changes nothing, because the channel is already being discarded.
+	 *
+	 * @returns The stable barrier shared by every call
+	 */
+	end(): Promise<void> {
+		if (this.#closure !== undefined) return this.#closure
+		this.#closure = this.#endInput()
+		return this.#closure
+	}
+
+	/**
 	 * Terminates the child process tree and reaches the terminal observation moment.
 	 *
 	 * @remarks
@@ -286,7 +312,7 @@ export class Supervisor {
 	 */
 	destroy(): Promise<void> {
 		if (this.#destruction !== undefined) return this.#destruction
-		this.#destruction = this.#end()
+		this.#destruction = this.#conclude()
 		return this.#destruction
 	}
 
@@ -366,6 +392,20 @@ export class Supervisor {
 		this.#input -= 1
 	}
 
+	// A channel already ended, destroyed, or being discarded has nothing left to close, so the
+	// barrier resolves without touching the stream: calling `end` on a destroyed stream raises a
+	// host error that no consumer asked for. Otherwise Node's own `end` flushes whatever it already
+	// accepted and reports through the callback either way, which is why this never rejects.
+	#endInput(): Promise<void> {
+		const stdin = this.#child.stdin
+		if (this.#stopping || this.#settled || stdin.writableEnded || stdin.destroyed) {
+			return Promise.resolve()
+		}
+		const ended = Promise.withResolvers<void>()
+		stdin.end(() => ended.resolve())
+		return ended.promise
+	}
+
 	#settleWrite(settled: PromiseWithResolvers<boolean>, accepted: boolean): void {
 		if (!this.#writes.has(settled)) return
 		const timer = this.#writes.get(settled)
@@ -379,10 +419,10 @@ export class Supervisor {
 	}
 
 	#failInputStream(cause: Error): void {
-		// `writableEnded` keeps a package-ended or consumer-ended channel quiet after its input phase
-		// settles. A `writable: true` channel never sets it until ended, so a later host fault remains
-		// classifiable after `#input` reaches zero.
-		if (this.#child.stdin.writableEnded || this.#input > 0) {
+		// The constructor's own input phase is quiet while it runs, because the package initiated that
+		// write and its closing `end`. Every other quieting rule lives in the classifier below, which
+		// both the stream's error event and a write callback reach.
+		if (this.#input > 0) {
 			this.#settleWrites()
 			return
 		}
@@ -390,6 +430,15 @@ export class Supervisor {
 	}
 
 	#failInputCallback(cause: Error): void {
+		// An ended channel stays quiet for its remaining life, whether the package ended it at
+		// construction or a consumer ended it through `end`: the closure was asked for, so the fault it
+		// produces is not news to report. Pending writes still settle, because nothing left is going to
+		// confirm them. A `writable: true` channel never sets `writableEnded` until ended, so a later
+		// host fault on an open channel stays classifiable.
+		if (this.#child.stdin.writableEnded) {
+			this.#settleWrites()
+			return
+		}
 		if (this.#failure !== undefined || this.#stopping) return
 		this.#failure = cause
 		this.#settleWrites()
@@ -401,7 +450,7 @@ export class Supervisor {
 		// backpressure before anything is signalled; later output drops at the face's teardown bound
 		// instead of pausing the stream again.
 		this.#stopping = true
-		this.#relieve()
+		this.#relieve?.()
 		const confirmed = await stopChild(this.#child, this.#grace, PROCESS_CONFIRMATION)
 		this.#settleWrites()
 		this.#child.stdin.destroy()
@@ -410,7 +459,8 @@ export class Supervisor {
 		return confirmed
 	}
 
-	async #end(): Promise<void> {
+	// The composite `destroy` performs, named apart from the public `end` that closes standard input.
+	async #conclude(): Promise<void> {
 		await this.stop()
 		this.#teardown()
 	}

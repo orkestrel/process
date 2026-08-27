@@ -10,6 +10,7 @@ import { getEventListeners } from 'node:events'
 import { existsSync, readFileSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { holds } from '@orkestrel/contract'
 import {
 	createGuide,
 	createSource,
@@ -25,7 +26,7 @@ import {
 	resolveLink,
 	symbolKey,
 } from '@orkestrel/guide'
-import { requireValue } from '@orkestrel/test'
+import { requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { readInventory } from '@orkestrel/test/server'
 import {
 	createDuplicateError,
@@ -51,6 +52,7 @@ import {
 	buildSpawn,
 	createProcess,
 	createProcessManager,
+	createSession,
 	detach,
 	formatCommand,
 	isExited,
@@ -106,12 +108,14 @@ const REFUSALS: Readonly<
 			'Process',
 			'ProcessChild',
 			'ProcessManager',
+			'Session',
 			'buildExecutableCandidates',
 			'buildExecuteResult',
 			'buildPlatformSpawn',
 			'buildSpawn',
 			'createProcess',
 			'createProcessManager',
+			'createSession',
 			'detach',
 			'execute',
 			'executeSync',
@@ -170,6 +174,9 @@ const REFUSALS: Readonly<
 			'ProcessManagerInterface',
 			'ProcessManagerOptions',
 			'ProcessOptions',
+			'SessionEventMap',
+			'SessionInterface',
+			'SessionOptions',
 			'SpawnInput',
 			'createDuplicateError',
 			'createExecuteError',
@@ -778,6 +785,83 @@ describe('flagship fences', () => {
 		expect(child.stopping).toBe(false)
 		expect(child.evidence).toBe('done\n')
 		await child.destroy()
+	})
+
+	// The byte-session fence, whose point is that the exact bytes come back and that `end` is not a
+	// termination. Each is read back: the echo against the payload with no terminator added, and
+	// `stopping` against the child ending itself because its input ended.
+	it('echoes the byte-session fence back unaltered and ends its child without terminating it', async () => {
+		const session = createSession({
+			command: { file: 'node', arguments: ['-e', 'process.stdin.pipe(process.stdout)'] },
+			workspace: process.cwd(),
+		})
+
+		const received: Uint8Array[] = []
+		session.emitter.on('stdout', (chunk) => received.push(chunk))
+
+		expect(await session.write(new TextEncoder().encode('ping'))).toBe(true)
+		await session.end()
+		await session.ending
+
+		expect(Buffer.concat(received).toString('utf8')).toBe('ping')
+		const exit = await session.exit
+		expect(exit.code).toBe(0)
+		expect(session.stopping).toBe(false)
+		await session.destroy()
+	})
+
+	// The Vocabulary ruling that the two endings are named apart because a transport acts on each
+	// differently, and the Practices bullet telling a caller to race `ending` rather than `exit`. The
+	// sentence is only worth asserting if the two really separate, so the case that separates them is
+	// driven here: a child that ends itself while a descendant it spawned keeps the inherited read
+	// ends open.
+	it('settles the ending a shutdown window should race before the exit that waits out drain', async () => {
+		const guide = requireValue(
+			files['guides/process.md'],
+			'Missing file: guides/process.md',
+		).replace(/\s+/gu, ' ')
+		expect(guide).toContain('Race a cooperative shutdown window against `ending`')
+
+		const received: Uint8Array[] = []
+		const session = createSession({
+			command: {
+				file: process.execPath,
+				arguments: [
+					'-e',
+					"const c = require('node:child_process').spawn(process.argv[0], ['-e', 'setInterval(() => undefined, 1000)'], { stdio: ['ignore', 1, 2], detached: process.platform === 'win32' }); c.unref(); process.stdout.write('held:' + String(c.pid) + '\\n'); setTimeout(() => process.exit(0), 50)",
+				],
+			},
+			workspace: process.cwd(),
+			drain: 400,
+			grace: 20,
+			on: {
+				stdout: (chunk) => received.push(chunk),
+			},
+		})
+		await waitForCondition(
+			'the root announces the descendant holding its read ends',
+			() => Buffer.concat(received).toString('utf8').includes('\n'),
+			{ budget: 5_000 },
+		)
+		const held = Number.parseInt(
+			(Buffer.concat(received).toString('utf8').split('\n')[0] ?? '').replace('held:', ''),
+			10,
+		)
+
+		try {
+			await session.ending
+			const pending = await Promise.race([
+				session.exit.then(() => 'settled'),
+				waitForDelay(150).then(() => 'pending'),
+			])
+
+			expect(session.code).toBe(0)
+			expect(pending).toBe('pending')
+			expect((await session.exit).drained).toBe(false)
+		} finally {
+			holds(() => process.kill(held, 'SIGKILL'))
+			await session.destroy()
+		}
 	})
 
 	it('drives the termination-helper fence through the host sequence', async () => {

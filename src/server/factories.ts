@@ -3,9 +3,12 @@ import type {
 	ProcessManagerInterface,
 	ProcessManagerOptions,
 	ProcessOptions,
+	SessionInterface,
+	SessionOptions,
 } from '@src/core'
 import { Process } from './Process.js'
 import { ProcessManager } from './ProcessManager.js'
+import { Session } from './Session.js'
 
 /**
  * Creates one supervised child process.
@@ -26,6 +29,27 @@ import { ProcessManager } from './ProcessManager.js'
  */
 export function createProcess(options: ProcessOptions): ProcessInterface {
 	return new Process(options)
+}
+
+/**
+ * Creates one raw byte session over a supervised child process.
+ *
+ * @param options - Command, workspace, termination, evidence, stdin, and observation settings
+ * @returns The launched {@link SessionInterface}
+ *
+ * @example
+ * ```ts
+ * import { createSession } from '@orkestrel/process/server'
+ *
+ * const session = createSession({
+ * 	command: { file: 'node', arguments: ['server.js', '--stdio'] },
+ * 	workspace: process.cwd(),
+ * 	grace: 5000,
+ * })
+ * ```
+ */
+export function createSession(options: SessionOptions): SessionInterface {
+	return new Session(options)
 }
 
 /**

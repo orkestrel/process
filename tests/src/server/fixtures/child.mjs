@@ -163,6 +163,13 @@ if (mode === 'write') {
 	// No SIGTERM handler: a termination signal ends the process as a signal exit, so a caller that
 	// terminates it observes a non-zero, signalled outcome rather than a graceful code 0.
 	setInterval(() => undefined, 1_000)
+} else if (mode === 'raw-echo') {
+	// Echo every stdin byte straight back to stdout, adding no terminator and decoding nothing, then
+	// exit when the channel closes. A caller reads byte fidelity off the echo, and reads the exit as
+	// the child ending itself because its input ended — never because anything terminated it.
+	process.stdin.on('data', (chunk) => process.stdout.write(chunk))
+	process.stdin.on('end', () => process.exit(0))
+	process.on('SIGTERM', () => process.exit(0))
 } else if (mode === 'echo') {
 	const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })
 	lines.on('line', (line) => {
