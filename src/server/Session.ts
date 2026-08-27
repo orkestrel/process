@@ -15,10 +15,9 @@ import { Supervisor } from './Supervisor.js'
  * itself. Standard error is decoded and forwarded as `stderr`, with the same byte-bounded `evidence`
  * tail a `Process` retains, because a diagnostic stream is read rather than parsed.
  *
- * Each emitted chunk is this session's own copy. The host reads into a pooled buffer and hands out a
- * view of it, so publishing that view would expose bytes the pool holds for unrelated reads and would
- * keep the whole pool alive for as long as any consumer kept one chunk. Copying is what makes the
- * payload the consumer's to retain, concatenate, and mutate.
+ * Each emitted chunk is this session's own copy, and a plain `Uint8Array` rather than the host buffer
+ * the read produced, so a consumer keeps it, mutates it, concatenates it, and reads its whole backing
+ * buffer without reaching memory the host still manages and without depending on a host type.
  *
  * The standard-input channel is open from the spawn, and `end` closes it without terminating
  * anything. That is the member a cooperative protocol reaches for: the child observes end of input
@@ -51,8 +50,9 @@ export class Session implements SessionInterface {
 		// Every option is read once, here, before the engine reads the command and spawns anything.
 		// Reading a property runs the caller's own getter, so a read after the spawn would let that
 		// getter throw while a live child exists and nobody holds a reference to it. The engine
-		// receives the plain values below and validates each one before it spawns, so an invalid
-		// option and a throwing getter alike refuse construction while nothing has started.
+		// receives the plain values in the following literal and validates each one before it spawns,
+		// so an invalid option and a throwing getter alike refuse construction while nothing has
+		// started.
 		const command = options.command
 		const workspace = options.workspace
 		const grace = options.grace
@@ -194,9 +194,9 @@ export class Session implements SessionInterface {
 		return this.#engine.destroy()
 	}
 
-	// One owned copy per host chunk, taken before the payload leaves this class. The settled check is
-	// the second half of the same guarantee: the engine hands over its terminal moment before it
-	// destroys the read ends, so nothing this stream still holds can arrive after the `exit` event.
+	// One owned copy per host chunk, taken before the payload leaves this class. The settled check
+	// keeps the other invariant this publisher owns: the engine hands over its terminal moment before
+	// it destroys the read ends, so nothing this stream still holds arrives after the `exit` event.
 	#publish(chunk: unknown): void {
 		if (!Buffer.isBuffer(chunk) || this.#engine.settled) return
 		this.#emitter.emit('stdout', new Uint8Array(chunk))

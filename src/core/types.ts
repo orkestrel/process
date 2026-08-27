@@ -519,7 +519,10 @@ export interface SessionInterface {
 	 * exit and `stop` when it does not come.
 	 *
 	 * Every call shares one barrier, and it resolves after the host flushes the writes it had already
-	 * accepted. A `write` after this call resolves `false`, because the channel is no longer writable.
+	 * accepted. That flush carries no bound of its own: a child that stops reading its input leaves
+	 * the accepted bytes in the pipe, and the barrier stays pending for as long as they sit there. A
+	 * caller that needs a bound races this promise against a window of its own rather than awaiting it
+	 * bare. A `write` after this call resolves `false`, because the channel is no longer writable.
 	 * The closed channel then stays quiet for its remaining life: a later host fault on it settles
 	 * pending writes and emits no `error` event. After `stop` or `destroy` has begun the call resolves
 	 * and changes nothing.

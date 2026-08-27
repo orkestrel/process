@@ -350,8 +350,9 @@ would corrupt.
 
 `SessionOptions` is `ProcessOptions` without `backlog` and without `writable`. A session retains no
 lines, so no backlog bound applies to it; its stdin channel is open from the spawn until `end` closes
-it, so no switch selects whether one exists. Every other option carries the meaning the earlier table
-gives it.
+it, so no switch selects whether one exists.
+
+`SessionOptions` requires `command` and `workspace`; the rest are optional:
 
 | Option      | Type                            | Required | Meaning                                                                                                                                                                         |
 | ----------- | ------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -595,7 +596,11 @@ The host can queue the payload, so treat the array you passed as owned by the ch
 returned promise settles.
 
 `end` closes a session's channel without terminating anything. Every call shares one barrier, which
-resolves after the host flushes the writes it had already accepted. A `write` after `end` resolves
+resolves after the host flushes the writes it had already accepted. That flush carries no bound of
+its own: a child that stops reading its input leaves the accepted bytes in the pipe, and the barrier
+stays pending for as long as they sit there. Race `end` against a window of your own when you need a
+bound, the way [Close a byte session cooperatively](#close-a-byte-session-cooperatively) does, rather
+than awaiting it bare. A `write` after `end` resolves
 `false`, because the host stops reporting an ended channel writable — that refusal is derived from
 the channel's state rather than declared by a second flag. The ended channel then stays quiet for its
 remaining life, exactly as a package-ended one does: a later host fault on it settles pending writes
@@ -1233,14 +1238,16 @@ const session = createSession({
 })
 
 // …on shutdown: end the input, give the child a window of your own, then terminate if it overruns.
-await session.end()
-const finished = await Promise.race([
-	session.ending.then(() => true),
-	new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000)),
-])
+const window = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000))
+const flushed = await Promise.race([session.end().then(() => true), window])
+const finished = flushed ? await Promise.race([session.ending.then(() => true), window]) : false
 if (!finished) await session.stop()
 await session.destroy()
 ```
+
+The window covers `end` as well as the child's own exit, because the flush `end` awaits carries no
+bound: a child that stopped reading its input leaves the accepted bytes in the pipe, and awaiting
+that barrier bare waits on them indefinitely.
 
 The window is yours rather than the package's. `grace` bounds the gap between `SIGTERM` and
 `SIGKILL` once a termination starts, and `drain` bounds the wait for the read ends afterwards;

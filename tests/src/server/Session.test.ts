@@ -93,17 +93,15 @@ describe('Session bytes', () => {
 		})
 		await session.exit
 
-		const host = spawn(process.execPath, ['-e', writer], { stdio: ['ignore', 'pipe', 'ignore'] })
-		const stream = host.stdout
+		const control = spawn(process.execPath, ['-e', writer], { stdio: ['ignore', 'pipe', 'ignore'] })
+		const stream = control.stdout
 		if (stream === null) throw new Error('the control spawn produced no stdout')
-		const pooled: Uint8Array[] = []
+		const host: Uint8Array[] = []
 		stream.on('data', (chunk: unknown) => {
-			if (Buffer.isBuffer(chunk)) pooled.push(chunk)
+			if (Buffer.isBuffer(chunk)) host.push(chunk)
 		})
-		await once(host, 'close')
+		await once(control, 'close')
 
-		const owns = (view: Uint8Array): boolean =>
-			view.byteOffset === 0 && view.buffer.byteLength === view.byteLength
 		const first = emitted[0]
 		if (first === undefined) throw new Error('the session emitted no chunk')
 		first.fill(0xaa)
@@ -112,10 +110,12 @@ describe('Session bytes', () => {
 		// The control: every chunk the host's own event yields is a `Buffer`, and none this face
 		// emits is, so the payload a consumer holds is never the object the stream handed out. A face
 		// that forwarded its chunk instead of copying fails exactly here.
-		expect(pooled.length).toBeGreaterThan(1)
-		expect(pooled.every((view) => Buffer.isBuffer(view))).toBe(true)
+		expect(host.length).toBeGreaterThan(1)
+		expect(host.every((view) => Buffer.isBuffer(view))).toBe(true)
 		expect(emitted.some((view) => Buffer.isBuffer(view))).toBe(false)
-		expect(emitted.every(owns)).toBe(true)
+		expect(
+			emitted.every((view) => view.byteOffset === 0 && view.buffer.byteLength === view.byteLength),
+		).toBe(true)
 		// Mutating an emitted chunk reaches its whole backing buffer and nothing beyond it.
 		expect([...new Uint8Array(first.buffer)]).toEqual(Array.from({ length: size }, () => 0xaa))
 		await session.destroy()

@@ -227,7 +227,7 @@ export class Supervisor {
 	}
 
 	/**
-	 * Write raw bytes to the open standard-input channel.
+	 * Writes raw bytes to the open standard-input channel.
 	 *
 	 * @remarks
 	 * Never rejects, and adds no framing: a face composes whatever terminator its contract promises
@@ -342,7 +342,7 @@ export class Supervisor {
 	// One bounded wait per close, created once and shared: the native exit arms it and a termination
 	// awaits the same one, so a close never carries two overlapping bounds. `waitForClose` clears its
 	// own timer on either outcome. The constructor registers `#complete` before this listener exists,
-	// so a natural close settles drained and the continuation below finds the latch already set.
+	// so a natural close settles drained and the following continuation finds the latch already set.
 	#wait(): Promise<void> {
 		this.#waiting ??= waitForClose(this.#child, this.#drain).then(() => {
 			if (!this.#settled) this.#settle(false)
@@ -354,8 +354,8 @@ export class Supervisor {
 		// Flush the decoder while the face's stderr channel is still live.
 		const suffix = this.#decoder.end()
 		if (suffix.length > 0) this.#chunk(suffix)
-		// Latch before the terminal value is resolved and delivered below, so a consumer handed that
-		// value never reads a child still reporting itself unfinished.
+		// Latch before the following lines resolve and deliver the terminal value, so a consumer
+		// handed that value never reads a child still reporting itself unfinished.
 		this.#settled = true
 		this.#removeAbortListener()
 		// Ending the face's read pipeline here preserves whatever it has already framed and queued.
@@ -420,8 +420,8 @@ export class Supervisor {
 
 	#failInputStream(cause: Error): void {
 		// The constructor's own input phase is quiet while it runs, because the package initiated that
-		// write and its closing `end`. Every other quieting rule lives in the classifier below, which
-		// both the stream's error event and a write callback reach.
+		// write and its closing `end`. Every other quieting rule lives in the following classifier,
+		// which both the stream's error event and a write callback reach.
 		if (this.#input > 0) {
 			this.#settleWrites()
 			return

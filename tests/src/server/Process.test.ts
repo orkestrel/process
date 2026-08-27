@@ -1541,4 +1541,44 @@ describe('Process validation', () => {
 		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('invalid')
 		expect(isProcessError(thrown) ? thrown.context?.value : undefined).toBe(-1)
 	})
+
+	// A construction carrying more than one invalid option reports one of them, and which one is the
+	// validation order made observable. The command is read and refused before the line pipeline's own
+	// `backlog`, so a face that validated `backlog` first would report that option here instead.
+	it('reports the command refusal when the command file and the backlog are both invalid', () => {
+		let thrown: unknown
+		try {
+			createProcess({
+				command: { file: '', arguments: [] },
+				workspace: process.cwd(),
+				backlog: 0,
+			})
+		} catch (error) {
+			thrown = error
+		}
+
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.message : undefined).toBe('Invalid command file')
+		expect(isProcessError(thrown) ? thrown.context?.value : undefined).toBe('')
+	})
+
+	// The control for the row above: the same invalid `backlog` alone still refuses construction, so
+	// that row reports the command because the order puts the command first, not because `backlog`
+	// stopped being validated.
+	it('reports the backlog refusal when the backlog alone is invalid', () => {
+		let thrown: unknown
+		try {
+			createProcess({
+				command: childCommand('exit', '0'),
+				workspace: process.cwd(),
+				backlog: 0,
+			})
+		} catch (error) {
+			thrown = error
+		}
+
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.message : undefined).toBe("Invalid option 'backlog'")
+		expect(isProcessError(thrown) ? thrown.context?.value : undefined).toBe(0)
+	})
 })

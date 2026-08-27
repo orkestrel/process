@@ -5,7 +5,13 @@ import { Buffer } from 'node:buffer'
 import { createInterface } from 'node:readline'
 import { Emitter } from '@orkestrel/emitter'
 import { PROCESS_BACKLOG } from '@src/core'
-import { validateBytes } from './helpers.js'
+import {
+	snapshotCommand,
+	validateBytes,
+	validateCommand,
+	validateTimer,
+	validateWorkspace,
+} from './helpers.js'
 import { Supervisor } from './Supervisor.js'
 
 /**
@@ -61,12 +67,31 @@ export class Process implements ProcessInterface {
 	 * @throws A {@link ProcessError} coded `invalid` when an option or command string is malformed
 	 */
 	constructor(options: ProcessOptions) {
-		// The line pipeline's own option is read and validated here, before the engine reads the rest
-		// and spawns, so a malformed `backlog` refuses construction while nothing has started. The
-		// engine hoists its own reads for the same reason.
+		// Every option and command property is read once, here, before the engine spawns. Reading a
+		// property runs the caller's own getter, so the engine receives these plain values and re-reads
+		// none of them: a getter runs once whether the construction succeeds or is refused.
+		// The engine's own options are validated first, in the order the engine reads them, and the
+		// line pipeline's `backlog` after them, so a construction carrying more than one invalid option
+		// reports the same option a single supervised face has always reported, and a malformed
+		// `backlog` still refuses while nothing has been spawned.
+		const source = options.command
+		const workspace = options.workspace
+		const grace = options.grace
+		const drain = options.drain
+		const evidence = options.evidence
 		const backlog = options.backlog
+		const delivery = options.delivery
+		const writable = options.writable
+		const signal = options.signal
 		const on = options.on
 		const error = options.error
+		const command = snapshotCommand(source)
+		validateCommand(command)
+		validateWorkspace(workspace)
+		validateTimer(grace, "option 'grace'")
+		validateTimer(drain, "option 'drain'")
+		validateTimer(delivery, "option 'delivery'")
+		validateBytes(evidence, "option 'evidence'", 0)
 		validateBytes(backlog, "option 'backlog'", 1)
 		this.#emitter = new Emitter<ProcessEventMap>({
 			...(on === undefined ? {} : { on }),
@@ -74,14 +99,26 @@ export class Process implements ProcessInterface {
 		})
 		this.#backlog = backlog ?? PROCESS_BACKLOG
 		this.#lines = Object.freeze({ [Symbol.asyncIterator]: this.#iterate.bind(this) })
-		this.#engine = new Supervisor(options, {
-			chunk: this.#reportStderr.bind(this),
-			fault: this.#reportFault.bind(this),
-			relieve: this.#releaseBackpressure.bind(this),
-			close: this.#closeReader.bind(this),
-			terminal: this.#reportExit.bind(this),
-			teardown: this.#emitter.destroy.bind(this.#emitter),
-		})
+		this.#engine = new Supervisor(
+			{
+				command,
+				workspace,
+				...(grace === undefined ? {} : { grace }),
+				...(drain === undefined ? {} : { drain }),
+				...(evidence === undefined ? {} : { evidence }),
+				...(delivery === undefined ? {} : { delivery }),
+				...(writable === undefined ? {} : { writable }),
+				...(signal === undefined ? {} : { signal }),
+			},
+			{
+				chunk: this.#reportStderr.bind(this),
+				fault: this.#reportFault.bind(this),
+				relieve: this.#releaseBackpressure.bind(this),
+				close: this.#closeReader.bind(this),
+				terminal: this.#reportExit.bind(this),
+				teardown: this.#emitter.destroy.bind(this.#emitter),
+			},
+		)
 		// The host delivers no output before this synchronous constructor returns, so framing attaches
 		// here without losing a byte the engine already spawned for.
 		this.#reader = createInterface({ input: this.#engine.stdout, crlfDelay: Infinity })
