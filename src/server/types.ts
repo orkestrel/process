@@ -1,5 +1,3 @@
-import type { Buffer } from 'node:buffer'
-
 /**
  * The Node-side contracts of `@orkestrel/process/server`.
  *
@@ -58,20 +56,4 @@ export interface ProcessChild {
 	 * @returns Whatever the emitter returns, which the helpers ignore
 	 */
 	off(event: 'exit' | 'close', listener: () => void): unknown
-}
-
-/** Exposes byte totals and bounded stream-head retention. */
-export interface RetentionInterface {
-	/** The bytes delivered by the stream. */
-	readonly delivered: number
-	/** The bytes retained from the stream head. */
-	readonly retained: number
-	/**
-	 * Retains a delivered chunk within a byte limit.
-	 *
-	 * @param chunk - The delivered chunk, ignored when it is not a buffer
-	 * @param limit - The maximum retained byte count
-	 * @returns The retained slice, or `undefined` when the chunk contributes no retained bytes
-	 */
-	retain(chunk: unknown, limit: number): Buffer | undefined
 }
