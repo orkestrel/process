@@ -45,11 +45,11 @@ import {
 	PROCESS_TIMER,
 } from '@src/core'
 import {
-	Retention,
 	buildExecutableCandidates,
 	buildPlatformSpawn,
 	buildExecuteResult,
 	buildSpawn,
+	captureChunk,
 	createProcess,
 	createProcessManager,
 	createSession,
@@ -103,8 +103,6 @@ const REFUSALS: Readonly<
 > = Object.freeze({
 	'@orkestrel/process': Object.freeze({
 		foreign: Object.freeze([
-			'Retention',
-			'RetentionInterface',
 			'Process',
 			'ProcessChild',
 			'ProcessManager',
@@ -113,6 +111,7 @@ const REFUSALS: Readonly<
 			'buildExecuteResult',
 			'buildPlatformSpawn',
 			'buildSpawn',
+			'captureChunk',
 			'createProcess',
 			'createProcessManager',
 			'createSession',
@@ -540,12 +539,9 @@ const CONSTANTS: Readonly<Record<string, number | string | readonly string[]>> =
 const PROSE_CONSTANTS: readonly string[] = Object.freeze(['PROCESS_ERROR_CODES'])
 
 describe('flagship fences', () => {
-	it('retains the bounded stream head and reports both byte totals', () => {
-		const retention = new Retention()
-
-		expect(retention.retain(Buffer.from('hello'), 3)?.toString('utf8')).toBe('hel')
-		expect(retention.delivered).toBe(5)
-		expect(retention.retained).toBe(3)
+	it('bounds one delivered chunk and refuses one that is not a buffer', () => {
+		expect(captureChunk(Buffer.from('hello'), 3)?.toString('utf8')).toBe('hel')
+		expect(captureChunk('hello', 3)).toBeUndefined()
 	})
 
 	it('states the numeric teardown backlog cap on every public contract', () => {
@@ -1254,6 +1250,7 @@ const EXAMPLES = Object.freeze([
 			'C:\\bin\\git.CMD',
 		],
 	},
+	{ name: 'captureChunk', value: captureChunk(Buffer.from('hello'), 3), claim: Buffer.from('hel') },
 	{ name: 'isFile', value: isFile(process.execPath), claim: true },
 	{
 		name: 'mergePlatformEnvironment',
@@ -1290,13 +1287,6 @@ describe('unfenced TSDoc examples', () => {
 			expect(row.value).toStrictEqual(row.claim)
 		})
 	}
-
-	it('retains the byte total Retention\u2019s example claims', () => {
-		const retention = new Retention()
-
-		expect(retention.retain(Buffer.from('hello'), 3)?.toString('utf8')).toBe('hel')
-		expect(retention.retained).toBe(3)
-	})
 
 	// The example claims one value per host, so each host's claim is its own case. Off Windows
 	// `buildExecutableCandidates` returns an empty list, because command lookup belongs to the host's

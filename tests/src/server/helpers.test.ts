@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ProcessChild } from '@src/server'
 import { describe, expect, it } from 'vitest'
@@ -13,6 +14,7 @@ import {
 	buildPlatformSpawn,
 	buildExecuteResult,
 	buildSpawn,
+	captureChunk,
 	formatCommand,
 	isExited,
 	isFile,
@@ -24,6 +26,8 @@ import {
 	readPlatformVariable,
 	readVariable,
 	resolveExecutable,
+	detach,
+	execute,
 	executeSync,
 	snapshotCommand,
 	stopChild,
@@ -38,7 +42,7 @@ import {
 	waitForClose,
 	waitForExit,
 } from '@src/server'
-import { resolveChildFixture } from '../../setupServer.js'
+import { childCommand, resolveChildFixture } from '../../setupServer.js'
 
 describe('trimTail', () => {
 	it('returns the whole buffer when it fits the limit', () => {
@@ -62,6 +66,69 @@ describe('trimHead', () => {
 		const trimmed = trimHead(buffer, 5)
 		expect(trimmed.byteLength).toBe(5)
 		expect(trimmed.toString('utf8')).toBe(`${'\u{1f642}'}a`)
+	})
+
+	// The first excluded byte opens its own code point, so no sequence spans the cut and the full
+	// limit survives. This is the example the TSDoc and the guide both document.
+	it('cuts at the limit when the first excluded byte begins its own code point', () => {
+		expect(trimHead(Buffer.from('hello'), 3).toString('utf8')).toBe('hel')
+	})
+
+	// `61 61 61 61 80` is invalid UTF-8: the trailing byte carries the continuation bit pattern but
+	// no lead byte opened a sequence that reaches it. Retreating off it would drop a valid ASCII byte
+	// the caller asked for, so the retreat reads the lead byte's declared length before it fires.
+	it('keeps every byte inside the limit when the excluded byte is a stray continuation byte', () => {
+		const trimmed = trimHead(Buffer.from([0x61, 0x61, 0x61, 0x61, 0x80]), 4)
+		expect(trimmed.byteLength).toBe(4)
+		expect(trimmed.toString('utf8')).toBe('aaaa')
+	})
+
+	// The bytes of `aa\u20ac` captured one byte past a limit of 3. The lead byte `e2` at index 2
+	// declares a three-byte sequence, so the sequence runs past the cut at index 3 and the retreat
+	// drops it whole rather than delivering a replacement character.
+	it('retreats to the start of a sequence that reaches past the cut', () => {
+		const trimmed = trimHead(Buffer.from([0x61, 0x61, 0xe2, 0x82]), 3)
+		expect(trimmed.toString('utf8')).toBe('aa')
+		expect(trimmed.toString('utf8')).not.toContain('\u{fffd}')
+	})
+
+	// A lead byte opens at most a four-byte sequence, so the retreat scans at most three bytes back
+	// from the cut. A buffer of nothing but continuation bytes has no lead byte to find, so the scan
+	// ends at its own bound and the limit's bytes survive unaltered instead of the walk running to
+	// zero.
+	it('keeps the limit bytes when no lead byte precedes the cut', () => {
+		const trimmed = trimHead(Buffer.from([0x80, 0x80, 0x80, 0x80, 0x80]), 3)
+		expect(trimmed.byteLength).toBe(3)
+		expect([...trimmed]).toEqual([0x80, 0x80, 0x80])
+	})
+
+	// A limit of zero excludes the byte at index 0, so the backward scan starts before the buffer.
+	it('returns no bytes at a limit of zero', () => {
+		expect(trimHead(Buffer.from([0x80, 0x80]), 0).byteLength).toBe(0)
+	})
+})
+describe('captureChunk', () => {
+	it('keeps the leading bytes the capture still has room for', () => {
+		expect(captureChunk(Buffer.from('hello'), 3)?.toString('utf8')).toBe('hel')
+	})
+
+	it('returns the delivered buffer itself when the whole chunk fits its room', () => {
+		const chunk = Buffer.from('hello')
+		expect(captureChunk(chunk, 8)).toBe(chunk)
+	})
+
+	// A capture that has already taken its byte past `limit` reports a room of zero, and a caller
+	// subtracting a retained total from a shrinking bound can present a negative one, so both ends of
+	// the exhausted range refuse.
+	it('refuses a chunk after the room is exhausted, at zero and below it', () => {
+		expect(captureChunk(Buffer.from('hello'), 0)).toBeUndefined()
+		expect(captureChunk(Buffer.from('hello'), -1)).toBeUndefined()
+	})
+
+	// A stream `data` listener receives an `unknown` payload, so a chunk that is not a buffer
+	// contributes nothing and reports it rather than throwing.
+	it('refuses a chunk that is not a buffer', () => {
+		expect(captureChunk('hello', 3)).toBeUndefined()
 	})
 })
 
@@ -910,4 +977,764 @@ describe('killProcess', () => {
 			}
 		},
 	)
+})
+
+describe('execute', () => {
+	it('spawns the same command file that it validated', async () => {
+		let reads = 0
+		const result = await execute(
+			{
+				get file() {
+					reads += 1
+					return reads === 1 ? process.execPath : `${process.execPath}\0changed`
+				},
+				arguments: [resolveChildFixture(), 'exit', '0'],
+			},
+			{ workspace: process.cwd() },
+		)
+
+		expect(reads).toBe(1)
+		expect(result.code).toBe(0)
+	})
+
+	it('buffers a successful run and reports it did not fail', async () => {
+		const result = await execute(childCommand('exit', '0'), { workspace: process.cwd() })
+		expect(result.failed).toBe(false)
+		expect(result.code).toBe(0)
+		expect(result.stdout).toContain('ran:0')
+		expect(result.stderr).toContain('diagnostic:0')
+		expect(result.truncated).toBe(false)
+		expect(result.aborted).toBe(false)
+	})
+
+	it('rejects a failed run with a process error carrying the result', async () => {
+		let thrown: unknown
+		try {
+			await execute(childCommand('exit', '3'), { workspace: process.cwd() })
+		} catch (error) {
+			thrown = error
+		}
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.result?.code : undefined).toBe(3)
+	})
+
+	it('resolves a failed run with the outcome when strict is false', async () => {
+		const result = await execute(childCommand('exit', '4'), {
+			workspace: process.cwd(),
+			strict: false,
+		})
+		expect(result.failed).toBe(true)
+		expect(result.code).toBe(4)
+		expect(result.expired).toBe(false)
+	})
+
+	it('reports a run that outlasted its timeout as expired rather than aborted', async () => {
+		const result = await execute(childCommand('hang'), {
+			workspace: process.cwd(),
+			timeout: 100,
+			grace: 20,
+			strict: false,
+		})
+		expect(result.expired).toBe(true)
+		expect(result.aborted).toBe(false)
+		expect(result.failed).toBe(true)
+	})
+
+	it('reports an externally aborted run as aborted rather than expired', async () => {
+		const controller = new AbortController()
+		const pending = execute(childCommand('sleep'), {
+			workspace: process.cwd(),
+			grace: 20,
+			signal: controller.signal,
+			strict: false,
+		})
+		controller.abort()
+		const result = await pending
+
+		expect(result.aborted).toBe(true)
+		expect(result.expired).toBe(false)
+		expect(result.failed).toBe(true)
+	})
+
+	// Both mechanisms armed on one run. The first to fire terminates the child and disarms the other,
+	// so exactly one of `expired` and `aborted` is ever true.
+	it('reports the timeout when it fires before an armed abort', async () => {
+		const controller = new AbortController()
+		const late = setTimeout(() => controller.abort(), 2_000)
+		try {
+			const result = await execute(childCommand('hang'), {
+				workspace: process.cwd(),
+				timeout: 100,
+				grace: 20,
+				signal: controller.signal,
+				strict: false,
+			})
+
+			expect(result.expired).toBe(true)
+			expect(result.aborted).toBe(false)
+			expect(result.failed).toBe(true)
+		} finally {
+			clearTimeout(late)
+		}
+	})
+
+	it('reports the abort when it fires before an armed timeout', async () => {
+		const controller = new AbortController()
+		const pending = execute(childCommand('hang'), {
+			workspace: process.cwd(),
+			timeout: 5_000,
+			grace: 20,
+			signal: controller.signal,
+			strict: false,
+		})
+		controller.abort()
+		const result = await pending
+
+		expect(result.aborted).toBe(true)
+		expect(result.expired).toBe(false)
+		expect(result.failed).toBe(true)
+	})
+
+	// Both deadlines are set to the same delay, so which one the host's timer queue delivers first is
+	// not fixed. Exclusivity is the property that must hold whichever wins, so that is what is asserted.
+	it('reports exactly one outcome when the timeout and the abort share a deadline', async () => {
+		const controller = new AbortController()
+		const together = setTimeout(() => controller.abort(), 100)
+		try {
+			const result = await execute(childCommand('hang'), {
+				workspace: process.cwd(),
+				timeout: 100,
+				grace: 20,
+				signal: controller.signal,
+				strict: false,
+			})
+
+			expect(result.expired).not.toBe(result.aborted)
+			expect(result.failed).toBe(true)
+		} finally {
+			clearTimeout(together)
+		}
+	})
+
+	it('caps a huge capture at the limit and reports truncation without failing', async () => {
+		const result = await execute(childCommand('chatty'), {
+			workspace: process.cwd(),
+			limit: 1_024,
+			strict: false,
+		})
+
+		expect(result.truncated).toBe(true)
+		expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(1_024)
+		expect(result.stdout.startsWith('0:')).toBe(true)
+		expect(result.failed).toBe(false)
+		expect(result.code).toBe(0)
+	})
+
+	// The capture keeps one byte beyond `limit`, so the single code-point-boundary trim in
+	// `buildExecuteResult` reads the first excluded byte and retreats off a sequence the cut split.
+	// This child writes the bytes of `aa€`, whose third byte opens a three-byte sequence, so a
+	// byte-exact cut at `limit` would decode as a replacement character instead.
+	it('delivers no split multibyte sequence at the capture bound', async () => {
+		const result = await execute(
+			{
+				file: process.execPath,
+				arguments: ['-e', "process.stdout.write(Buffer.from('aa\\u20ac', 'utf8'))"],
+			},
+			{ workspace: process.cwd(), limit: 3, strict: false },
+		)
+
+		expect(result.stdout).toBe('aa')
+		expect(result.stdout).not.toContain('\u{fffd}')
+		expect(result.truncated).toBe(true)
+	})
+
+	// The same bound from the other side. This child writes four ASCII bytes then a stray `80`, so
+	// the byte the capture reads past `limit` carries the continuation bit pattern without any lead
+	// byte opening a sequence that reaches it. The trim keeps all four requested bytes.
+	it('delivers the whole limit when the byte past the bound is a stray continuation byte', async () => {
+		const result = await execute(
+			{
+				file: process.execPath,
+				arguments: ['-e', 'process.stdout.write(Buffer.from([0x61, 0x61, 0x61, 0x61, 0x80]))'],
+			},
+			{ workspace: process.cwd(), limit: 4, strict: false },
+		)
+
+		expect(result.stdout).toBe('aaaa')
+		expect(result.truncated).toBe(true)
+	})
+
+	// Both sides of the bound in one row. The capture reads one byte past `limit` and `truncated`
+	// reports that the excess arrived, so a run ending exactly at `limit` is untruncated while a run
+	// one byte longer is truncated, and the delivered text stays bounded by `limit` in each case.
+	it('bounds the captured text by the limit and reports truncation only past it', async () => {
+		const exact = await execute(
+			{ file: process.execPath, arguments: ['-e', "process.stdout.write('x'.repeat(64))"] },
+			{ workspace: process.cwd(), limit: 64, strict: false },
+		)
+		const over = await execute(
+			{ file: process.execPath, arguments: ['-e', "process.stdout.write('x'.repeat(65))"] },
+			{ workspace: process.cwd(), limit: 64, strict: false },
+		)
+
+		expect(Buffer.byteLength(exact.stdout)).toBe(64)
+		expect(exact.truncated).toBe(false)
+		expect(Buffer.byteLength(over.stdout)).toBe(64)
+		expect(over.truncated).toBe(true)
+	})
+
+	it('rejects an unspawnable command with spawn code and the host cause', async () => {
+		let thrown: unknown
+		try {
+			await execute(
+				{
+					file: 'orkestrel-nonexistent-binary.exe',
+					arguments: [],
+					input: 'unspawnable input',
+				},
+				{ workspace: process.cwd() },
+			)
+		} catch (error) {
+			thrown = error
+		}
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('spawn')
+		expect(isProcessError(thrown) ? thrown.cause : undefined).toBeInstanceOf(Error)
+	})
+
+	// The documented difference between `execute` and `executeSync` on a spawn fault. The errno
+	// itself is the host's, so its sign is the property a caller can act on and the property
+	// asserted.
+	it('reports the host negative errno when the command cannot be spawned', async () => {
+		const result = await execute(
+			{ file: 'orkestrel-nonexistent-binary.exe', arguments: [] },
+			{ workspace: process.cwd(), strict: false },
+		)
+
+		expect(result.failed).toBe(true)
+		const code = result.code
+		if (code === null) throw new Error('execute reported no code for a spawn fault')
+		expect(code).toBeLessThan(0)
+	})
+
+	it('reports a pending input write fault as the cause of a failed run', async () => {
+		const input = 'x'.repeat(4 * 1_024 * 1_024)
+		const faulting = {
+			file: process.execPath,
+			arguments: ['-e', 'setTimeout(() => process.exit(0), 150)'],
+		}
+		const reading = {
+			file: process.execPath,
+			arguments: ['-e', 'process.stdin.resume()'],
+		}
+
+		const result = await execute(faulting, { input, strict: false })
+		let thrown: unknown
+		try {
+			await execute(faulting, { input })
+		} catch (error) {
+			thrown = error
+		}
+		const control = await execute(reading, { input })
+
+		expect(result.failed).toBe(true)
+		expect(result).toMatchObject({
+			expired: false,
+			aborted: false,
+			truncated: false,
+			code: 0,
+			signal: null,
+		})
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.cause : undefined).toBeInstanceOf(Error)
+		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('input')
+		expect(isProcessError(thrown) ? thrown.message : undefined).toBe(
+			`Command '${result.command}' failed while writing standard input`,
+		)
+		expect(control.failed).toBe(false)
+		expect(control.code).toBe(0)
+	})
+
+	it('refuses a NUL in a per-run environment override before spawning', async () => {
+		const nul = String.fromCodePoint(0)
+		let thrown: unknown
+		try {
+			await execute(childCommand('exit', '0'), {
+				workspace: process.cwd(),
+				environment: { PROCESS_TEST_KEY: `a${nul}b` },
+			})
+		} catch (error) {
+			thrown = error
+		}
+
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('invalid')
+	})
+
+	it('rejects a throwing signal getter before spawning a child', async () => {
+		const scratch = createScratch()
+		const marker = join(scratch.path, 'hostile-signal.txt')
+		const failure = new Error('hostile signal getter')
+		let thrown: unknown
+
+		try {
+			try {
+				await execute(childCommand('write', marker), {
+					workspace: process.cwd(),
+					get signal(): AbortSignal {
+						throw failure
+					},
+				})
+			} catch (error) {
+				thrown = error
+			}
+			await waitForDelay(200)
+
+			expect(thrown).toBe(failure)
+			expect(existsSync(marker)).toBe(false)
+		} finally {
+			scratch.destroy()
+		}
+	})
+})
+
+describe('executeSync', () => {
+	it(
+		'leaves an established grandchild running after a root-only timeout where asynchronous execution ends the tree',
+		// Sized from a contended run rather than an isolated one: this proof drives real process
+		// creation, which cost 75-163 ms per interpreter unloaded on this host and reached 2.5 s for
+		// the same spawn under load, so a budget sized from the isolated 4.2 s cost of this file would
+		// report contention as a timeout carrying no diagnostic about the code.
+		{ timeout: 40_000 },
+		async () => {
+			const scratch = createScratch()
+			let held = 0
+			try {
+				const blockingMarker = join(scratch.path, 'blocking.txt')
+
+				// The root must outlive the grandchild's interpreter startup, or this measures bootstrap
+				// rather than termination. Node bootstraps in 45.7-49.9 ms on this host, so the former
+				// 50 ms root timeout was a coin flip and lost three times in six.
+				const blocking = executeSync(childCommand('tree-write', blockingMarker), {
+					workspace: process.cwd(),
+					timeout: 400,
+					strict: false,
+				})
+				expect(blocking.expired).toBe(true)
+
+				// The claim is about an ESTABLISHED descendant. The root's 50 ms deadline is shorter than
+				// Node's own bootstrap on some hosts, so waiting a fixed interval measures whether the
+				// grandchild finished starting rather than whether termination reached it. Waiting for the
+				// fixture's readiness line removes that race: measured without it, three of six trials
+				// never wrote at all.
+				await waitForCondition(
+					"the blocking grandchild's readiness marker appearing on disk",
+					() => existsSync(`${blockingMarker}.ready`),
+					{ budget: 6_000 },
+				)
+				await waitForCondition(
+					'the blocking grandchild writing its marker file',
+					() => existsSync(blockingMarker),
+					{ budget: 6_000 },
+				)
+				expect(existsSync(blockingMarker)).toBe(true)
+
+				// The asynchronous contrast reads the descendant itself rather than a marker file. A
+				// marker cannot report termination here: the `delayed-write` descendant writes 250 ms
+				// after announcing readiness, while a Windows tree kill has to launch `taskkill.exe` as
+				// its own process, and that launch alone costs 343-835 ms against a nonexistent pid on
+				// this host before any tree is walked. Measured through this `execute` call with the
+				// descendant's write delay as the only variable, a 250 ms delay left the marker written
+				// and a 5 s delay left it absent, with the descendant gone in each case. So the marker's
+				// absence measures process-creation latency, and the descendant's own departure measures
+				// what this test claims.
+				const streamed = await execute(childCommand('tree'), {
+					workspace: process.cwd(),
+					timeout: 3_000,
+					grace: 20,
+					strict: false,
+				})
+				expect(streamed.expired).toBe(true)
+
+				// The published pid is what makes the descendant ESTABLISHED: the fixture writes it after
+				// its own spawn returns, so a run reporting one had the descendant in its tree before the
+				// deadline fired. The deadline has to outlast that spawn, and asserting the publication is
+				// what keeps a host too slow to reach it failing here rather than passing below for a
+				// descendant that never existed.
+				const [line = ''] = streamed.stdout.split('\n')
+				held = Number.parseInt(line.replace('grandchild:', ''), 10)
+				expect(Number.isInteger(held)).toBe(true)
+
+				// The descendant holds `sleep`, which exits for nothing but a kill, and nothing addresses
+				// it after its root is gone. Its departure is therefore the tree kill's own work, and the
+				// budget bounds how long that kill may take rather than asserting how fast it is.
+				await waitForCondition(
+					'the descendant of the terminated root leaves the host',
+					() => !isRunning(held),
+					{ budget: 15_000 },
+				)
+				expect(isRunning(held)).toBe(false)
+			} finally {
+				if (held > 0) holds(() => process.kill(held, 'SIGKILL'))
+				scratch.destroy()
+			}
+		},
+	)
+
+	it('sends string input as bytes, so a NUL in the payload reaches the child', () => {
+		// input is stdin payload rather than a spawn-bound string, so it carries no NUL restriction.
+		// Passing the string through unconverted made spawnSync reject it with Unknown encoding: buffer.
+		const payload = 'before\u0000after\nstop\n'
+		const result = executeSync(childCommand('echo'), {
+			workspace: process.cwd(),
+			input: payload,
+			strict: false,
+		})
+		expect(result.failed).toBe(false)
+		// The child echoes the line it read, so a NUL surviving the transfer proves the payload was
+		// sent as bytes rather than rejected or re-encoded.
+		expect(result.stdout).toContain('before\u0000after')
+	})
+
+	it('spawns the same command file that it validated', () => {
+		let reads = 0
+		const result = executeSync(
+			{
+				get file() {
+					reads += 1
+					return reads === 1 ? process.execPath : `${process.execPath}\0changed`
+				},
+				arguments: [resolveChildFixture(), 'exit', '0'],
+			},
+			{ workspace: process.cwd() },
+		)
+
+		expect(reads).toBe(1)
+		expect(result.code).toBe(0)
+	})
+
+	it('codes an invalid changing command as invalid before spawn', () => {
+		let reads = 0
+		let thrown: unknown
+		try {
+			executeSync({
+				get file() {
+					reads += 1
+					return reads === 1 ? `${process.execPath}\0invalid` : process.execPath
+				},
+				arguments: [resolveChildFixture(), 'exit', '0'],
+			})
+		} catch (error) {
+			thrown = error
+		}
+
+		expect(reads).toBe(1)
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('invalid')
+	})
+
+	it('buffers a successful synchronous run', () => {
+		const result = executeSync(childCommand('exit', '0'), { workspace: process.cwd() })
+		expect(result.failed).toBe(false)
+		expect(result.stdout).toContain('ran:0')
+	})
+
+	it('resolves a failed synchronous run with the outcome when strict is false', () => {
+		const result = executeSync(childCommand('exit', '5'), {
+			workspace: process.cwd(),
+			strict: false,
+		})
+		expect(result.failed).toBe(true)
+		expect(result.code).toBe(5)
+	})
+
+	it('throws a process error for a failed synchronous run by default', () => {
+		let thrown: unknown
+		try {
+			executeSync(childCommand('exit', '6'), { workspace: process.cwd() })
+		} catch (error) {
+			thrown = error
+		}
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.result?.code : undefined).toBe(6)
+	})
+
+	it('fails a synchronous run whose output overflowed the limit', () => {
+		const result = executeSync(childCommand('chatty'), {
+			workspace: process.cwd(),
+			limit: 1_024,
+			strict: false,
+		})
+
+		expect(result.truncated).toBe(true)
+		expect(result.failed).toBe(true)
+		expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(1_024)
+	})
+
+	// The guide claims neither run function returns a split sequence, and each reaches that from a
+	// different side. `execute` bounds its own capture one byte past `limit`; `executeSync` hands
+	// `limit` to the host as `maxBuffer`, and a child that overruns the ceiling still returns the
+	// bytes the host had already read, so the same trim has its excluded byte. This child writes the
+	// bytes of `aa\u20acbb\u20ac`, whose third and sixth bytes open three-byte sequences, and every
+	// limit across the string is driven so no cut position is left unproven.
+	it('delivers no split multibyte sequence at any synchronous capture bound', () => {
+		const command = {
+			file: process.execPath,
+			arguments: ['-e', "process.stdout.write(Buffer.from('aa\\u20acbb\\u20ac', 'utf8'))"],
+		}
+
+		for (let limit = 1; limit <= 11; limit += 1) {
+			const result = executeSync(command, { workspace: process.cwd(), limit, strict: false })
+			expect(result.stdout).not.toContain('\u{fffd}')
+			expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(limit)
+		}
+	})
+
+	it('passes a shell metacharacter through as one argument', () => {
+		const result = executeSync(
+			{ file: 'node', arguments: [resolveChildFixture(), 'args', 'a&b'] },
+			{ workspace: process.cwd(), strict: false },
+		)
+
+		expect(result.failed).toBe(false)
+		expect(result.stdout).toContain('args:a&b')
+	})
+
+	it('threads the spawn cause onto the rejected process error', () => {
+		let thrown: unknown
+		try {
+			executeSync(
+				{ file: 'orkestrel-nonexistent-binary.exe', arguments: [] },
+				{ workspace: process.cwd() },
+			)
+		} catch (error) {
+			thrown = error
+		}
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.cause : undefined).toBeInstanceOf(Error)
+	})
+
+	it('reports null rather than an errno when the command cannot be spawned', () => {
+		const result = executeSync(
+			{ file: 'orkestrel-nonexistent-binary.exe', arguments: [] },
+			{ workspace: process.cwd(), strict: false },
+		)
+
+		expect(result.failed).toBe(true)
+		expect(result.code).toBe(null)
+	})
+
+	it('refuses a NUL in a per-run environment override before spawning', () => {
+		const nul = String.fromCodePoint(0)
+		let thrown: unknown
+		try {
+			executeSync(childCommand('exit', '0'), {
+				workspace: process.cwd(),
+				environment: { PROCESS_TEST_KEY: `a${nul}b` },
+			})
+		} catch (error) {
+			thrown = error
+		}
+
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('invalid')
+	})
+
+	it('runs the child in the workspace it validated', () => {
+		const validated = createScratch()
+		const later = createScratch()
+		let reads = 0
+
+		try {
+			const result = executeSync(
+				{ file: process.execPath, arguments: ['-e', 'process.stdout.write(process.cwd())'] },
+				{
+					get workspace(): string {
+						reads += 1
+						return reads === 1 ? validated.path : later.path
+					},
+				},
+			)
+
+			expect(realpathSync(result.stdout)).toBe(realpathSync(validated.path))
+		} finally {
+			validated.destroy()
+			later.destroy()
+		}
+	})
+})
+
+describe('detach', () => {
+	it('spawns the same command file that it validated', async () => {
+		const scratch = createScratch()
+		let reads = 0
+		try {
+			const marker = join(scratch.path, 'snapshot.txt')
+			detach(
+				{
+					get file() {
+						reads += 1
+						return reads === 1 ? process.execPath : `${process.execPath}\0changed`
+					},
+					arguments: [resolveChildFixture(), 'write', marker],
+				},
+				{ workspace: process.cwd() },
+			)
+			for (let attempt = 0; attempt < 60 && !existsSync(marker); attempt += 1) {
+				await waitForDelay(50)
+			}
+
+			expect(reads).toBe(1)
+			expect(readFileSync(marker, 'utf8')).toBe('detached')
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('spawns a fire-and-forget child that runs after the call returns', async () => {
+		const scratch = createScratch()
+		try {
+			const marker = join(scratch.path, 'detached.txt')
+
+			detach(childCommand('write', marker), { workspace: process.cwd() })
+			for (let attempt = 0; attempt < 60 && !existsSync(marker); attempt += 1) {
+				await waitForDelay(50)
+			}
+
+			expect(readFileSync(marker, 'utf8')).toBe('detached')
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	// The host claims the guide makes about a detached child, driven through one supervisor that
+	// holds both children: one left in the supervisor's process group and one detached into its own.
+	// A terminal delivers SIGINT to its foreground group and a supervisor is ended by a signal to its
+	// group, so a group-directed signal is what both claims are about. Windows has no process group
+	// for `process.kill` to address, so only a POSIX host can drive this.
+	it.skipIf(process.platform === 'win32')(
+		'leaves a detached child beating and uninterrupted after the supervisor group is signalled',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch()
+			try {
+				// Each child records that it received SIGINT and touches a heartbeat file while it lives,
+				// so liveness is read from work the child performs rather than from a pid, which a
+				// reaped-but-unwaited process answers for too.
+				scratch.write(
+					'child.mjs',
+					[
+						"import { writeFileSync } from 'node:fs'",
+						'const [marker] = process.argv.slice(2)',
+						"process.on('SIGINT', () => writeFileSync(marker + '.sigint', 'interrupted'))",
+						"writeFileSync(marker + '.pid', String(process.pid))",
+						"setInterval(() => writeFileSync(marker + '.beat', 'alive'), 25)",
+					].join('\n'),
+				)
+				scratch.write(
+					'supervisor.mjs',
+					[
+						"import { spawn } from 'node:child_process'",
+						"import { writeFileSync } from 'node:fs'",
+						'const [directory] = process.argv.slice(2)',
+						"process.on('SIGINT', () => undefined)",
+						"for (const name of ['grouped', 'detached']) {",
+						"\tconst child = spawn(process.argv[0], [directory + '/child.mjs', directory + '/' + name], {",
+						"\t\tdetached: name === 'detached',",
+						"\t\tstdio: 'ignore',",
+						'\t})',
+						'\tchild.unref()',
+						'}',
+						"writeFileSync(directory + '/supervisor.pid', String(process.pid))",
+						'setInterval(() => undefined, 1_000)',
+					].join('\n'),
+				)
+				const grouped = join(scratch.path, 'grouped')
+				const detached = join(scratch.path, 'detached')
+				const supervisorPid = join(scratch.path, 'supervisor.pid')
+
+				detach(
+					{
+						file: process.execPath,
+						arguments: [join(scratch.path, 'supervisor.mjs'), scratch.path],
+					},
+					{ workspace: process.cwd() },
+				)
+				await waitForCondition(
+					'the supervisor pid file and the grouped and detached heartbeat markers appearing on disk',
+					() =>
+						existsSync(supervisorPid) &&
+						existsSync(`${grouped}.beat`) &&
+						existsSync(`${detached}.beat`),
+					{ budget: 10_000 },
+				)
+				const supervisor = Number.parseInt(readFileSync(supervisorPid, 'utf8'), 10)
+				const survivor = Number.parseInt(readFileSync(`${detached}.pid`, 'utf8'), 10)
+				const member = Number.parseInt(readFileSync(`${grouped}.pid`, 'utf8'), 10)
+
+				try {
+					process.kill(-supervisor, 'SIGINT')
+
+					// The control fires first: the child still in the group receives the interrupt.
+					await waitForCondition(
+						'the grouped child recording the interrupt it received',
+						() => existsSync(`${grouped}.sigint`),
+						{ budget: 10_000 },
+					)
+					await waitForDelay(200)
+					expect(existsSync(`${detached}.sigint`)).toBe(false)
+
+					process.kill(-supervisor, 'SIGKILL')
+					await waitForDelay(300)
+					const stopped = statSync(`${grouped}.beat`).mtimeMs
+					const running = statSync(`${detached}.beat`).mtimeMs
+					await waitForDelay(400)
+
+					expect(statSync(`${grouped}.beat`).mtimeMs).toBe(stopped)
+					expect(statSync(`${detached}.beat`).mtimeMs).toBeGreaterThan(running)
+					expect(existsSync(`${detached}.sigint`)).toBe(false)
+				} finally {
+					holds(() => process.kill(survivor, 'SIGKILL'))
+					holds(() => process.kill(member, 'SIGKILL'))
+					holds(() => process.kill(supervisor, 'SIGKILL'))
+				}
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
+
+	it('refuses an invalid command before anything is spawned', () => {
+		let thrown: unknown
+		try {
+			detach({ file: '', arguments: [] })
+		} catch (error) {
+			thrown = error
+		}
+
+		expect(isProcessError(thrown)).toBe(true)
+		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('invalid')
+	})
+
+	it('spawns the detached child in the workspace it validated', async () => {
+		const validated = createScratch()
+		const later = createScratch()
+		let reads = 0
+
+		try {
+			detach(childCommand('write', 'detached.txt'), {
+				get workspace(): string {
+					reads += 1
+					return reads === 1 ? validated.path : later.path
+				},
+			})
+			await waitForDelay(200)
+
+			expect(existsSync(join(validated.path, 'detached.txt'))).toBe(true)
+			expect(existsSync(join(later.path, 'detached.txt'))).toBe(false)
+		} finally {
+			validated.destroy()
+			later.destroy()
+		}
+	})
 })
