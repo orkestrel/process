@@ -594,7 +594,7 @@ describe('waitForClose', () => {
 })
 
 describe('stopChild', () => {
-	it('signals nothing once the host has recorded the native exit', async () => {
+	it('signals nothing after the host has recorded the native exit', async () => {
 		const signals = createRecorder<readonly [NodeJS.Signals]>()
 
 		const confirmed = await stopChild(
