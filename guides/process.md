@@ -203,9 +203,10 @@ The contracts and options, all from `@orkestrel/process`.
 The Node-side contracts, from `@orkestrel/process/server`. They type the Node child boundary, so
 they stay out of the host-independent face.
 
-| API            | Kind      | Summary                                                                                                    |
-| -------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
-| `ProcessChild` | interface | The child boundary the termination helpers drive — `pid`, `exitCode`, `signalCode`, `kill`, `once`, `off`. |
+| API              | Kind      | Summary                                                                                                            |
+| ---------------- | --------- | ------------------------------------------------------------------------------------------------------------------ |
+| `ProcessChild`   | interface | The child boundary the termination helpers drive — `pid`, `exitCode`, `signalCode`, `kill`, `once`, `off`.         |
+| `SupervisorFace` | interface | The face callbacks one supervised child reports to — `chunk`, `fault`, `relieve`, `close`, `terminal`, `teardown`. |
 
 ### Surface notes
 
@@ -1479,6 +1480,10 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   that refusal spawned arriving before the barrier resolves, the eviction of a child whose
   descendant holds the pipe at the drain cutoff, the unforgeable eviction and its ordering, the
   query surface, the `stop` overloads, and emitter-last `destroy`.
+- [`tests/src/server/cloners.test.ts`](../tests/src/server/cloners.test.ts) — the command
+  snapshot: each property read exactly once through a caller's own getter, the frozen argument
+  vector and environment record a later mutation cannot reach, and the absent optional that stays
+  absent rather than becoming an explicit `undefined`.
 - [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the building blocks
   and the spawns that compose them: the resolver under `PATHEXT` and an extension-bearing name, each
   platform input to the quoted batch builder and its percent-sign refusal, the environment merge

@@ -7,6 +7,8 @@
  * naming `node:child_process` types.
  */
 
+import type { ProcessExit } from '@src/core'
+
 /**
  * The child boundary the termination helpers drive.
  *
@@ -56,4 +58,30 @@ export interface ProcessChild {
 	 * @returns Whatever the emitter returns, which the helpers ignore
 	 */
 	off(event: 'exit' | 'close', listener: () => void): unknown
+}
+
+/**
+ * The composing face's callbacks for each lifecycle moment of one supervised child.
+ *
+ * @remarks
+ * `Process` and `Session` each construct one and hand it to the supervision engine, which captures
+ * every callback before anything is read or spawned, so the first moment the child can produce
+ * already has somewhere to go. `chunk` receives each decoded standard-error fragment, `fault` the
+ * host error that ended the run, `close` the moment the read channels closed, `terminal` the frozen
+ * exit state, and `teardown` the release of whatever the face still holds. `relieve` is optional
+ * because only a face carrying a standard-input channel reports backpressure relief.
+ */
+export interface SupervisorFace {
+	/** Receives one decoded standard-error fragment. */
+	readonly chunk: (text: string) => void
+	/** Receives the host error that ended the run. */
+	readonly fault: (cause: unknown) => void
+	/** Reports that a pending standard-input write can proceed, for a face carrying a channel. */
+	readonly relieve?: () => void
+	/** Reports that the child's read channels closed. */
+	readonly close: () => void
+	/** Receives the frozen terminal state. */
+	readonly terminal: (exit: ProcessExit) => void
+	/** Releases whatever the face still holds after the terminal moment. */
+	readonly teardown: () => void
 }

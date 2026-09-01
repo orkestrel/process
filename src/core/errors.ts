@@ -7,7 +7,18 @@ import type {
 import { holds, isError } from '@orkestrel/contract'
 import { PROCESS_ERROR_CODES } from './constants.js'
 
-/** A child-process failure with a stable machine-readable category. */
+/**
+ * A child-process failure with a stable machine-readable category.
+ *
+ * @example
+ * ```ts
+ * const error = new ProcessError('git status refused', {
+ * 	code: 'invalid',
+ * 	context: { command: 'git status' },
+ * })
+ * error.code // 'invalid'
+ * ```
+ */
 export class ProcessError extends Error {
 	override readonly name = 'ProcessError'
 	readonly code: ProcessErrorCode

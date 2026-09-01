@@ -585,6 +585,7 @@ export interface ExecuteResult {
 	readonly stderr: string
 	/** The exit code. A spawn fault reports the host's negative errno for `execute` and `null` for `executeSync`. */
 	readonly code: number | null
+	/** The terminating signal name, or `null` when the process exited on its own. */
 	readonly signal: string | null
 	/** True if the run did not complete successfully. */
 	readonly failed: boolean
@@ -611,7 +612,9 @@ export interface ExecuteInput {
 	readonly stdout: Uint8Array
 	/** The retained standard-error bytes. */
 	readonly stderr: Uint8Array
+	/** The exit code. A spawn fault reports the host's negative errno for `execute` and `null` for `executeSync`. */
 	readonly code: number | null
+	/** The terminating signal name, or `null` when the process exited on its own. */
 	readonly signal: string | null
 	/** If `true`, the run's own timeout elapsed; if `false`, it did not. */
 	readonly expired: boolean

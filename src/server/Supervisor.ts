@@ -1,6 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { Readable } from 'node:stream'
 import type { ProcessExit, ProcessOptions } from '@src/core'
+import type { SupervisorFace } from './types.js'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
@@ -11,10 +12,10 @@ import {
 	PROCESS_EVIDENCE,
 	PROCESS_GRACE,
 } from '@src/core'
+import { snapshotCommand } from './cloners.js'
 import {
 	buildSpawn,
 	mergeEnvironment,
-	snapshotCommand,
 	stopChild,
 	trimTail,
 	validateBytes,
@@ -102,17 +103,7 @@ export class Supervisor {
 	 * @param face - The composing face's callbacks for each lifecycle moment
 	 * @throws A {@link ProcessError} coded `invalid` when an option or command string is malformed
 	 */
-	constructor(
-		options: ProcessOptions,
-		face: {
-			readonly chunk: (text: string) => void
-			readonly fault: (cause: unknown) => void
-			readonly relieve?: () => void
-			readonly close: () => void
-			readonly terminal: (exit: ProcessExit) => void
-			readonly teardown: () => void
-		},
-	) {
+	constructor(options: ProcessOptions, face: SupervisorFace) {
 		this.#chunk = face.chunk
 		this.#fault = face.fault
 		this.#relieve = face.relieve

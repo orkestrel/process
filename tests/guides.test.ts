@@ -107,6 +107,7 @@ const REFUSALS: Readonly<
 			'ProcessChild',
 			'ProcessManager',
 			'Session',
+			'SupervisorFace',
 			'buildExecutableCandidates',
 			'buildExecuteResult',
 			'buildPlatformSpawn',
