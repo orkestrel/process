@@ -12,19 +12,19 @@ import { isAbsolute } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { holds } from '@orkestrel/contract'
 import {
+	computeSymbolKey,
 	createGuide,
 	createSource,
 	createSourceManager,
+	extractFenceImports,
 	extractSourceLines,
-	fenceImports,
 	findMissing,
+	findMissingSymbols,
 	findUnexampled,
 	findUnlisted,
 	isExternalLink,
-	missingSymbols,
 	parseManifest,
 	resolveLink,
-	symbolKey,
 } from '@orkestrel/guide'
 import { requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { readInventory } from '@orkestrel/test/server'
@@ -188,7 +188,7 @@ const REFUSALS: Readonly<
 	}),
 })
 /**
- * Declarations deliberately kept out of a barrel, as `symbolKey` strings, keyed by the face whose
+ * Declarations deliberately kept out of a barrel, as `computeSymbolKey` strings, keyed by the face whose
  * module declares each one.
  *
  * Naming one here is what makes it intentional rather than forgotten, and the assertions over this
@@ -340,10 +340,10 @@ for (const entry of POPULATIONS) {
 			expect(source.surface().length).toBeGreaterThan(0)
 		})
 		it('strands exactly its expected declarations', () => {
-			expect(missingSymbols(source.exports(), source.surface())).toEqual(entry.stranded)
+			expect(findMissingSymbols(source.exports(), source.surface())).toEqual(entry.stranded)
 		})
 		it('re-exports exactly its expected phantom symbols', () => {
-			expect(missingSymbols(source.surface(), source.exports())).toEqual(entry.phantom)
+			expect(findMissingSymbols(source.surface(), source.exports())).toEqual(entry.phantom)
 		})
 	})
 }
@@ -362,25 +362,25 @@ for (const entry of manifest) {
 			expect(guide.surface().length).toBeGreaterThan(0)
 		})
 		it('re-exports every direct declaration that is not named internal', () => {
-			const stranded = missingSymbols(source.exports(), source.surface())
+			const stranded = findMissingSymbols(source.exports(), source.surface())
 			expect(stranded.filter((key) => !INTERNAL.includes(key))).toEqual([])
 		})
 		it('names no symbol internal that the barrel already exports', () => {
-			const stranded = missingSymbols(source.exports(), source.surface())
+			const stranded = findMissingSymbols(source.exports(), source.surface())
 			expect(INTERNAL.filter((key) => !stranded.includes(key))).toEqual([])
 		})
 		it('re-exports only direct declarations', () => {
-			expect(missingSymbols(source.surface(), source.exports())).toEqual([])
+			expect(findMissingSymbols(source.surface(), source.exports())).toEqual([])
 		})
 		it('documents every barrel export', () => {
-			expect(missingSymbols(source.surface(), guide.surface())).toEqual([])
+			expect(findMissingSymbols(source.surface(), guide.surface())).toEqual([])
 		})
 		it('documents only barrel exports', () => {
-			expect(missingSymbols(guide.surface(), source.surface())).toEqual([])
+			expect(findMissingSymbols(guide.surface(), source.surface())).toEqual([])
 		})
 
 		it('exposes no hidden module-scope declarations', () => {
-			expect(source.hidden().map(symbolKey)).toEqual([])
+			expect(source.hidden().map(computeSymbolKey)).toEqual([])
 		})
 
 		for (const group of guide.methods()) {
@@ -438,7 +438,7 @@ for (const entry of manifest) {
 			})
 		}
 
-		// The membership rule is `fenceImports`'s own grammar read off Guide's comment-aware source
+		// The membership rule is `extractFenceImports`'s own grammar read off Guide's comment-aware source
 		// projection, not "named-brace imports": every statement it surfaces is checked and nothing
 		// else is. A mapped specifier's bindings compare against that face's barrel surface; a
 		// repository alias and an unmapped true subpath of the root are refused, the alias because a
@@ -451,7 +451,7 @@ for (const entry of manifest) {
 				const projected = extractSourceLines(fence.code)
 					.map((line) => line.code)
 					.join('\n')
-				for (const statement of fenceImports(projected)) {
+				for (const statement of extractFenceImports(projected)) {
 					const specifier = statement.specifier
 					if (specifier.startsWith('@src/') || specifier.startsWith('@app/')) {
 						refused.push(specifier)
