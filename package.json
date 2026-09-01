@@ -82,7 +82,7 @@
 		"test:bench": "vitest bench --config vite.config.ts --no-cache --project probe"
 	},
 	"dependencies": {
-		"@orkestrel/contract": "^0.0.13",
+		"@orkestrel/contract": "^0.0.15",
 		"@orkestrel/emitter": "^0.0.8"
 	},
 	"devDependencies": {
