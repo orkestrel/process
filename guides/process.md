@@ -200,10 +200,11 @@ The contracts and options, all from `@orkestrel/process`.
 
 ### Server contracts
 
-The contracts the Node-side face declares, from `@orkestrel/process/server`. Each lands here for
-its own reason rather than for one shared one: `ProcessChildInterface` names `NodeJS.Signals`, which
-a host-independent contract cannot, and `SupervisorFace` types the callbacks the Node-side
-supervision engine takes.
+The Node-side contracts, from `@orkestrel/process/server`. Each sits in this face rather than
+the host-independent one for its own reason: `ProcessChildInterface` names `NodeJS.Signals`, which
+a host-independent contract cannot, and `SupervisorFace` names no Node type but has one consumer,
+the Node-only `Supervisor` engine that stays out of the barrel, so the contract sits with the face
+that constructs one.
 
 | API                     | Kind      | Summary                                                                                                                                                                                               |
 | ----------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

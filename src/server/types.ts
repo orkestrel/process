@@ -3,10 +3,11 @@
  *
  * @remarks
  * The host-independent contracts live in `@orkestrel/process`. This module declares the contracts
- * the Node-side face itself needs, each for its own reason rather than for one shared one:
+ * the Node-side face needs, each for its own reason rather than for one shared one:
  * `ProcessChildInterface` types the child boundary the termination helpers drive and names
- * `NodeJS.Signals`, which a host-independent contract cannot; `SupervisorFace` types the callbacks
- * the Node-side supervision engine takes from the face composing it.
+ * `NodeJS.Signals`, which a host-independent contract cannot; `SupervisorFace` names no Node
+ * type, but its one consumer is the Node-only `Supervisor` engine, so it sits with the face that
+ * constructs one.
  */
 
 import type { ProcessExit } from '@src/core'
