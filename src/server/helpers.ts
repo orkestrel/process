@@ -280,7 +280,7 @@ export function mergeEnvironment(
  * command. An unreadable or malformed path reports `false` rather than throwing.
  *
  * @param target - The absolute or relative path to inspect
- * @returns True when the path resolves to a regular file; false otherwise
+ * @returns True if the path resolves to a regular file; false otherwise
  *
  * @example
  * ```ts
@@ -598,7 +598,7 @@ export function validateWorkspace(workspace: string | undefined): void {
  * initiated against a pid the host may have reused.
  *
  * @param child - The child boundary
- * @returns True when the process has exited; false while it is live
+ * @returns True if the process has exited; false otherwise
  *
  * @example
  * ```ts
@@ -660,7 +660,7 @@ export function killProcess(
  *
  * @param pid - The root process id of the tree to end
  * @param timeout - The milliseconds the utility is given before it is killed
- * @returns True when the utility reported success; false when it failed, was unavailable, or was cut off
+ * @returns True if the utility reported success; false otherwise (it failed, was unavailable, or was cut off)
  *
  * @example
  * ```ts
@@ -711,7 +711,7 @@ export function waitForExit(
  *
  * @param child - The child boundary
  * @param timeout - The milliseconds to wait before giving up
- * @returns True when the host close arrived inside the deadline; false otherwise
+ * @returns True if the host close arrived inside the deadline; false otherwise
  *
  * @example
  * ```ts
@@ -750,7 +750,7 @@ export function waitForClose(
  * @param child - The child boundary
  * @param grace - The cooperative POSIX window in milliseconds between `SIGTERM` and `SIGKILL`
  * @param confirm - The milliseconds the native exit is awaited after the final kill
- * @returns True when the native exit was observed; false when `confirm` elapsed without it
+ * @returns True if the native exit was observed; false otherwise (`confirm` elapsed without it)
  *
  * @example
  * ```ts

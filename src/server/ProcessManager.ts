@@ -12,7 +12,7 @@ import { createDuplicateError, createProtocolError } from '@src/core'
 import { Process } from './Process.js'
 
 /**
- * A keyed registry of live supervised child processes.
+ * Represents a keyed registry of live supervised child processes.
  *
  * @remarks
  * A child launched under an id joins the registry and emits `launch`; when it settles it removes
@@ -54,7 +54,7 @@ export class ProcessManager implements ProcessManagerInterface {
 	#ending: Promise<void> | undefined
 
 	/**
-	 * Construct a process registry.
+	 * Constructs a process registry.
 	 *
 	 * @param options - Initial fleet-level observation hooks and listener-error handling
 	 */
@@ -67,18 +67,18 @@ export class ProcessManager implements ProcessManagerInterface {
 		})
 	}
 
-	/** The typed fleet-level observation surface. */
+	/** Holds the typed fleet-level observation surface. */
 	get emitter(): EmitterInterface<ProcessManagerEventMap> {
 		return this.#emitter
 	}
 
-	/** The number of live children. */
+	/** Counts the live children. */
 	get count(): number {
 		return this.#children.size
 	}
 
 	/**
-	 * The live child under `id`, or `undefined` when none is.
+	 * Returns the live child under `id`, or `undefined` when none is.
 	 *
 	 * @param id - The registry key
 	 * @returns The child, or `undefined`
@@ -88,7 +88,7 @@ export class ProcessManager implements ProcessManagerInterface {
 	}
 
 	/**
-	 * A snapshot of every live child.
+	 * Returns a snapshot of every live child.
 	 *
 	 * @returns The live children in launch order
 	 */
@@ -97,7 +97,7 @@ export class ProcessManager implements ProcessManagerInterface {
 	}
 
 	/**
-	 * Spawn and register one child under `id`.
+	 * Spawns and registers one child under `id`.
 	 *
 	 * @remarks
 	 * {@link Process} reads every option before it spawns, so a caller's own option getter runs while
@@ -136,21 +136,21 @@ export class ProcessManager implements ProcessManagerInterface {
 	}
 
 	/**
-	 * Terminate the named children and await their exit.
+	 * Terminates the named children and awaits their exit.
 	 *
 	 * @param ids - The registry keys to stop
-	 * @returns True when every named child was live and its exit was confirmed; false otherwise
+	 * @returns True if every named child was live and its exit was confirmed; false otherwise
 	 */
 	stop(ids: readonly string[]): Promise<boolean>
 	/**
-	 * Terminate one child and await its exit.
+	 * Terminates one child and awaits its exit.
 	 *
 	 * @param id - The registry key to stop
-	 * @returns True when the child was live and its exit was confirmed; false when the id was not live or the confirmation deadline elapsed
+	 * @returns True if the child was live and its exit was confirmed; false otherwise (the id was not live, or the confirmation deadline elapsed)
 	 */
 	stop(id: string): Promise<boolean>
 	/**
-	 * Terminate every live child and await their exit.
+	 * Terminates every live child and awaits their exit.
 	 *
 	 * @returns A promise that resolves after every child stops
 	 */
@@ -162,7 +162,7 @@ export class ProcessManager implements ProcessManagerInterface {
 	}
 
 	/**
-	 * Stop every child, then destroy the registry emitter last.
+	 * Stops every child, then destroys the registry emitter last.
 	 *
 	 * @remarks
 	 * Always resolves, and refuses a later `launch` with a {@link createProtocolError}. Each child is

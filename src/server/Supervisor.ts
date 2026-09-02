@@ -90,7 +90,7 @@ export class Supervisor {
 	#destruction: Promise<void> | undefined
 
 	/**
-	 * Spawn one child process and begin standard-error capture.
+	 * Spawns one child process and begins standard-error capture.
 	 *
 	 * @remarks
 	 * The face's callbacks are captured before anything is read or spawned, so the first moment the
@@ -165,43 +165,43 @@ export class Supervisor {
 		}
 	}
 
-	/** The child's standard-output stream, for the composing face to attach its own consumer to. */
+	/** Holds the child's standard-output stream, for the composing face to attach its own consumer to. */
 	get stdout(): Readable {
 		return this.#child.stdout
 	}
 
-	/** The host process id, fixed when construction returns, or `undefined` when the spawn produced none. */
+	/** Holds the host process id, fixed when construction returns, or `undefined` when the spawn produced none. */
 	get pid(): number | undefined {
 		return this.#child.pid
 	}
 
-	/** The exit code the host recorded, or `null` while the child has not exited and when a signal ended it. */
+	/** Holds the exit code the host recorded, or `null` while the child has not exited and when a signal ended it. */
 	get code(): number | null {
 		return this.#child.exitCode
 	}
 
-	/** The terminating signal name the host recorded, or `null` while the child has not exited and when it exited on its own. */
+	/** Holds the terminating signal name the host recorded, or `null` while the child has not exited and when it exited on its own. */
 	get signal(): string | null {
 		return this.#child.signalCode
 	}
 
-	/** The decoded byte-bounded stderr tail, frozen at the terminal moment. */
+	/** Holds the decoded byte-bounded stderr tail, frozen at the terminal moment. */
 	get evidence(): string {
 		return this.#tail.toString('utf8')
 	}
 
-	/** True after the terminal moment arrived and `exit` settled. */
+	/** Reports whether the terminal moment arrived and `exit` settled. */
 	get settled(): boolean {
 		return this.#settled
 	}
 
-	/** True after termination began, including after the terminal moment. */
+	/** Reports whether termination began, including after the terminal moment. */
 	get stopping(): boolean {
 		return this.#stopping
 	}
 
 	/**
-	 * The child's own ending, awaited without the terminal moment's drain window.
+	 * Settles at the child's own ending, awaited without the terminal moment's drain window.
 	 *
 	 * @remarks
 	 * Never rejects, and resolves no value: `code` and `signal` carry the terminal facts as soon as
@@ -212,7 +212,7 @@ export class Supervisor {
 		return this.#ending.promise
 	}
 
-	/** The terminal child state, observed once after stream close or the drain cutoff. */
+	/** Settles with the terminal child state, observed once after stream close or the drain cutoff. */
 	get exit(): Promise<ProcessExit> {
 		return this.#exit.promise
 	}
@@ -230,7 +230,7 @@ export class Supervisor {
 	 * discard.
 	 *
 	 * @param bytes - The payload to write, already framed by the caller
-	 * @returns True when the host accepted the bytes without reporting a fault; false when the channel was closed, destroyed, ended, failed, or remained unconfirmed through `delivery`
+	 * @returns True if the host accepted the bytes without reporting a fault; false otherwise (the channel was closed, destroyed, ended, failed, or the write remained unconfirmed through `delivery`)
 	 */
 	deliver(bytes: Uint8Array): Promise<boolean> {
 		const stdin = this.#child.stdin
@@ -285,7 +285,7 @@ export class Supervisor {
 	 * and settles `exit` when they remain open. A cutoff reached before the native exit reports the
 	 * `code` and `signal` the host had recorded by then, which is `null` for a child still running.
 	 *
-	 * @returns True when the child's native exit was observed; false when the confirmation deadline elapsed without it
+	 * @returns True if the child's native exit was observed; false otherwise (the confirmation deadline elapsed without it)
 	 */
 	stop(): Promise<boolean> {
 		if (this.#termination !== undefined) return this.#termination

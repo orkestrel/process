@@ -1,11 +1,11 @@
-/** The default cooperative POSIX window in milliseconds between `SIGTERM` and `SIGKILL` during termination. */
+/** Names the default cooperative POSIX window in milliseconds between `SIGTERM` and `SIGKILL` during termination. */
 export const PROCESS_GRACE = 5_000
 
-/** The window in milliseconds a termination waits for the child's native exit after the final kill. */
+/** Names the window in milliseconds a termination waits for the child's native exit after the final kill. */
 export const PROCESS_CONFIRMATION = 5_000
 
 /**
- * The default window in milliseconds the package waits for the child's read ends to close after
+ * Names the default window in milliseconds the package waits for the child's read ends to close after
  * the child's native exit or after a termination this package initiated, before cutting them off.
  *
  * @remarks
@@ -21,22 +21,22 @@ export const PROCESS_CONFIRMATION = 5_000
  */
 export const PROCESS_DRAIN = 1_000
 
-/** The default maximum retained stderr tail in bytes for a supervised {@link ProcessInterface}. */
+/** Names the default maximum retained stderr tail in bytes for a supervised {@link ProcessInterface}. */
 export const PROCESS_EVIDENCE = 2_048
 
-/** The default soft high-water mark in bytes for a supervised {@link ProcessInterface} line backlog. */
+/** Names the default soft high-water mark in bytes for a supervised {@link ProcessInterface} line backlog. */
 export const PROCESS_BACKLOG = 10_485_760
 
-/** The default maximum captured bytes for a one-shot run's stdout and stderr, each. */
+/** Names the default maximum captured bytes for a one-shot run's stdout and stderr, each. */
 export const PROCESS_OUTPUT = 10_485_760
 
-/** The largest timer delay in milliseconds the host schedules without truncating it to one. */
+/** Names the largest timer delay in milliseconds the host schedules without truncating it to one. */
 export const PROCESS_TIMER = 2_147_483_647
 
-/** The executable extensions a Windows lookup applies when the environment declares no `PATHEXT`. */
+/** Lists the executable extensions a Windows lookup applies when the environment declares no `PATHEXT`. */
 export const PROCESS_PATHEXT = '.COM;.EXE;.BAT;.CMD'
 
-/** The machine-readable failure categories a {@link ProcessError} carries, in declaration order. */
+/** Lists the machine-readable failure categories a {@link ProcessError} carries, in declaration order. */
 export const PROCESS_ERROR_CODES = Object.freeze([
 	'spawn',
 	'timeout',

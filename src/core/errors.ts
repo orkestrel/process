@@ -8,7 +8,7 @@ import { holds, isError } from '@orkestrel/contract'
 import { PROCESS_ERROR_CODES } from './constants.js'
 
 /**
- * A child-process failure with a stable machine-readable category.
+ * Represents a child-process failure with a stable machine-readable category.
  *
  * @example
  * ```ts
@@ -23,11 +23,11 @@ export class ProcessError extends Error {
 	override readonly name = 'ProcessError'
 	readonly code: ProcessErrorCode
 	readonly context?: ProcessErrorContext
-	/** The buffered run outcome, present when a one-shot run produced the failure. */
+	/** Carries the buffered run outcome, present when a one-shot run produced the failure. */
 	readonly result?: ExecuteResult
 
 	/**
-	 * Create a process error.
+	 * Creates a process error.
 	 *
 	 * @param message - Human-readable failure description
 	 * @param options - Machine-readable category, optional context, optional cause, and optional run result
@@ -53,7 +53,7 @@ export class ProcessError extends Error {
  * plain or property-only lookalike.
  *
  * @param value - The value to inspect
- * @returns True only for a `ProcessError` instance; false otherwise
+ * @returns True if the value is a `ProcessError` instance; false otherwise
  *
  * @example
  * ```ts

@@ -1,5 +1,5 @@
 /**
- * The Node-side contracts of `@orkestrel/process/server`.
+ * Declares the Node-side contracts of `@orkestrel/process/server`.
  *
  * @remarks
  * The host-independent contracts live in `@orkestrel/process`. This module declares the contracts
@@ -13,7 +13,7 @@
 import type { ProcessExit } from '@src/core'
 
 /**
- * The child boundary the termination helpers drive.
+ * Represents the child boundary the termination helpers drive.
  *
  * @remarks
  * A `ChildProcess` satisfies this structurally, and so does any object carrying the same
@@ -28,21 +28,21 @@ import type { ProcessExit } from '@src/core'
  * when the host reports that no group owns that pid.
  */
 export interface ProcessChildInterface {
-	/** The process id the host assigned, or `undefined` when the spawn never produced one. */
+	/** Holds the process id the host assigned, or `undefined` when the spawn never produced one. */
 	readonly pid?: number | undefined
-	/** The exit code, or `null` while the process is live or a signal ended it. */
+	/** Holds the exit code, or `null` while the process is live or a signal ended it. */
 	readonly exitCode: number | null
-	/** The terminating signal name, or `null` while the process is live or it exited on its own. */
+	/** Holds the terminating signal name, or `null` while the process is live or it exited on its own. */
 	readonly signalCode: string | null
 	/**
-	 * Deliver one signal to the process.
+	 * Delivers one signal to the process.
 	 *
 	 * @param signal - The signal to deliver
-	 * @returns True when the host accepted the signal; false otherwise
+	 * @returns True if the host accepted the signal; false otherwise
 	 */
 	kill(signal: NodeJS.Signals): boolean
 	/**
-	 * Register a one-shot listener for the native exit or stream close.
+	 * Registers a one-shot listener for the native exit or stream close.
 	 *
 	 * @param event - The `exit` or `close` event name
 	 * @param listener - The listener invoked after the selected event
@@ -50,7 +50,7 @@ export interface ProcessChildInterface {
 	 */
 	once(event: 'exit' | 'close', listener: () => void): unknown
 	/**
-	 * Release one previously registered exit or close listener.
+	 * Releases one previously registered exit or close listener.
 	 *
 	 * @remarks
 	 * `waitForExit` releases its `exit` listener, and `waitForClose` releases its `close` listener, so
@@ -64,7 +64,7 @@ export interface ProcessChildInterface {
 }
 
 /**
- * The composing face's callbacks for each lifecycle moment of one supervised child.
+ * Represents the composing face's callbacks for each lifecycle moment of one supervised child.
  *
  * @remarks
  * `Process` and `Session` each construct one and hand it to the supervision engine, which captures

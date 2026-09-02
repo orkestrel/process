@@ -41,7 +41,7 @@ export class Session implements SessionInterface {
 	readonly #output: (chunk: unknown) => void
 
 	/**
-	 * Spawn one child process and begin byte capture.
+	 * Spawns one child process and begins byte capture.
 	 *
 	 * @param options - Command, workspace, termination, evidence, stdin, and observation settings
 	 * @throws A {@link ProcessError} coded `invalid` when an option or command string is malformed
@@ -95,47 +95,47 @@ export class Session implements SessionInterface {
 		this.#engine.stdout.on('data', this.#output)
 	}
 
-	/** The host process id, fixed when construction returns, or `undefined` when the spawn produced none. */
+	/** Holds the host process id, fixed when construction returns, or `undefined` when the spawn produced none. */
 	get pid(): number | undefined {
 		return this.#engine.pid
 	}
 
-	/** The exit code the host recorded, or `null` while the child has not exited and when a signal ended it. */
+	/** Holds the exit code the host recorded, or `null` while the child has not exited and when a signal ended it. */
 	get code(): number | null {
 		return this.#engine.code
 	}
 
-	/** The terminating signal name the host recorded, or `null` while the child has not exited and when it exited on its own. */
+	/** Holds the terminating signal name the host recorded, or `null` while the child has not exited and when it exited on its own. */
 	get signal(): string | null {
 		return this.#engine.signal
 	}
 
-	/** The typed lifecycle observation surface. */
+	/** Holds the typed lifecycle observation surface. */
 	get emitter(): EmitterInterface<SessionEventMap> {
 		return this.#emitter
 	}
 
-	/** The decoded byte-bounded stderr tail, frozen at the terminal moment. */
+	/** Holds the decoded byte-bounded stderr tail, frozen at the terminal moment. */
 	get evidence(): string {
 		return this.#engine.evidence
 	}
 
-	/** True after the terminal moment arrived and `exit` settled. */
+	/** Reports whether the terminal moment arrived and `exit` settled. */
 	get settled(): boolean {
 		return this.#engine.settled
 	}
 
-	/** True after termination began, including after the terminal moment. `end` never turns it true. */
+	/** Reports whether termination began, including after the terminal moment. `end` never turns it true. */
 	get stopping(): boolean {
 		return this.#engine.stopping
 	}
 
-	/** The child's own ending, awaited without the terminal moment's drain window. */
+	/** Settles at the child's own ending, awaited without the terminal moment's drain window. */
 	get ending(): Promise<void> {
 		return this.#engine.ending
 	}
 
-	/** The terminal child state, observed once after stream close or the drain cutoff. */
+	/** Settles with the terminal child state, observed once after stream close or the drain cutoff. */
 	get exit(): Promise<ProcessExit> {
 		return this.#engine.exit
 	}
@@ -150,7 +150,7 @@ export class Session implements SessionInterface {
 	 * returned promise settles.
 	 *
 	 * @param bytes - The payload to write, already framed by the caller
-	 * @returns True when the host accepted the bytes without reporting a fault; false when the channel was closed, destroyed, ended, failed, or remained unconfirmed through `delivery`
+	 * @returns True if the host accepted the bytes without reporting a fault; false otherwise (the channel was closed, destroyed, ended, failed, or the write remained unconfirmed through `delivery`)
 	 */
 	write(bytes: Uint8Array): Promise<boolean> {
 		return this.#engine.deliver(bytes)
@@ -176,7 +176,7 @@ export class Session implements SessionInterface {
 	 * @remarks
 	 * Never rejects, and every call shares one termination bounded by `grace` and `drain`.
 	 *
-	 * @returns True when the child's native exit was observed; false when the confirmation deadline elapsed without it
+	 * @returns True if the child's native exit was observed; false otherwise (the confirmation deadline elapsed without it)
 	 */
 	stop(): Promise<boolean> {
 		return this.#engine.stop()

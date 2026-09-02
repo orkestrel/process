@@ -56,7 +56,7 @@ export class Process implements ProcessInterface {
 	#ended = false
 
 	/**
-	 * Spawn one child process and begin stream capture.
+	 * Spawns one child process and begins stream capture.
 	 *
 	 * @param options - Command, workspace, termination, capture, stdin, and observation settings
 	 * @throws A {@link ProcessError} coded `invalid` when an option or command string is malformed
@@ -121,58 +121,58 @@ export class Process implements ProcessInterface {
 		this.#reader.once('close', this.#finish.bind(this))
 	}
 
-	/** The host process id, fixed when construction returns, or `undefined` when the spawn produced none. */
+	/** Holds the host process id, fixed when construction returns, or `undefined` when the spawn produced none. */
 	get pid(): number | undefined {
 		return this.#engine.pid
 	}
 
-	/** The exit code the host recorded, or `null` while the child has not exited and when a signal ended it. */
+	/** Holds the exit code the host recorded, or `null` while the child has not exited and when a signal ended it. */
 	get code(): number | null {
 		return this.#engine.code
 	}
 
-	/** The terminating signal name the host recorded, or `null` while the child has not exited and when it exited on its own. */
+	/** Holds the terminating signal name the host recorded, or `null` while the child has not exited and when it exited on its own. */
 	get signal(): string | null {
 		return this.#engine.signal
 	}
 
-	/** The typed lifecycle observation surface. */
+	/** Holds the typed lifecycle observation surface. */
 	get emitter(): EmitterInterface<ProcessEventMap> {
 		return this.#emitter
 	}
 
-	/** The captured stdout lines, in arrival order, ending after queued lines at the terminal moment. */
+	/** Yields the captured stdout lines, in arrival order, ending after queued lines at the terminal moment. */
 	get lines(): AsyncIterable<string> {
 		return this.#lines
 	}
 
-	/** The decoded byte-bounded stderr tail, frozen at the terminal moment. */
+	/** Holds the decoded byte-bounded stderr tail, frozen at the terminal moment. */
 	get evidence(): string {
 		return this.#engine.evidence
 	}
 
-	/** True when the `lines` stream omitted output after a retention bound was reached. */
+	/** Reports whether the `lines` stream omitted output after a retention bound was reached. */
 	get truncated(): boolean {
 		return this.#truncated
 	}
 
-	/** True after the terminal moment arrived and `exit` settled. */
+	/** Reports whether the terminal moment arrived and `exit` settled. */
 	get settled(): boolean {
 		return this.#engine.settled
 	}
 
-	/** True after termination began, including after the terminal moment. */
+	/** Reports whether termination began, including after the terminal moment. */
 	get stopping(): boolean {
 		return this.#engine.stopping
 	}
 
-	/** The terminal child state, observed once after stream close or the drain cutoff. */
+	/** Settles with the terminal child state, observed once after stream close or the drain cutoff. */
 	get exit(): Promise<ProcessExit> {
 		return this.#engine.exit
 	}
 
 	/**
-	 * Write one line to the open standard-input channel.
+	 * Writes one line to the open standard-input channel.
 	 *
 	 * @remarks
 	 * Never rejects. `true` means the host accepted the bytes without reporting a fault; it does not
@@ -186,7 +186,7 @@ export class Process implements ProcessInterface {
 	 * for bytes the package is about to discard.
 	 *
 	 * @param text - The line text without its trailing newline
-	 * @returns True when the host accepted the bytes without reporting a fault; false when the channel was closed, destroyed, ended, failed, or remained unconfirmed through `delivery`
+	 * @returns True if the host accepted the bytes without reporting a fault; false otherwise (the channel was closed, destroyed, ended, failed, or the write remained unconfirmed through `delivery`)
 	 */
 	send(text: string): Promise<boolean> {
 		return this.#engine.deliver(Buffer.from(`${text}\n`, 'utf8'))
@@ -201,7 +201,7 @@ export class Process implements ProcessInterface {
 	 * and settles `exit` when they remain open. A cutoff reached before the native exit reports the
 	 * `code` and `signal` the host had recorded by then, which is `null` for a child still running.
 	 *
-	 * @returns True when the child's native exit was observed; false when the confirmation deadline elapsed without it
+	 * @returns True if the child's native exit was observed; false otherwise (the confirmation deadline elapsed without it)
 	 */
 	stop(): Promise<boolean> {
 		return this.#engine.stop()
