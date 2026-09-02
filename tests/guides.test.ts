@@ -104,7 +104,7 @@ const REFUSALS: Readonly<
 	'@orkestrel/process': Object.freeze({
 		foreign: Object.freeze([
 			'Process',
-			'ProcessChild',
+			'ProcessChildInterface',
 			'ProcessManager',
 			'Session',
 			'SupervisorFace',

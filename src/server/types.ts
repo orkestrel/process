@@ -2,9 +2,11 @@
  * The Node-side contracts of `@orkestrel/process/server`.
  *
  * @remarks
- * The host-independent contracts live in `@orkestrel/process`. This module declares only what a
- * Node child process boundary requires, which the published contracts cannot express without
- * naming `node:child_process` types.
+ * The host-independent contracts live in `@orkestrel/process`. This module declares the contracts
+ * the Node-side face itself needs, each for its own reason rather than for one shared one:
+ * `ProcessChildInterface` types the child boundary the termination helpers drive and names
+ * `NodeJS.Signals`, which a host-independent contract cannot; `SupervisorFace` types the callbacks
+ * the Node-side supervision engine takes from the face composing it.
  */
 
 import type { ProcessExit } from '@src/core'
@@ -24,7 +26,7 @@ import type { ProcessExit } from '@src/core'
  * the route that reaches it: `killProcess` signals the negated `pid` first and falls back to `kill`
  * when the host reports that no group owns that pid.
  */
-export interface ProcessChild {
+export interface ProcessChildInterface {
 	/** The process id the host assigned, or `undefined` when the spawn never produced one. */
 	readonly pid?: number | undefined
 	/** The exit code, or `null` while the process is live or a signal ended it. */

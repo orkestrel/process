@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ProcessChild } from '@src/server'
+import type { ProcessChildInterface } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { holds } from '@orkestrel/contract'
 import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
@@ -492,11 +492,11 @@ describe('waitForExit', () => {
 	})
 
 	// The subject is the release channel the published contract declares. A real `EventEmitter`
-	// carries `off` whether or not `ProcessChild` names it, so the object here implements exactly the
-	// slice the signature takes and nothing more.
+	// carries `off` whether or not `ProcessChildInterface` names it, so the object here implements
+	// exactly the slice the signature takes and nothing more.
 	it('releases the exit listener of a child implementing exactly the declared slice', async () => {
 		const listeners: Array<() => void> = []
-		const child: Pick<ProcessChild, 'exitCode' | 'signalCode' | 'once' | 'off'> = {
+		const child: Pick<ProcessChildInterface, 'exitCode' | 'signalCode' | 'once' | 'off'> = {
 			exitCode: null,
 			signalCode: null,
 			once: (_event, listener) => listeners.push(listener),

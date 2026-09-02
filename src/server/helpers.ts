@@ -9,7 +9,7 @@ import type {
 	ProcessCommand,
 	SpawnInput,
 } from '@src/core'
-import type { ProcessChild } from './types.js'
+import type { ProcessChildInterface } from './types.js'
 import { Buffer } from 'node:buffer'
 import { spawn, spawnSync } from 'node:child_process'
 import { statSync } from 'node:fs'
@@ -605,7 +605,7 @@ export function validateWorkspace(workspace: string | undefined): void {
  * isExited({ exitCode: 0, signalCode: null }) // true
  * ```
  */
-export function isExited(child: Pick<ProcessChild, 'exitCode' | 'signalCode'>): boolean {
+export function isExited(child: Pick<ProcessChildInterface, 'exitCode' | 'signalCode'>): boolean {
 	return child.exitCode !== null || child.signalCode !== null
 }
 
@@ -630,7 +630,7 @@ export function isExited(child: Pick<ProcessChild, 'exitCode' | 'signalCode'>): 
  * ```
  */
 export function killProcess(
-	child: Pick<ProcessChild, 'pid' | 'kill'>,
+	child: Pick<ProcessChildInterface, 'pid' | 'kill'>,
 	signal: NodeJS.Signals,
 ): void {
 	try {
@@ -693,7 +693,7 @@ export function killTree(pid: number, timeout: number): Promise<boolean> {
  * ```
  */
 export function waitForExit(
-	child: Pick<ProcessChild, 'exitCode' | 'signalCode' | 'once' | 'off'>,
+	child: Pick<ProcessChildInterface, 'exitCode' | 'signalCode' | 'once' | 'off'>,
 	timeout: number,
 ): Promise<void> {
 	if (isExited(child)) return Promise.resolve()
@@ -719,7 +719,7 @@ export function waitForExit(
  * ```
  */
 export function waitForClose(
-	child: Pick<ProcessChild, 'once' | 'off'>,
+	child: Pick<ProcessChildInterface, 'once' | 'off'>,
 	timeout: number,
 ): Promise<boolean> {
 	const closed = Promise.withResolvers<void>()
@@ -758,7 +758,7 @@ export function waitForClose(
  * ```
  */
 export async function stopChild(
-	child: ProcessChild,
+	child: ProcessChildInterface,
 	grace: number,
 	confirm: number,
 ): Promise<boolean> {
