@@ -6,9 +6,9 @@ import type {
 	SessionInterface,
 	SessionOptions,
 } from '@src/core'
-import { Process } from './Process.js'
-import { ProcessManager } from './ProcessManager.js'
-import { Session } from './Session.js'
+import { Process } from './processes/Process.js'
+import { ProcessManager } from './processes/ProcessManager.js'
+import { Session } from './processes/Session.js'
 
 /**
  * Creates one supervised child process.

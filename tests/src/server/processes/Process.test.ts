@@ -7,7 +7,7 @@ import { collect, createRecorder, waitForCondition, waitForDelay } from '@orkest
 import { createScratch, destroyScratch, isRunning } from '@orkestrel/test/server'
 import { isProcessError, PROCESS_TIMER, ProcessError } from '@src/core'
 import { createProcess } from '@src/server'
-import { childCommand, resolveChildFixture } from '../../setupServer.js'
+import { childCommand, resolveChildFixture } from '../../../setupServer.js'
 
 describe('Process', () => {
 	it('drains output with no line consumer and still resolves exit', async () => {
@@ -743,33 +743,43 @@ describe('Process', () => {
 		expect(child.signal).toBeNull()
 	})
 
-	it('reports the terminal pair while a descendant holds the stdio and exit stays pending', async () => {
-		const child = createProcess({
-			command: childCommand('orphan'),
-			workspace: process.cwd(),
-			grace: 20,
-		})
-		const iterator = child.lines[Symbol.asyncIterator]()
-		const first = await iterator.next()
-		const second = await iterator.next()
-		const held = Number.parseInt(String(first.value).replace('grandchild:', ''), 10)
+	// The case outlives the condition budget below it, so a condition that never holds reports its
+	// own description rather than this case's timeout.
+	it(
+		'reports the terminal pair while a descendant holds the stdio and exit stays pending',
+		{ timeout: 20_000 },
+		async () => {
+			const child = createProcess({
+				command: childCommand('orphan'),
+				workspace: process.cwd(),
+				grace: 20,
+			})
+			const iterator = child.lines[Symbol.asyncIterator]()
+			const first = await iterator.next()
+			const second = await iterator.next()
+			const held = Number.parseInt(String(first.value).replace('grandchild:', ''), 10)
 
-		try {
-			expect(second.value).toBe('exiting')
-			await waitForDelay(250)
-			const settlement = await Promise.race([
-				child.exit.then(() => 'closed'),
-				waitForDelay(150).then(() => 'held'),
-			])
+			try {
+				expect(second.value).toBe('exiting')
+				await waitForCondition(
+					'the orphan root records its own native exit',
+					() => child.code !== null,
+					{ budget: 10_000 },
+				)
+				const settlement = await Promise.race([
+					child.exit.then(() => 'closed'),
+					waitForDelay(150).then(() => 'held'),
+				])
 
-			expect(settlement).toBe('held')
-			expect(child.code).toBe(0)
-			expect(child.signal).toBeNull()
-		} finally {
-			holds(() => process.kill(held, 'SIGKILL'))
-			await child.destroy()
-		}
-	})
+				expect(settlement).toBe('held')
+				expect(child.code).toBe(0)
+				expect(child.signal).toBeNull()
+			} finally {
+				holds(() => process.kill(held, 'SIGKILL'))
+				await child.destroy()
+			}
+		},
+	)
 
 	it('emits no error event when the child exits cleanly', async () => {
 		const errors = createRecorder<readonly [unknown]>()

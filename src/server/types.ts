@@ -39,6 +39,12 @@ export interface ProcessChildInterface {
 	 *
 	 * @param signal - The signal to deliver
 	 * @returns True if the host accepted the signal; false otherwise
+	 *
+	 * @example
+	 * ```ts
+	 * const accepted = child.kill('SIGTERM')
+	 * accepted // true
+	 * ```
 	 */
 	kill(signal: NodeJS.Signals): boolean
 	/**
@@ -47,6 +53,12 @@ export interface ProcessChildInterface {
 	 * @param event - The `exit` or `close` event name
 	 * @param listener - The listener invoked after the selected event
 	 * @returns Whatever the emitter returns, which the helpers ignore
+	 *
+	 * @example
+	 * ```ts
+	 * const settle = (): void => undefined
+	 * child.once('exit', settle)
+	 * ```
 	 */
 	once(event: 'exit' | 'close', listener: () => void): unknown
 	/**
@@ -59,6 +71,13 @@ export interface ProcessChildInterface {
 	 * @param event - The `exit` or `close` event name
 	 * @param listener - The listener registered through `once`
 	 * @returns Whatever the emitter returns, which the helpers ignore
+	 *
+	 * @example
+	 * ```ts
+	 * const settle = (): void => undefined
+	 * child.once('exit', settle)
+	 * child.off('exit', settle)
+	 * ```
 	 */
 	off(event: 'exit' | 'close', listener: () => void): unknown
 }
@@ -72,14 +91,14 @@ export interface ProcessChildInterface {
  * already has somewhere to go. `chunk` receives each decoded standard-error fragment, `fault` the
  * host error that ended the run, `close` the moment the read channels closed, `terminal` the frozen
  * exit state, and `teardown` the release of whatever the face still holds. `relieve` is optional
- * because only a face carrying a standard-input channel reports backpressure relief.
+ * because a face that never pauses the child's output holds no backpressure to release.
  */
 export interface SupervisorFace {
 	/** Receives one decoded standard-error fragment. */
 	readonly chunk: (text: string) => void
 	/** Receives the host error that ended the run. */
 	readonly fault: (cause: unknown) => void
-	/** Reports that a pending standard-input write can proceed, for a face carrying a channel. */
+	/** Reports that a termination began, so a face holding output backpressure releases it. */
 	readonly relieve?: () => void
 	/** Reports that the child's read channels closed. */
 	readonly close: () => void

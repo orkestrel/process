@@ -7,7 +7,7 @@ import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import { isProcessError, ProcessError } from '@src/core'
 import { createSession } from '@src/server'
-import { childCommand } from '../../setupServer.js'
+import { childCommand } from '../../../setupServer.js'
 
 describe('Session bytes', () => {
 	// The payload is chosen so no text path can carry it: a NUL at each end of the run, an invalid
@@ -512,7 +512,10 @@ describe('Session endings', () => {
 			() => Buffer.concat(received).toString('utf8').includes('exiting\n'),
 			{ budget: 5_000 },
 		)
-		const announced = Buffer.concat(received).toString('utf8').split('\n')[0] ?? ''
+		const announced =
+			Buffer.concat(received)
+				.toString('utf8')
+				.split(/\r\n|\n/u)[0] ?? ''
 		const held = Number.parseInt(announced.replace('grandchild:', ''), 10)
 
 		try {

@@ -1,7 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { Readable } from 'node:stream'
 import type { ProcessExit, ProcessOptions } from '@src/core'
-import type { SupervisorFace } from './types.js'
+import type { SupervisorFace } from '../types.js'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
@@ -12,7 +12,7 @@ import {
 	PROCESS_EVIDENCE,
 	PROCESS_GRACE,
 } from '@src/core'
-import { snapshotCommand } from './cloners.js'
+import { snapshotCommand } from '../cloners.js'
 import {
 	buildSpawn,
 	mergeEnvironment,
@@ -23,7 +23,7 @@ import {
 	validateTimer,
 	validateWorkspace,
 	waitForClose,
-} from './helpers.js'
+} from '../helpers.js'
 
 /**
  * Supervises one child process and reports each lifecycle moment to the face composing it.
@@ -53,6 +53,25 @@ import {
  * termination completes. `relieve` is optional because a face that never pauses the child's output
  * holds no backpressure to release, and a face with nothing to do there would otherwise declare an
  * empty method to say so.
+ *
+ * @example
+ * ```ts
+ * import { Supervisor } from '@orkestrel/process/server'
+ *
+ * const engine = new Supervisor(
+ * 	{ command: { file: 'node', arguments: ['--version'] }, workspace: process.cwd() },
+ * 	{
+ * 		chunk: () => undefined,
+ * 		fault: () => undefined,
+ * 		close: () => undefined,
+ * 		terminal: () => undefined,
+ * 		teardown: () => undefined,
+ * 	},
+ * )
+ * const exit = await engine.exit
+ * exit.code // 0
+ * await engine.destroy()
+ * ```
  */
 export class Supervisor {
 	readonly #chunk: (text: string) => void
@@ -231,6 +250,29 @@ export class Supervisor {
 	 *
 	 * @param bytes - The payload to write, already framed by the caller
 	 * @returns True if the host accepted the bytes without reporting a fault; false otherwise (the channel was closed, destroyed, ended, failed, or the write remained unconfirmed through `delivery`)
+	 *
+	 * @example
+	 * ```ts
+	 * import { Supervisor } from '@orkestrel/process/server'
+	 *
+	 * const engine = new Supervisor(
+	 * 	{
+	 * 		command: { file: 'node', arguments: ['-e', 'process.stdin.pipe(process.stdout)'] },
+	 * 		workspace: process.cwd(),
+	 * 		writable: true,
+	 * 	},
+	 * 	{
+	 * 		chunk: () => undefined,
+	 * 		fault: () => undefined,
+	 * 		close: () => undefined,
+	 * 		terminal: () => undefined,
+	 * 		teardown: () => undefined,
+	 * 	},
+	 * )
+	 * const accepted = await engine.deliver(new TextEncoder().encode('ping\n'))
+	 * accepted // true
+	 * await engine.destroy()
+	 * ```
 	 */
 	deliver(bytes: Uint8Array): Promise<boolean> {
 		const stdin = this.#child.stdin

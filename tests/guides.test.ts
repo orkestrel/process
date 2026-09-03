@@ -69,6 +69,7 @@ import {
 	executeSync,
 	snapshotCommand,
 	stopChild,
+	Supervisor,
 	trimHead,
 	trimTail,
 	validateBytes,
@@ -107,6 +108,7 @@ const REFUSALS: Readonly<
 			'ProcessChildInterface',
 			'ProcessManager',
 			'Session',
+			'Supervisor',
 			'SupervisorFace',
 			'buildExecutableCandidates',
 			'buildExecuteResult',
@@ -192,13 +194,11 @@ const REFUSALS: Readonly<
  * module declares each one.
  *
  * Naming one here is what makes it intentional rather than forgotten, and the assertions over this
- * table fail when a name here stops being stranded, so the table cannot rot. `Supervisor` is the
- * supervision engine each published face composes: its constructor takes the composing face's own
- * callbacks, which no consumer holds, so a consumer cannot construct one.
+ * table fail when a name here stops being stranded, so the table cannot rot.
  */
 const INTERNALS: Readonly<Record<string, readonly string[]>> = Object.freeze({
 	'@orkestrel/process': Object.freeze([]),
-	'@orkestrel/process/server': Object.freeze(['class Supervisor']),
+	'@orkestrel/process/server': Object.freeze([]),
 })
 /** Every deliberately stranded declaration, read as one scope the way a guide's source is. */
 const INTERNAL: readonly string[] = Object.freeze(Object.values(INTERNALS).flat())
@@ -841,7 +841,11 @@ describe('flagship fences', () => {
 			{ budget: 5_000 },
 		)
 		const held = Number.parseInt(
-			(Buffer.concat(received).toString('utf8').split('\n')[0] ?? '').replace('held:', ''),
+			(
+				Buffer.concat(received)
+					.toString('utf8')
+					.split(/\r\n|\n/u)[0] ?? ''
+			).replace('held:', ''),
 			10,
 		)
 
@@ -1288,6 +1292,47 @@ describe('unfenced TSDoc examples', () => {
 			expect(row.value).toStrictEqual(row.claim)
 		})
 	}
+
+	// `Supervisor`'s class block and its `deliver` member block each spawn a real child and await a
+	// promise, so each is its own asynchronous case instead of a row in the table, which holds
+	// synchronous leaves. Change either block, change the case beside it.
+	it("returns what Supervisor's example claims", async () => {
+		const engine = new Supervisor(
+			{ command: { file: 'node', arguments: ['--version'] }, workspace: process.cwd() },
+			{
+				chunk: () => undefined,
+				fault: () => undefined,
+				close: () => undefined,
+				terminal: () => undefined,
+				teardown: () => undefined,
+			},
+		)
+
+		const exit = await engine.exit
+		expect(exit.code).toBe(0)
+		await engine.destroy()
+	})
+
+	it("returns what deliver's example claims", async () => {
+		const engine = new Supervisor(
+			{
+				command: { file: 'node', arguments: ['-e', 'process.stdin.pipe(process.stdout)'] },
+				workspace: process.cwd(),
+				writable: true,
+			},
+			{
+				chunk: () => undefined,
+				fault: () => undefined,
+				close: () => undefined,
+				terminal: () => undefined,
+				teardown: () => undefined,
+			},
+		)
+
+		const accepted = await engine.deliver(new TextEncoder().encode('ping\n'))
+		expect(accepted).toBe(true)
+		await engine.destroy()
+	})
 
 	// The example claims one value per host, so each host's claim is its own case. Off Windows
 	// `buildExecutableCandidates` returns an empty list, because command lookup belongs to the host's

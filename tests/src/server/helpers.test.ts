@@ -1,9 +1,9 @@
+import type { ProcessChildInterface } from '@src/server'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ProcessChildInterface } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { holds } from '@orkestrel/contract'
 import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
@@ -604,8 +604,12 @@ describe('stopChild', () => {
 	// reading `process.platform`, so no POSIX host reaches the branch under test. The fixture also
 	// detaches its descendant on `win32` alone, because a non-detached one there dies with its root
 	// and would prove nothing about the tree kill.
+	//
+	// The case outlives the condition budgets below it, so a condition that never holds reports its
+	// own description rather than this case's timeout.
 	it.skipIf(process.platform !== 'win32')(
 		'reaches a detached descendant while the root is alive and leaves one whose root already exited',
+		{ timeout: 40_000 },
 		async () => {
 			const rooted = spawn(process.execPath, [resolveChildFixture(), 'tree'], {
 				stdio: ['ignore', 'pipe', 'ignore'],
@@ -632,8 +636,8 @@ describe('stopChild', () => {
 					() => rootedOutput.includes('\n') && orphanedOutput.includes('\n'),
 					{ budget: 10_000 },
 				)
-				const [rootedLine = ''] = rootedOutput.split('\n')
-				const [orphanedLine = ''] = orphanedOutput.split('\n')
+				const [rootedLine = ''] = rootedOutput.split(/\r\n|\n/u)
+				const [orphanedLine = ''] = orphanedOutput.split(/\r\n|\n/u)
 				held = Number.parseInt(rootedLine.replace('grandchild:', ''), 10)
 				abandoned = Number.parseInt(orphanedLine.replace('grandchild:', ''), 10)
 				await waitForCondition(
@@ -1288,8 +1292,8 @@ describe('executeSync', () => {
 				})
 				expect(blocking.expired).toBe(true)
 
-				// The claim is about an ESTABLISHED descendant. The root's 50 ms deadline is shorter than
-				// Node's own bootstrap on some hosts, so waiting a fixed interval measures whether the
+				// The claim is about an ESTABLISHED descendant. The root's deadline can be shorter than
+				// Node's own bootstrap on a loaded host, so waiting a fixed interval measures whether the
 				// grandchild finished starting rather than whether termination reached it. Waiting for the
 				// fixture's readiness line removes that race: measured without it, three of six trials
 				// never wrote at all.
@@ -1327,7 +1331,7 @@ describe('executeSync', () => {
 				// deadline fired. The deadline has to outlast that spawn, and asserting the publication is
 				// what keeps a host too slow to reach it failing here rather than passing below for a
 				// descendant that never existed.
-				const [line = ''] = streamed.stdout.split('\n')
+				const [line = ''] = streamed.stdout.split(/\r\n|\n/u)
 				held = Number.parseInt(line.replace('grandchild:', ''), 10)
 				expect(Number.isInteger(held)).toBe(true)
 
@@ -1682,7 +1686,9 @@ describe('detach', () => {
 		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('invalid')
 	})
 
-	it('spawns the detached child in the workspace it validated', async () => {
+	// The case outlives the condition budget below it, so a condition that never holds reports its
+	// own description rather than this case's timeout.
+	it('spawns the detached child in the workspace it validated', { timeout: 20_000 }, async () => {
 		const validated = createScratch()
 		const later = createScratch()
 		let reads = 0
@@ -1694,7 +1700,11 @@ describe('detach', () => {
 					return reads === 1 ? validated.path : later.path
 				},
 			})
-			await waitForDelay(200)
+			await waitForCondition(
+				'the detached child writes its marker in the validated workspace',
+				() => existsSync(join(validated.path, 'detached.txt')),
+				{ budget: 10_000 },
+			)
 
 			expect(existsSync(join(validated.path, 'detached.txt'))).toBe(true)
 			expect(existsSync(join(later.path, 'detached.txt'))).toBe(false)

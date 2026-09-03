@@ -5,13 +5,17 @@ child: stdout is framed into lines under a bounded backlog, stderr is forwarded
 live and kept as a byte-bounded tail, stdin is a writable channel, and
 termination is bounded and reports whether the real exit arrived — `SIGTERM` then
 `SIGKILL` after a grace window on a POSIX host, a whole-tree kill on Windows.
+`Session` supervises the same child as raw bytes instead: one owned
+`Uint8Array` per stdout chunk, an `end` that closes stdin without terminating
+anything, and the child's own `ending` beside the terminal `exit`.
 `execute` and `executeSync` buffer a child to completion and settle with an
 `ExecuteResult` carrying the captured output, the exit, and `failed` /
 `expired` / `aborted` / `truncated`, rejecting with a `ProcessError` by default
 or resolving the result when you pass `strict: false`. `ProcessManager` is a
 keyed registry of live children: `launch` spawns and registers by id, a settled
 child evicts itself with no polling, and `stop` terminates one id, a list, or
-every child. `Process` and `ProcessManager` expose typed `emitter` properties.
+every child. `Process`, `Session`, and `ProcessManager` expose typed `emitter`
+properties.
 `Process`, `launch`, and `execute` take an `AbortSignal` that terminates the
 child; `executeSync` and `detach` take none. No spawn uses a shell, so a
 metacharacter in an argument is data rather than syntax. The contracts are
@@ -57,18 +61,20 @@ await child.destroy()
 
 ## Guide
 
-For the full surface — the supervised `Process`, the `execute` / `executeSync` /
-`detach` spawns, the keyed `ProcessManager`, the observable `emitter`, the
-`ProcessError` failure type, and the lower-level helpers — see
+For the full surface — the supervised `Process`, the byte-oriented `Session`,
+the `Supervisor` engine a consumer composes its own face over, the
+`execute` / `executeSync` / `detach` spawns, the keyed `ProcessManager`, the
+observable `emitter`, the `ProcessError` failure type, and the lower-level
+helpers — see
 [`guides/process.md`](guides/process.md).
 
 ## Package
 
 Typed entry points per the `exports` field in `package.json`: the
 host-independent contracts, constants, errors, and `isProcessError` guard from
-`@orkestrel/process`, and the Node engine — `Process`, `execute`, `executeSync`,
-`detach`, `ProcessManager`, and their factories and helpers — from
-`@orkestrel/process/server`.
+`@orkestrel/process`, and the Node engine — `Process`, `Session`, `Supervisor`,
+`execute`, `executeSync`, `detach`, `ProcessManager`, `createSession`, and their
+sibling factories and helpers — from `@orkestrel/process/server`.
 
 ## License
 

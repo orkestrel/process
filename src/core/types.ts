@@ -43,7 +43,7 @@ export interface ProcessCommand {
 	readonly arguments: readonly string[]
 	readonly environment?: Readonly<Record<string, string | undefined>>
 	readonly input?: string
-	/** If `true`, exclude the parent environment; on POSIX this leaves no `PATH`, while Windows libuv still injects a host set. */
+	/** If `true`, exclude the parent environment; if `false` or omitted, the overrides layer over it. On POSIX `true` leaves no `PATH`, while Windows libuv still injects a host set. */
 	readonly isolated?: boolean
 }
 

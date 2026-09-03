@@ -7,7 +7,7 @@ import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch, isRunning } from '@orkestrel/test/server'
 import { isProcessError, ProcessError } from '@src/core'
 import { createProcessManager } from '@src/server'
-import { childCommand } from '../../setupServer.js'
+import { childCommand } from '../../../setupServer.js'
 
 describe('ProcessManager', () => {
 	it('registers children by id, in launch order, and reports the live count', async () => {
