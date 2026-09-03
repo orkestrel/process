@@ -1296,7 +1296,9 @@ describe('unfenced TSDoc examples', () => {
 	// `Supervisor`'s class block and its `deliver` member block each spawn a real child and await a
 	// promise, so each is its own asynchronous case instead of a row in the table, which holds
 	// synchronous leaves. Change either block, change the case beside it.
-	it("returns what Supervisor's example claims", async () => {
+	// The case outlives the condition budget below it, so a condition that never holds reports its
+	// own description rather than this case's timeout.
+	it("returns what Supervisor's example claims", { timeout: 20_000 }, async () => {
 		const engine = new Supervisor(
 			{ command: { file: 'node', arguments: ['--version'] }, workspace: process.cwd() },
 			{
@@ -1313,7 +1315,9 @@ describe('unfenced TSDoc examples', () => {
 		await engine.destroy()
 	})
 
-	it("returns what deliver's example claims", async () => {
+	// The case outlives the condition budget below it, so a condition that never holds reports its
+	// own description rather than this case's timeout.
+	it("returns what deliver's example claims", { timeout: 20_000 }, async () => {
 		const engine = new Supervisor(
 			{
 				command: { file: 'node', arguments: ['-e', 'process.stdin.pipe(process.stdout)'] },

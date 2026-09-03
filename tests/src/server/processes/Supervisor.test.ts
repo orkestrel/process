@@ -28,21 +28,25 @@ describe('Supervisor moments', () => {
 			},
 		)
 
-		const exit = await engine.exit
-		const beforeTeardown = moments.calls.map((call) => call[0])
-		await engine.destroy()
-		const order = moments.calls.map((call) => call[0])
+		try {
+			const exit = await engine.exit
+			const beforeTeardown = moments.calls.map((call) => call[0])
+			await engine.destroy()
+			const order = moments.calls.map((call) => call[0])
 
-		// The face's read pipeline ends, then the frozen state arrives, and only a `destroy` releases
-		// the face. A teardown that ran first would leave a consumer's own surface gone while the
-		// terminal value it describes was still being delivered.
-		expect(beforeTeardown).not.toContain('teardown')
-		expect(order.indexOf('close')).toBeLessThan(order.indexOf('terminal'))
-		expect(order.indexOf('terminal')).toBeLessThan(order.indexOf('teardown'))
-		expect(order.filter((moment) => moment === 'terminal')).toEqual(['terminal'])
-		expect(order.filter((moment) => moment === 'teardown')).toEqual(['teardown'])
-		expect(exits.calls.map((call) => call[0])).toEqual([exit])
-		expect(exit).toEqual({ code: 0, signal: null, drained: true })
+			// The face's read pipeline ends, then the frozen state arrives, and only a `destroy` releases
+			// the face. A teardown that ran first would leave a consumer's own surface gone while the
+			// terminal value it describes was still being delivered.
+			expect(beforeTeardown).not.toContain('teardown')
+			expect(order.indexOf('close')).toBeLessThan(order.indexOf('terminal'))
+			expect(order.indexOf('terminal')).toBeLessThan(order.indexOf('teardown'))
+			expect(order.filter((moment) => moment === 'terminal')).toEqual(['terminal'])
+			expect(order.filter((moment) => moment === 'teardown')).toEqual(['teardown'])
+			expect(exits.calls.map((call) => call[0])).toEqual([exit])
+			expect(exit).toEqual({ code: 0, signal: null, drained: true })
+		} finally {
+			await engine.destroy()
+		}
 	})
 
 	// A paused stdout holds the child's own write, and therefore its exit. `relieve` is the moment
@@ -68,28 +72,32 @@ describe('Supervisor moments', () => {
 				},
 			)
 
-			// No consumer is attached, so the host stream stays paused and buffers: the face is holding
-			// this child's backpressure for real.
-			await waitForCondition(
-				'the flood child fills the read end no consumer is draining',
-				() => engine.stdout.readableLength > 0,
-				{ budget: 10_000 },
-			)
+			try {
+				// No consumer is attached, so the host stream stays paused and buffers: the face is holding
+				// this child's backpressure for real.
+				await waitForCondition(
+					'the flood child fills the read end no consumer is draining',
+					() => engine.stdout.readableLength > 0,
+					{ budget: 10_000 },
+				)
 
-			const termination = engine.stop()
-			const relieved = moments.calls.map((call) => call[0]).includes('relieve')
-			const settledAtRelease = engine.settled
-			engine.stdout.resume()
-			await termination
-			await engine.exit
-			await engine.destroy()
-			const order = moments.calls.map((call) => call[0])
+				const termination = engine.stop()
+				const relieved = moments.calls.map((call) => call[0]).includes('relieve')
+				const settledAtRelease = engine.settled
+				engine.stdout.resume()
+				await termination
+				await engine.exit
+				await engine.destroy()
+				const order = moments.calls.map((call) => call[0])
 
-			expect(relieved).toBe(true)
-			expect(settledAtRelease).toBe(false)
-			expect(engine.stopping).toBe(true)
-			expect(order.filter((moment) => moment === 'relieve')).toEqual(['relieve'])
-			expect(order.indexOf('relieve')).toBeLessThan(order.indexOf('terminal'))
+				expect(relieved).toBe(true)
+				expect(settledAtRelease).toBe(false)
+				expect(engine.stopping).toBe(true)
+				expect(order.filter((moment) => moment === 'relieve')).toEqual(['relieve'])
+				expect(order.indexOf('relieve')).toBeLessThan(order.indexOf('terminal'))
+			} finally {
+				await engine.destroy()
+			}
 		},
 	)
 
@@ -117,15 +125,17 @@ describe('Supervisor moments', () => {
 			engine.stdout.on('data', (chunk: Buffer) => {
 				received.push(chunk.toString('utf8'))
 			})
-			await waitForCondition(
-				'the orphan root announces the descendant holding its read ends',
-				() => received.join('').includes('\n'),
-				{ budget: 10_000 },
-			)
-			const [line = ''] = received.join('').split(/\r\n|\n/u)
-			const held = Number.parseInt(line.replace('grandchild:', ''), 10)
 
+			let held: number | undefined
 			try {
+				await waitForCondition(
+					'the orphan root announces the descendant holding its read ends',
+					() => received.join('').includes('\n'),
+					{ budget: 10_000 },
+				)
+				const [line = ''] = received.join('').split(/\r\n|\n/u)
+				held = Number.parseInt(line.replace('grandchild:', ''), 10)
+
 				await engine.ending
 				const settlement = await Promise.race([
 					engine.exit.then(() => 'settled'),
@@ -140,7 +150,8 @@ describe('Supervisor moments', () => {
 				expect((await engine.exit).drained).toBe(false)
 				expect(moments.calls.map((call) => call[0])).not.toContain('fault')
 			} finally {
-				holds(() => process.kill(held, 'SIGKILL'))
+				const pid = held
+				if (pid !== undefined) holds(() => process.kill(pid, 'SIGKILL'))
 				await engine.destroy()
 			}
 		},
@@ -166,17 +177,21 @@ describe('Supervisor channel', () => {
 			},
 		)
 
-		const accepted = await engine.deliver(Buffer.from('before\n', 'utf8'))
-		const termination = engine.stop()
-		const refused = await engine.deliver(Buffer.from('after\n', 'utf8'))
-		await termination
-		await engine.destroy()
+		try {
+			const accepted = await engine.deliver(Buffer.from('before\n', 'utf8'))
+			const termination = engine.stop()
+			const refused = await engine.deliver(Buffer.from('after\n', 'utf8'))
+			await termination
+			await engine.destroy()
 
-		// Teardown discards the channel, so a write accepted after a stop began would claim a
-		// delivery the package is about to throw away.
-		expect(accepted).toBe(true)
-		expect(refused).toBe(false)
-		expect(moments.calls.map((call) => call[0])).not.toContain('fault')
+			// Teardown discards the channel, so a write accepted after a stop began would claim a
+			// delivery the package is about to throw away.
+			expect(accepted).toBe(true)
+			expect(refused).toBe(false)
+			expect(moments.calls.map((call) => call[0])).not.toContain('fault')
+		} finally {
+			await engine.destroy()
+		}
 	})
 
 	it('shares one barrier across every close of the input channel', async () => {
@@ -197,18 +212,22 @@ describe('Supervisor channel', () => {
 			},
 		)
 
-		const first = engine.end()
-		const second = engine.end()
-		await first
-		const refused = await engine.deliver(Buffer.from('after\n', 'utf8'))
-		const exit = await engine.exit
-		await engine.destroy()
+		try {
+			const first = engine.end()
+			const second = engine.end()
+			await first
+			const refused = await engine.deliver(Buffer.from('after\n', 'utf8'))
+			const exit = await engine.exit
+			await engine.destroy()
 
-		// The child ends itself because its input ended, so the closure terminated nothing: no signal
-		// was sent and the exit is the child's own.
-		expect(first).toBe(second)
-		expect(refused).toBe(false)
-		expect(exit).toEqual({ code: 0, signal: null, drained: true })
-		expect(moments.calls.map((call) => call[0])).not.toContain('fault')
+			// The child ends itself because its input ended, so the closure terminated nothing: no signal
+			// was sent and the exit is the child's own.
+			expect(first).toBe(second)
+			expect(refused).toBe(false)
+			expect(exit).toEqual({ code: 0, signal: null, drained: true })
+			expect(moments.calls.map((call) => call[0])).not.toContain('fault')
+		} finally {
+			await engine.destroy()
+		}
 	})
 })

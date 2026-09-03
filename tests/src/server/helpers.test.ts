@@ -609,7 +609,7 @@ describe('stopChild', () => {
 	// own description rather than this case's timeout.
 	it.skipIf(process.platform !== 'win32')(
 		'reaches a detached descendant while the root is alive and leaves one whose root already exited',
-		{ timeout: 40_000 },
+		{ timeout: 60_000 },
 		async () => {
 			const rooted = spawn(process.execPath, [resolveChildFixture(), 'tree'], {
 				stdio: ['ignore', 'pipe', 'ignore'],

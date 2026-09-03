@@ -592,6 +592,7 @@ describe('Process', () => {
 			expect(aloneExit.drained).toBe(true)
 		} finally {
 			holds(() => process.kill(held, 'SIGKILL'))
+			await child.destroy()
 		}
 	})
 
@@ -618,6 +619,7 @@ describe('Process', () => {
 				expect(holds(() => process.kill(held, 0))).toBe(false)
 			} finally {
 				holds(() => process.kill(held, 'SIGKILL'))
+				await child.destroy()
 			}
 		},
 	)
@@ -648,6 +650,7 @@ describe('Process', () => {
 				expect(settlement).toBe('closed')
 			} finally {
 				holds(() => process.kill(held, 'SIGKILL'))
+				await child.destroy()
 			}
 		},
 	)
@@ -901,6 +904,7 @@ describe('Process', () => {
 			expect((await child.exit).drained).toBe(false)
 		} finally {
 			holds(() => process.kill(held, 'SIGKILL'))
+			await child.destroy()
 			await destroyScratch(scratch)
 		}
 	})
@@ -963,6 +967,7 @@ describe('Process', () => {
 			expect(Buffer.from(floodLive).subarray(-24).toString('utf8')).toBe(flooded.evidence)
 		} finally {
 			holds(() => process.kill(held, 'SIGKILL'))
+			await child.destroy()
 			await destroyScratch(scratch)
 		}
 	})
@@ -1012,6 +1017,7 @@ describe('Process', () => {
 		} finally {
 			holds(() => process.kill(held, 'SIGKILL'))
 			holds(() => process.kill(controlHeld, 'SIGKILL'))
+			await child.destroy()
 			await control.destroy()
 		}
 	})
@@ -1048,6 +1054,7 @@ describe('Process', () => {
 			expect(naturalExit).toEqual({ code: 0, signal: null, drained: true })
 		} finally {
 			holds(() => process.kill(held, 'SIGKILL'))
+			await child.destroy()
 		}
 	})
 
