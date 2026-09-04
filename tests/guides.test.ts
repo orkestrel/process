@@ -415,7 +415,7 @@ for (const entry of manifest) {
 				.map((fence) => fence.code)
 			const names = guide
 				.surface()
-				.filter((symbol) => symbol.kind === 'function')
+				.filter((symbol) => symbol.keyword === 'function')
 				.map((symbol) => symbol.name)
 			expect(names.length).toBeGreaterThan(0)
 			expect(findUnexampled(names, fences, source.examples())).toEqual([])
