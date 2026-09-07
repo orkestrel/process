@@ -110,7 +110,7 @@ describe('Supervisor moments', () => {
 			const moments = createRecorder<readonly [string]>()
 			const received: string[] = []
 			// The drain window is left at its default, so the pendency race below reads the same
-			// margin the sibling comparator in `Process.test.ts` reads. An override sized just past
+			// margin the sibling comparator in `Process.test.ts` reads. An override sized past
 			// the race turns a contended run into a red gate reporting a timeout.
 			const engine = new Supervisor(
 				{ command: childCommand('orphan'), workspace: process.cwd(), grace: 20 },
