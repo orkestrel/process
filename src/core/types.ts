@@ -775,7 +775,8 @@ export interface ProcessManagerInterface {
 	 */
 	launch(id: string, options: ProcessOptions): ProcessInterface
 	/**
-	 * Terminates the named children and awaits their exit.
+	 * Terminates the named children, or every live child when a call names none, and awaits their
+	 * exit.
 	 *
 	 * @param ids - The registry keys to stop
 	 * @returns True if every named child was live and its exit was confirmed; false otherwise

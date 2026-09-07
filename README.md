@@ -1,26 +1,15 @@
 # @orkestrel/process
 
-A typed **child-process toolkit** in tiers. `Process` supervises one
-child: stdout is framed into lines under a bounded backlog, stderr is forwarded
-live and kept as a byte-bounded tail, stdin is a writable channel, and
-termination is bounded and reports whether the real exit arrived — `SIGTERM` then
-`SIGKILL` after a grace window on a POSIX host, a whole-tree kill on Windows.
-`Session` supervises the same child as raw bytes instead: one owned
-`Uint8Array` per stdout chunk, an `end` that closes stdin without terminating
-anything, and the child's own `ending` beside the terminal `exit`.
-`execute` and `executeSync` buffer a child to completion and settle with an
-`ExecuteResult` carrying the captured output, the exit, and `failed` /
-`expired` / `aborted` / `truncated`, rejecting with a `ProcessError` by default
-or resolving the result when you pass `strict: false`. `ProcessManager` is a
-keyed registry of live children: `launch` spawns and registers by id, a settled
-child evicts itself with no polling, and `stop` terminates one id, a list, or
-every child. `Process`, `Session`, and `ProcessManager` expose typed `emitter`
-properties.
-`Process`, `launch`, and `execute` take an `AbortSignal` that terminates the
-child; `executeSync` and `detach` take none. No spawn uses a shell, so a
-metacharacter in an argument is data rather than syntax. The contracts are
-host-independent and ship from `@orkestrel/process`; the Node engine ships from
-`@orkestrel/process/server`. Part of the `@orkestrel` line.
+> A typed child-process toolkit in tiers: the supervised `Process` with framed stdout lines and a
+> writable stdin channel, the byte-oriented `Session`, the buffered `execute` and `executeSync`
+> runs, the fire-and-forget `detach`, and the keyed `ProcessManager` registry, none of them spawning
+> through a shell.
+
+Spawn a supervised child with the `createProcess` function, read the lines it frames, and call
+`stop()` to end it on a bounded window. Reach for `execute` where you want the captured output and
+the exit in one call, and for `ProcessManager` where you supervise several children by id. The
+contracts ship from `@orkestrel/process` and the Node engine from `@orkestrel/process/server`. Part
+of the `@orkestrel` line.
 
 ## Install
 

@@ -77,7 +77,7 @@ export function isProcessError(value: unknown): value is ProcessError {
 }
 
 /**
- * Creates the failure raised when a manager launch reuses a live id.
+ * Creates the `duplicate`-coded failure raised when a manager launch reuses a live id.
  *
  * @param id - The id already occupied by a live child
  * @returns A typed duplicate-id failure
@@ -90,7 +90,8 @@ export function createDuplicateError(id: string): ProcessError {
 }
 
 /**
- * Creates the failure raised when a launch is attempted on a registry that is being destroyed.
+ * Creates the `protocol`-coded failure raised when a launch is attempted on a registry that is
+ * being destroyed.
  *
  * @param id - The id the refused launch asked for
  * @returns A typed protocol failure
@@ -103,7 +104,8 @@ export function createProtocolError(id: string): ProcessError {
 }
 
 /**
- * Creates the failure raised when a public input is refused before anything is spawned.
+ * Creates the `invalid`-coded failure raised when a public input is refused before anything is
+ * spawned.
  *
  * @param subject - The rejected input named as the caller wrote it, such as `option 'grace'`
  * @param value - The rejected value, carried as `context.value`

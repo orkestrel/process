@@ -343,7 +343,8 @@ export function buildExecutableCandidates(
 }
 
 /**
- * Resolves a command file to the executable path the host would launch.
+ * Resolves a command file to the executable path the host would launch, or to `undefined` on a POSIX
+ * host, which performs its own lookup.
  *
  * @param file - The command executable name or path
  * @param options - The directory searched first and the child's effective environment

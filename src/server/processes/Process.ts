@@ -10,7 +10,8 @@ import { validateBytes, validateCommand, validateTimer, validateWorkspace } from
 import { Supervisor } from './Supervisor.js'
 
 /**
- * Supervises one child while keeping every observation channel aligned at termination.
+ * Supervises one child, frames its standard output into lines under a bounded backlog, and keeps
+ * every observation channel aligned at termination.
  *
  * @remarks
  * The child's ending and the supervision's ending are distinct. `pid`, `code`, and `signal` read
