@@ -1,12 +1,12 @@
-/** Names the default cooperative POSIX window in milliseconds between `SIGTERM` and `SIGKILL` during termination. */
+/** Names the default cooperative POSIX window, 5000 ms, between `SIGTERM` and `SIGKILL` during termination. */
 export const PROCESS_GRACE = 5_000
 
-/** Names the window in milliseconds a termination waits for the child's native exit after the final kill. */
+/** Names the window, 5000 ms, a termination waits for the child's native exit after the final kill. */
 export const PROCESS_CONFIRMATION = 5_000
 
 /**
- * Names the default window in milliseconds the package waits for the child's read ends to close after
- * the child's native exit or after a termination this package initiated, before cutting them off.
+ * Names the default window, 1000 ms, the package waits for the child's read ends to close after the
+ * child's native exit or after a termination this package initiated, before cutting them off.
  *
  * @remarks
  * Measured on Windows 11 with Node v24.18.1 on 2026-08-21, spawning the `tests/src/server/fixtures`
@@ -21,22 +21,25 @@ export const PROCESS_CONFIRMATION = 5_000
  */
 export const PROCESS_DRAIN = 1_000
 
-/** Names the default maximum retained stderr tail in bytes for a supervised {@link ProcessInterface}. */
+/** Names the default maximum retained stderr tail, 2048 bytes, for a supervised {@link ProcessInterface}. */
 export const PROCESS_EVIDENCE = 2_048
 
-/** Names the default soft high-water mark in bytes for a supervised {@link ProcessInterface} line backlog. */
+/** Names the default soft high-water mark, 10485760 bytes, for a supervised {@link ProcessInterface} line backlog. */
 export const PROCESS_BACKLOG = 10_485_760
 
-/** Names the default maximum captured bytes for a one-shot run's stdout and stderr, each. */
+/** Names the default maximum captured bytes, 10485760 each, for a one-shot run's stdout and stderr. */
 export const PROCESS_OUTPUT = 10_485_760
 
-/** Names the largest timer delay in milliseconds the host schedules without truncating it to one. */
+/** Names the largest timer delay, 2147483647 ms, the host schedules without truncating it to one. */
 export const PROCESS_TIMER = 2_147_483_647
 
-/** Lists the executable extensions a Windows lookup applies when the environment declares no `PATHEXT`. */
+/** Lists the executable extensions a Windows lookup applies when the environment declares no `PATHEXT`, `.COM;.EXE;.BAT;.CMD`. */
 export const PROCESS_PATHEXT = '.COM;.EXE;.BAT;.CMD'
 
-/** Lists the machine-readable failure categories a {@link ProcessError} carries, in declaration order. */
+/**
+ * Lists the machine-readable failure categories a {@link ProcessError} carries, in declaration order:
+ * `spawn`, `timeout`, `input`, `duplicate`, `protocol`, and `invalid`.
+ */
 export const PROCESS_ERROR_CODES = Object.freeze([
 	'spawn',
 	'timeout',

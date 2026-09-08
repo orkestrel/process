@@ -12,7 +12,8 @@ import { createDuplicateError, createProtocolError } from '@src/core'
 import { Process } from './Process.js'
 
 /**
- * Represents a keyed registry of live supervised child processes.
+ * Launches supervised children under caller-chosen ids, evicts each one as it settles, and destroys
+ * every live child on teardown.
  *
  * @remarks
  * A child launched under an id joins the registry and emits `launch`; when it settles it removes

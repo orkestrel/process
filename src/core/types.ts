@@ -809,7 +809,10 @@ export interface ProcessManagerInterface {
 	destroy(): Promise<void>
 }
 
-/** Names the machine-readable {@link ProcessError} categories, derived from {@link PROCESS_ERROR_CODES}. */
+/**
+ * Names the machine-readable {@link ProcessError} categories, derived from {@link PROCESS_ERROR_CODES}:
+ * `spawn`, `timeout`, `input`, `duplicate`, `protocol`, and `invalid`.
+ */
 export type ProcessErrorCode = (typeof PROCESS_ERROR_CODES)[number]
 
 /** Represents structured context carried by a {@link ProcessError}. */

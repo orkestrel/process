@@ -10,12 +10,13 @@
 observation channel at one terminal moment through a bounded termination. `Session` publishes one
 owned `Uint8Array` per stdout chunk instead, with an `end` that closes stdin without terminating
 anything and the child's own `ending` beside the terminal `exit`. A buffered run settles with an
-`ExecuteResult` carrying the captured output and the exit, while `detach` returns without waiting
-for anything. `ProcessManager` launches and stops its children by id and reports each moment through
-its own emitter. An argument a batch target could corrupt is refused rather than passed, so a
-metacharacter in an argument is data rather than syntax. The host-independent contracts, errors,
-constants, and types ship from `@orkestrel/process`, and the Node implementations and Node-side
-contracts from `@orkestrel/process/server`. Source: [`src/core`](../src/core) (the contracts) and
+`ExecuteResult` carrying the captured output and the exit, while a detached child owns no stdio and
+is unreferenced, so nothing in this process observes its outcome. `ProcessManager` launches and
+stops its children by id and reports each moment through its own emitter. An argument a batch
+target could corrupt is refused rather than passed, so a metacharacter in an argument is data
+rather than syntax. The host-independent contracts, errors, constants, and types ship from
+`@orkestrel/process`, and the Node implementations and Node-side contracts from
+`@orkestrel/process/server`. Source: [`src/core`](../src/core) (the contracts) and
 [`src/server`](../src/server) (the Node engine).
 
 ## Surface
@@ -80,16 +81,18 @@ in a Surface row.
 | `Process`        | class | Supervises one child, frames its standard output into lines under a bounded backlog, and keeps every observation channel aligned at termination. |
 | `Session`        | class | Supervises one child and publishes its standard output as raw bytes.                                                                             |
 | `Supervisor`     | class | Supervises one child process and reports each lifecycle moment to the face composing it.                                                         |
-| `ProcessManager` | class | Represents a keyed registry of live supervised child processes.                                                                                  |
+| `ProcessManager` | class | Launches supervised children under caller-chosen ids, evicts each one as it settles, and destroys every live child on teardown.                  |
 | `ProcessError`   | class | Represents a child-process failure with a stable machine-readable category.                                                                      |
 
 ### Guards
 
 The total guard, from `@orkestrel/process`.
 
-| API              | Kind     | Summary                                              |
-| ---------------- | -------- | ---------------------------------------------------- |
-| `isProcessError` | function | Checks whether an unknown value is a `ProcessError`. |
+In a guard table a `Shape` cell holds the type the guard narrows to.
+
+| API              | Kind     | Shape          | Summary                                              |
+| ---------------- | -------- | -------------- | ---------------------------------------------------- |
+| `isProcessError` | function | `ProcessError` | Checks whether an unknown value is a `ProcessError`. |
 
 ### Error factories
 
@@ -165,17 +168,19 @@ The input refusals every public entry point runs before it spawns anything, from
 
 The defaults and host bounds, from `@orkestrel/process`.
 
-| API                    | Kind  | Value                   | Summary                                                                                                                                                                                             |
-| ---------------------- | ----- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PROCESS_GRACE`        | const | `5_000`                 | Names the default cooperative POSIX window in milliseconds between `SIGTERM` and `SIGKILL` during termination.                                                                                      |
-| `PROCESS_CONFIRMATION` | const | `5_000`                 | Names the window in milliseconds a termination waits for the child's native exit after the final kill.                                                                                              |
-| `PROCESS_DRAIN`        | const | `1_000`                 | Names the default window in milliseconds the package waits for the child's read ends to close after the child's native exit or after a termination this package initiated, before cutting them off. |
-| `PROCESS_EVIDENCE`     | const | `2_048`                 | Names the default maximum retained stderr tail in bytes for a supervised `ProcessInterface`.                                                                                                        |
-| `PROCESS_BACKLOG`      | const | `10_485_760`            | Names the default soft high-water mark in bytes for a supervised `ProcessInterface` line backlog.                                                                                                   |
-| `PROCESS_OUTPUT`       | const | `10_485_760`            | Names the default maximum captured bytes for a one-shot run's stdout and stderr, each.                                                                                                              |
-| `PROCESS_TIMER`        | const | `2_147_483_647`         | Names the largest timer delay in milliseconds the host schedules without truncating it to one.                                                                                                      |
-| `PROCESS_PATHEXT`      | const | `'.COM;.EXE;.BAT;.CMD'` | Lists the executable extensions a Windows lookup applies when the environment declares no `PATHEXT`.                                                                                                |
-| `PROCESS_ERROR_CODES`  | const | the code tuple          | Lists the machine-readable failure categories a `ProcessError` carries, in declaration order.                                                                                                       |
+A `Shape` cell holds the constant's declared type.
+
+| API                    | Kind  | Shape                         | Summary                                                                                                                                                                                       |
+| ---------------------- | ----- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PROCESS_GRACE`        | const | `number`                      | Names the default cooperative POSIX window, 5000 ms, between `SIGTERM` and `SIGKILL` during termination.                                                                                      |
+| `PROCESS_CONFIRMATION` | const | `number`                      | Names the window, 5000 ms, a termination waits for the child's native exit after the final kill.                                                                                              |
+| `PROCESS_DRAIN`        | const | `number`                      | Names the default window, 1000 ms, the package waits for the child's read ends to close after the child's native exit or after a termination this package initiated, before cutting them off. |
+| `PROCESS_EVIDENCE`     | const | `number`                      | Names the default maximum retained stderr tail, 2048 bytes, for a supervised `ProcessInterface`.                                                                                              |
+| `PROCESS_BACKLOG`      | const | `number`                      | Names the default soft high-water mark, 10485760 bytes, for a supervised `ProcessInterface` line backlog.                                                                                     |
+| `PROCESS_OUTPUT`       | const | `number`                      | Names the default maximum captured bytes, 10485760 each, for a one-shot run's stdout and stderr.                                                                                              |
+| `PROCESS_TIMER`        | const | `number`                      | Names the largest timer delay, 2147483647 ms, the host schedules without truncating it to one.                                                                                                |
+| `PROCESS_PATHEXT`      | const | `string`                      | Lists the executable extensions a Windows lookup applies when the environment declares no `PATHEXT`, `.COM;.EXE;.BAT;.CMD`.                                                                   |
+| `PROCESS_ERROR_CODES`  | const | `readonly ProcessErrorCode[]` | Lists the machine-readable failure categories a `ProcessError` carries, in declaration order: `spawn`, `timeout`, `input`, `duplicate`, `protocol`, and `invalid`.                            |
 
 ### Types
 
@@ -203,7 +208,7 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 | `ProcessManagerEventMap`  | type      | `{ launch, exit }`                                                                                             | Represents the push observation surface of a `ProcessManagerInterface` — the fleet-level moments a fire-and-forget observer subscribes to.                                   |
 | `ProcessManagerOptions`   | interface | `{ on?, error? }`                                                                                              | Configures a `ProcessManagerInterface`.                                                                                                                                      |
 | `ProcessManagerInterface` | interface | `{ emitter, count } plus process, processes, launch, stop, destroy`                                            | Represents a keyed registry of live supervised child processes.                                                                                                              |
-| `ProcessErrorCode`        | type      | `(typeof PROCESS_ERROR_CODES)[number]`                                                                         | Names the machine-readable `ProcessError` categories, derived from `PROCESS_ERROR_CODES`.                                                                                    |
+| `ProcessErrorCode`        | type      | `(typeof PROCESS_ERROR_CODES)[number]`                                                                         | Names the machine-readable `ProcessError` categories, derived from `PROCESS_ERROR_CODES`: `spawn`, `timeout`, `input`, `duplicate`, `protocol`, and `invalid`.               |
 | `ProcessErrorContext`     | interface | `{ id?, command?, code?, signal?, value? }`                                                                    | Represents structured context carried by a `ProcessError`.                                                                                                                   |
 | `ProcessErrorOptions`     | interface | `{ code, context?, cause?, result? }`                                                                          | Configures a `ProcessError`.                                                                                                                                                 |
 
@@ -354,7 +359,7 @@ this package initiated arms it too, so every ending reaches the bound. The cutof
 observation; it does not terminate the child.
 
 Every numeric option is validated at construction. A timer value outside `[0, PROCESS_TIMER]`, a
-negative or fractional byte value, and a `backlog` below `1` each throw a `ProcessError` coded
+negative or fractional byte value, and a `backlog` under `1` each throw a `ProcessError` coded
 `invalid` before anything is spawned, and so does a spawn-bound command string that is empty when
 required or carries a NUL character. `input` is standard-input payload and carries no NUL
 restriction.
@@ -515,7 +520,7 @@ await child.destroy()
 `PROCESS_DRAIN`. The TSDoc on that constant carries the measurement behind the value and the date it
 was taken.
 
-Two moments arm the bound. The child's native exit arms it, which is what carries a natural exit to
+The child's native exit arms the bound, which is what carries a natural exit to
 the terminal moment when a descendant holds the read ends open. The return of a termination this
 package initiated arms it too, confirmed or not, so a `stop` whose confirmation window elapsed while
 the child was still running reaches the cutoff with `code` and `signal` still `null`.
@@ -1028,8 +1033,9 @@ for the other.
 | Spawn fault     | Reports the host's negative errno in `code`.              | Reports `null` in `code`.                            |
 | Refusal         | Rejects before spawning, because it is an async function. | Throws before spawning.                              |
 
-Both share the rest: the same resolver and no implicit shell, the same environment merge, the same
-`input` override, the same `limit` bounding, and the same `strict` behavior.
+`execute` and `executeSync` share the rest: the same resolver and no implicit shell, the same
+environment merge, the same `input` override, the same `limit` bounding, and the same `strict`
+behavior.
 
 `execute` also bounds what follows termination. After a timeout or an abort ends the child,
 `stopChild` runs and the outcome is then awaited for one further `PROCESS_CONFIRMATION`, so a
@@ -1243,6 +1249,8 @@ child.emitter.on('exit', ({ code, signal }) => metrics.record('worker.exit', { c
 
 ### Collect output in one call
 
+The fence that follows runs one command to completion and reads its captured standard output.
+
 ```ts
 import { execute } from '@orkestrel/process/server'
 
@@ -1251,6 +1259,8 @@ const commit = stdout.trim()
 ```
 
 ### Stream a long-running child and cancel it
+
+The fence that follows reads a child line by line and lets an `AbortController` end it.
 
 ```ts
 import { createProcess } from '@orkestrel/process/server'
@@ -1273,6 +1283,8 @@ The abort reaches the terminal moment through the same bounded `stop`, so the lo
 and the `exit` promise is already settled when the loop returns.
 
 ### Close a byte session cooperatively
+
+The fence that follows ends the session's input, waits out a window of the caller's own, and terminates the child only when that window elapses.
 
 ```ts
 import { createSession } from '@orkestrel/process/server'
@@ -1299,6 +1311,8 @@ The window is yours rather than the package's. `grace` bounds the gap between `S
 neither one bounds how long you let a child finish work it was already doing.
 
 ### Supervise a fleet by id
+
+The fence that follows launches one child per task under its own id and tears the whole registry down at shutdown.
 
 ```ts
 import { createProcessManager } from '@orkestrel/process/server'
@@ -1509,8 +1523,8 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   the isolated environment, the `invalid` refusals, and `destroy`. The terminal moment carries its
   own rows: the frozen `evidence` tail read against a descendant that keeps writing, the `stderr`
   event and the tail stopping together, `lines` ending an in-flight read after its queued lines, the
-  `exit` promise settling at the cutoff when the streams never close, the `drain` bound driven below
-  and above a descendant release, `stop` alone reaching the moment with no `destroy` call, the
+  `exit` promise settling at the cutoff when the streams never close, the `drain` bound driven shorter
+  and longer than a descendant release, `stop` alone reaching the moment with no `destroy` call, the
   latched `stopping` refusing a `send`, the released abort listener, the spawn-fault path, and the
   `drain` refusals at each end of its range.
 - [`tests/src/server/processes/Session.test.ts`](../tests/src/server/processes/Session.test.ts) —

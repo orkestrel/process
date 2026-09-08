@@ -1,8 +1,6 @@
-// The guides-parity gate: @orkestrel/guide's checks run against this repository's own
-// `guides/README.md` manifest, and every flagship fence in `guides/process.md` is transcribed
-// here and asserted against what its comments claim. Name resolution is not a behavioural
-// proof, so a fence documenting a value the code contradicts is exactly what the transcriptions
-// catch. Change a fence, change its transcription.
+// The consumer-side guides-parity drop-in: runs `@orkestrel/guide`'s checks against
+// this repo's own `guides/README.md` manifest. The constants that follow are this
+// package's own, as is the executed section that closes the file.
 
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
@@ -96,6 +94,117 @@ const MODULES = Object.freeze({
 	'@orkestrel/process': 'src/core',
 	'@orkestrel/process/server': 'src/server',
 })
+/**
+ * Declarations deliberately kept out of a barrel, as `computeSymbolKey` strings, keyed by the face
+ * whose module declares each one.
+ *
+ * `POPULATIONS` reads each row against that face's own barrel, and `INTERNAL` flattens every row
+ * into the one scope a guide's source is read as.
+ */
+const INTERNALS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+	'@orkestrel/process': Object.freeze([]),
+	'@orkestrel/process/server': Object.freeze([]),
+})
+/**
+ * Declarations deliberately kept out of the barrel, as `computeSymbolKey` strings.
+ *
+ * A class that one-class-per-file evicted from its single consumer cannot become a
+ * local, so it stays exported without being public. Naming it here is what makes that
+ * intentional rather than forgotten — and the assertion that follows it fails when a name
+ * here stops being stranded, so the list cannot rot.
+ */
+const INTERNAL: readonly string[] = Object.freeze(Object.values(INTERNALS).flat())
+/**
+ * Test files no guide's Tests section lists, as repository-relative paths.
+ *
+ * Each is a vendored fleet-wide proof whose subject is the workspace rather than this package's
+ * public surface. Naming one here is what makes the omission deliberate, and the assertion over
+ * this list fails when a name here stops being omitted, so the list cannot rot.
+ */
+const UNLISTED_TESTS: readonly string[] = Object.freeze([
+	'tests/config.test.ts',
+	'tests/policy.test.ts',
+])
+/** Root-level files this package's guides link to. `readInventory` walks directories only. */
+const ROOT_FILES = Object.freeze(['AGENTS.md', 'README.md'])
+
+const root = new URL('../', import.meta.url)
+const files: Record<string, string> = {
+	...readInventory(root, ['src', 'guides', 'tests'], { extensions: ['.ts', '.md'] }),
+}
+for (const name of ROOT_FILES) files[name] = readFileSync(new URL(name, root), 'utf8')
+const manifest = parseManifest(
+	requireValue(files['guides/README.md'], 'Missing file: guides/README.md'),
+	'guides',
+)
+const sources = createSourceManager({ files, modules: MODULES })
+const own = requireValue(
+	manifest.find((entry) => entry.spec === GUIDE_SPEC),
+	`Missing manifest row: ${GUIDE_SPEC}`,
+)
+
+it('manifest lists at least one guide', () => {
+	expect(manifest.length).toBeGreaterThan(0)
+})
+
+// The example half of the equality case is silent over an empty population: with no
+// title on both sides `findDrift` compares no pair and the case passes on the summaries
+// alone. This pins the population this repository's own guide contributes, so removing
+// every `@example` title reddens the suite instead of quietly retiring half the gate.
+// The failure names both title sets, because a pin reporting only its own emptiness
+// leaves the reader to work out which side dropped the title.
+it('pairs at least one example title across the guide and the source', () => {
+	const guide = createGuide(requireValue(files[GUIDE_SPEC], `Missing file: ${GUIDE_SPEC}`))
+	const source = createSource({ files, module: own.source })
+	const declared = source
+		.examples()
+		.map((example) => example.title)
+		.filter((title) => title !== undefined)
+	const titled = new Set(declared)
+	const headings: string[] = []
+	const paired: string[] = []
+	for (const fence of guide.fences()) {
+		if (fence.title === undefined) continue
+		headings.push(fence.title)
+		if (titled.has(fence.title)) paired.push(fence.title)
+	}
+	const unpaired =
+		paired.length > 0
+			? []
+			: [
+					`${GUIDE_SPEC} pairs: guide ${JSON.stringify(headings)} source ${JSON.stringify(declared)}`,
+				]
+	expect(unpaired).toEqual([])
+})
+
+// The README's pitch and the guide's tagline are one text, each read as the blockquote
+// under its file's H1. `README.md` is outside the concept index, so the reader is
+// applied to it directly rather than through a manifest row. Each side is guarded
+// against `undefined` first, so a file that lost its blockquote reports that rather
+// than reporting two absences as agreement.
+it('opens the README with the guide tagline', () => {
+	const pitch = createGuide(requireValue(files['README.md'], 'Missing file: README.md')).tagline()
+	const tagline = createGuide(
+		requireValue(files[GUIDE_SPEC], `Missing file: ${GUIDE_SPEC}`),
+	).tagline()
+
+	expect(pitch).not.toBeUndefined()
+	expect(tagline).not.toBeUndefined()
+	expect(pitch).toBe(tagline)
+})
+
+// The published faces in one table. `SOURCES`, the refusal rows, and the live population rows
+// all read it, so a face's scope and its export key have one place to be stated.
+const FACES = Object.freeze(
+	Object.entries(MODULES).map(([specifier, module]) => ({ specifier, module })),
+)
+const SOURCES = new Map(
+	FACES.map((face): [string, ReturnType<typeof createSource>] => [
+		face.specifier,
+		requireValue(sources.source(face.specifier), `Unmapped specifier: ${face.specifier}`),
+	]),
+)
+
 /**
  * The names each face must refuse from its neighbouring face.
  *
@@ -191,109 +300,6 @@ const REFUSALS: Readonly<
 		]),
 		shared: Object.freeze([]),
 	}),
-})
-/**
- * Declarations deliberately kept out of a barrel, as `computeSymbolKey` strings, keyed by the face whose
- * module declares each one.
- *
- * Naming one here is what makes it intentional rather than forgotten, and the assertions over this
- * table fail when a name here stops being stranded, so the table cannot rot.
- */
-const INTERNALS: Readonly<Record<string, readonly string[]>> = Object.freeze({
-	'@orkestrel/process': Object.freeze([]),
-	'@orkestrel/process/server': Object.freeze([]),
-})
-/** Every deliberately stranded declaration, read as one scope the way a guide's source is. */
-const INTERNAL: readonly string[] = Object.freeze(Object.values(INTERNALS).flat())
-/**
- * Test files no guide's Tests section lists, as repository-relative paths.
- *
- * Each is a vendored fleet-wide proof whose subject is the workspace rather than this package's
- * public surface. Naming one here is what makes the omission deliberate, and the assertion over
- * this list fails when a name here stops being omitted, so the list cannot rot.
- */
-const UNLISTED_TESTS: readonly string[] = Object.freeze([
-	'tests/config.test.ts',
-	'tests/policy.test.ts',
-])
-/** Root-level files this package's guides link to. `readInventory` walks directories only. */
-const ROOT_FILES = Object.freeze(['AGENTS.md', 'README.md'])
-
-const root = new URL('../', import.meta.url)
-const files: Record<string, string> = {
-	...readInventory(root, ['src', 'guides', 'tests'], { extensions: ['.ts', '.md'] }),
-}
-for (const name of ROOT_FILES) files[name] = readFileSync(new URL(name, root), 'utf8')
-const manifest = parseManifest(
-	requireValue(files['guides/README.md'], 'Missing file: guides/README.md'),
-	'guides',
-)
-const sourceManager = createSourceManager({ files, modules: MODULES })
-const own = requireValue(
-	manifest.find((entry) => entry.spec === GUIDE_SPEC),
-	`Missing manifest row: ${GUIDE_SPEC}`,
-)
-
-// The published faces in one table. `SOURCES`, the refusal rows, and the live population rows
-// all read it, so a face's scope and its export key have one place to be stated.
-const FACES = Object.freeze(
-	Object.entries(MODULES).map(([specifier, module]) => ({ specifier, module })),
-)
-const SOURCES = new Map(
-	FACES.map((face): [string, ReturnType<typeof createSource>] => [
-		face.specifier,
-		requireValue(sourceManager.source(face.specifier), `Unmapped specifier: ${face.specifier}`),
-	]),
-)
-
-it('manifest lists at least one guide', () => {
-	expect(manifest.length).toBeGreaterThan(0)
-})
-
-// The example half of the equality case is silent over an empty population: with no
-// title on both sides `findDrift` compares no pair and the case passes on the summaries
-// alone. This pins the population this repository's own guide contributes, so removing
-// every `@example` title reddens the suite instead of quietly retiring half the gate.
-// The failure names both title sets, because a pin reporting only its own emptiness
-// leaves the reader to work out which side dropped the title.
-it('pairs at least one example title across the guide and the source', () => {
-	const guide = createGuide(requireValue(files[GUIDE_SPEC], `Missing file: ${GUIDE_SPEC}`))
-	const source = createSource({ files, module: own.source })
-	const declared = source
-		.examples()
-		.map((example) => example.title)
-		.filter((title) => title !== undefined)
-	const titled = new Set(declared)
-	const headings: string[] = []
-	const paired: string[] = []
-	for (const fence of guide.fences()) {
-		if (fence.title === undefined) continue
-		headings.push(fence.title)
-		if (titled.has(fence.title)) paired.push(fence.title)
-	}
-	const unpaired =
-		paired.length > 0
-			? []
-			: [
-					`${GUIDE_SPEC} pairs: guide ${JSON.stringify(headings)} source ${JSON.stringify(declared)}`,
-				]
-	expect(unpaired).toEqual([])
-})
-
-// The README's pitch and the guide's tagline are one text, each read as the blockquote
-// under its file's H1. `README.md` is outside the concept index, so the reader is
-// applied to it directly rather than through a manifest row. Each side is guarded
-// against `undefined` first, so a file that lost its blockquote reports that rather
-// than reporting two absences as agreement.
-it('opens the README with the guide tagline', () => {
-	const pitch = createGuide(requireValue(files['README.md'], 'Missing file: README.md')).tagline()
-	const tagline = createGuide(
-		requireValue(files[GUIDE_SPEC], `Missing file: ${GUIDE_SPEC}`),
-	).tagline()
-
-	expect(pitch).not.toBeUndefined()
-	expect(tagline).not.toBeUndefined()
-	expect(pitch).toBe(tagline)
 })
 
 describe('public package faces', () => {
@@ -410,8 +416,7 @@ for (const entry of manifest) {
 			expect(findUnlisted(guide.fences(), FENCE_LANGUAGES)).toEqual([])
 		})
 
-		it('extracts non-empty aggregate barrel and documented surfaces', () => {
-			expect(source.surface().length).toBeGreaterThan(0)
+		it('extracts a non-empty documented surface', () => {
 			expect(guide.surface().length).toBeGreaterThan(0)
 		})
 		it('re-exports every direct declaration that is not named internal', () => {
@@ -439,7 +444,7 @@ for (const entry of manifest) {
 		for (const group of guide.methods()) {
 			const members = source.methods(group.interface).map((method) => method.name)
 			const documented = group.methods.map((method) => method.name)
-			const entity = group.interface.replace(/Interface$/u, '')
+			const entity = group.interface.replace(/Interface$/, '')
 			describe(`${group.interface}`, () => {
 				it('documents at least one method', () => {
 					expect(group.methods.length).toBeGreaterThan(0)
@@ -481,10 +486,6 @@ for (const entry of manifest) {
 			expect(disagreeing).toEqual([])
 		})
 
-		it('documents at least one method group', () => {
-			expect(guide.methods().length).toBeGreaterThan(0)
-		})
-
 		it('documents an example for every Surface function', () => {
 			const fences = guide
 				.fences()
@@ -494,7 +495,6 @@ for (const entry of manifest) {
 				.surface()
 				.filter((symbol) => symbol.keyword === 'function')
 				.map((symbol) => symbol.name)
-			expect(names.length).toBeGreaterThan(0)
 			expect(
 				findUnexampled(
 					names,
@@ -505,7 +505,7 @@ for (const entry of manifest) {
 		})
 
 		for (const group of guide.methods()) {
-			const entity = group.interface.replace(/Interface$/u, '')
+			const entity = group.interface.replace(/Interface$/, '')
 			const documented = group.methods.map((method) => method.name)
 			const examples =
 				entity === group.interface
@@ -525,40 +525,28 @@ for (const entry of manifest) {
 			})
 		}
 
-		// The membership rule is `extractFenceImports`'s own grammar read off Guide's comment-aware source
-		// projection, not "named-brace imports": every statement it surfaces is checked and nothing
-		// else is. A mapped specifier's bindings compare against that face's barrel surface; a
-		// repository alias and an unmapped true subpath of the root are refused, the alias because a
-		// public guide example must import through a published specifier; a foreign package stays
-		// external and is compared against no face.
-		it('imports only real exports through published specifiers in every ts fence', () => {
-			const refused: string[] = []
-			const missing: string[] = []
-			for (const fence of guide.fences().filter((row) => row.language === EXAMPLE_LANGUAGE)) {
-				const projected = extractSourceLines(fence.code)
-					.map((line) => line.code)
-					.join('\n')
-				for (const statement of extractFenceImports(projected)) {
-					const specifier = statement.specifier
-					if (specifier.startsWith('@src/') || specifier.startsWith('@app/')) {
-						refused.push(specifier)
-						continue
-					}
-					const face = SOURCES.get(specifier)
-					if (face === undefined) {
-						if (specifier === ROOT || specifier.startsWith(`${ROOT}/`)) refused.push(specifier)
-						continue
-					}
-					missing.push(
-						...findMissing(
-							statement.names,
-							face.surface().map((symbol) => symbol.name),
-						),
-					)
+		it('documents at least one Surface function', () => {
+			const named = guide
+				.surface()
+				.filter((symbol) => symbol.keyword === 'function')
+				.map((symbol) => symbol.name)
+			expect(named.length).toBeGreaterThan(0)
+		})
+
+		it('documents at least one method group', () => {
+			expect(guide.methods().length).toBeGreaterThan(0)
+		})
+
+		it('imports only real exports in every ```ts fence', () => {
+			const fences = guide.fences().filter((fence) => fence.language === EXAMPLE_LANGUAGE)
+			for (const fence of fences) {
+				for (const { specifier, names } of extractFenceImports(fence.code)) {
+					const imported = sources.source(specifier)
+					if (imported === undefined) continue
+					const surface = imported.surface().map((symbol) => symbol.name)
+					expect(findMissing(names, surface)).toEqual([])
 				}
 			}
-			expect(refused).toEqual([])
-			expect(missing).toEqual([])
 		})
 
 		it('resolves every relative link', () => {
@@ -574,8 +562,30 @@ for (const entry of manifest) {
 				.tests()
 				.map((href) => resolveLink(entry.spec, href))
 				.filter((path) => !source.exists(path))
-			expect(missing.length).toBe(0)
-			expect(guide.tests().length).toBeGreaterThan(0)
+			expect(missing).toEqual([])
+		})
+		// The specifier rule is `extractFenceImports`'s own grammar read off Guide's comment-aware
+		// source projection, not "named-brace imports": every statement it surfaces is checked and
+		// nothing else is. A repository alias and an unmapped true subpath of the root are refused,
+		// the alias because a public guide example must import through a published specifier; a
+		// foreign package stays external and is compared against no face.
+		it('imports through a published specifier in every ts fence', () => {
+			const refused: string[] = []
+			for (const fence of guide.fences().filter((row) => row.language === EXAMPLE_LANGUAGE)) {
+				const projected = extractSourceLines(fence.code)
+					.map((line) => line.code)
+					.join('\n')
+				for (const statement of extractFenceImports(projected)) {
+					const specifier = statement.specifier
+					if (specifier.startsWith('@src/') || specifier.startsWith('@app/')) {
+						refused.push(specifier)
+						continue
+					}
+					if (SOURCES.has(specifier)) continue
+					if (specifier === ROOT || specifier.startsWith(`${ROOT}/`)) refused.push(specifier)
+				}
+			}
+			expect(refused).toEqual([])
 		})
 		// The Tests section is an inventory of what this package proves, so a proof that exists and is
 		// not listed is the defect. Listing is asserted as membership against the real test tree,
@@ -616,16 +626,6 @@ const CONSTANTS: Readonly<Record<string, number | string | readonly string[]>> =
 	PROCESS_PATHEXT,
 	PROCESS_ERROR_CODES,
 })
-/**
- * Constants whose `Value` cell is prose rather than a literal, as `API` cell names.
- *
- * `PROCESS_ERROR_CODES` prints as `the code tuple`, so no cell text compares against the tuple; the
- * codes themselves are gated by `tables exactly the error codes the tuple declares`. Naming one
- * here is what makes the omission deliberate, and the assertion over this list fails when such a
- * cell becomes a literal, so the list cannot rot.
- */
-const PROSE_CONSTANTS: readonly string[] = Object.freeze(['PROCESS_ERROR_CODES'])
-
 describe('flagship fences', () => {
 	it('bounds one delivered chunk and refuses one that is not a buffer', () => {
 		expect(captureChunk(Buffer.from('hello'), 3)?.toString('utf8')).toBe('hel')
@@ -768,32 +768,29 @@ describe('flagship fences', () => {
 		expect(types).toContain('standard-input payload and carries no NUL restriction')
 	})
 
-	// The Value column read off the guide itself, so editing a cell fails this row. Comparing the
-	// imported constants against literals written here would leave that column guarded by nothing,
-	// under a name that claims to guard exactly it. A cell drops its digit separators and its
-	// quotes before the comparison, which is the whole difference between the guide's notation and
-	// the source literal.
-	it('documents the constant values its Surface table prints', () => {
+	// Ruling 18 puts a constant's literal in its declaration's description paragraph, which the
+	// equality gate carries into the `Summary` cell, so the literal is read from that cell rather
+	// than from a column of its own. The row set is compared against the imported table too, so a
+	// constant that gained no row and a row naming no constant each fail here.
+	it('names every constant literal in the Summary its Constants table prints', () => {
 		const guide = requireValue(files['guides/process.md'], 'Missing file: guides/process.md')
 		const section = guide.slice(guide.indexOf('### Constants'))
 		const table = section.slice(0, section.indexOf('\n\n', section.indexOf('| API')))
 		const rows = Array.from(
-			table.matchAll(/^\| `(\w+)` +\| const +\| ([^|]+?) +\|/gmu),
-			(match) => ({ name: match[1] ?? '', cell: match[2] ?? '' }),
+			table.matchAll(/^\| `(\w+)` +\| const +\| [^|]+ \| (.+?) +\|$/gmu),
+			(match) => ({ name: match[1] ?? '', summary: match[2] ?? '' }),
 		)
-
-		const prose = rows.filter((row) => PROSE_CONSTANTS.includes(row.name))
-		const printed = rows.filter((row) => !PROSE_CONSTANTS.includes(row.name))
+		const unnamed: string[] = []
+		for (const row of rows) {
+			const value = requireValue(CONSTANTS[row.name], `Undeclared constant row: ${row.name}`)
+			const literals = typeof value === 'object' ? [...value] : [String(value)]
+			for (const literal of literals) {
+				if (!row.summary.includes(literal)) unnamed.push(`${row.name} ${literal}`)
+			}
+		}
 
 		expect(rows.map((row) => row.name).sort()).toEqual(Object.keys(CONSTANTS).sort())
-		expect(prose.map((row) => row.name)).toEqual([...PROSE_CONSTANTS])
-		expect(prose.filter((row) => row.cell.startsWith('`')).map((row) => row.name)).toEqual([])
-		expect(printed.map((row) => `${row.name} ${row.cell.replace(/[`_']/gu, '')}`)).toEqual(
-			printed.map(
-				(row) =>
-					`${row.name} ${String(requireValue(CONSTANTS[row.name], `Undeclared constant row: ${row.name}`))}`,
-			),
-		)
+		expect(unnamed).toEqual([])
 	})
 
 	// The guide's error table lists one row per declared code, so the table and the tuple are one
@@ -1318,8 +1315,9 @@ describe('flagship fences', () => {
 //
 // Exports that appear in no `guides/process.md` fence use their TSDoc
 // `@example` block in place of one. A block satisfies that gate by existing, which leaves the value
-// its comment claims unasserted. Each row below runs one such block against the real barrel and
-// asserts that value, so a changed return value fails this gate. Change an `@example`, change its row.
+// its comment claims unasserted. Each row that follows runs one such block against the real barrel
+// and asserts that value, so a changed return value fails this gate. Change an `@example`, change
+// its row.
 const EXAMPLES = Object.freeze([
 	{
 		name: 'buildPlatformSpawn',
@@ -1384,8 +1382,8 @@ describe('unfenced TSDoc examples', () => {
 	// `Supervisor`'s class block and its `deliver` member block each spawn a real child and await a
 	// promise, so each is its own asynchronous case instead of a row in the table, which holds
 	// synchronous leaves. Change either block, change the case beside it.
-	// The case outlives the condition budget below it, so a condition that never holds reports its
-	// own description rather than this case's timeout.
+	// The case outlives the condition budget that follows, so a condition that never holds reports
+	// its own description rather than this case's timeout.
 	it("returns what Supervisor's example claims", { timeout: 20_000 }, async () => {
 		const engine = new Supervisor(
 			{ command: { file: 'node', arguments: ['--version'] }, workspace: process.cwd() },
@@ -1403,8 +1401,8 @@ describe('unfenced TSDoc examples', () => {
 		await engine.destroy()
 	})
 
-	// The case outlives the condition budget below it, so a condition that never holds reports its
-	// own description rather than this case's timeout.
+	// The case outlives the condition budget that follows, so a condition that never holds reports
+	// its own description rather than this case's timeout.
 	it("returns what deliver's example claims", { timeout: 20_000 }, async () => {
 		const engine = new Supervisor(
 			{

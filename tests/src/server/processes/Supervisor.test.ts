@@ -53,8 +53,8 @@ describe('Supervisor moments', () => {
 	// the face is told to let go, and it is worth nothing after the termination sequence: by then the
 	// signal has already been sent to a child that cannot write.
 	//
-	// The case outlives the condition budget below it, so a condition that never holds reports its
-	// own description rather than this case's timeout.
+	// The case outlives the condition budget that follows, so a condition that never holds reports
+	// its own description rather than this case's timeout.
 	it(
 		'releases the face before the termination sequence rather than after it',
 		{ timeout: 20_000 },
@@ -101,17 +101,17 @@ describe('Supervisor moments', () => {
 		},
 	)
 
-	// The case outlives the condition budget below it, so a condition that never holds reports its
-	// own description rather than this case's timeout.
+	// The case outlives the condition budget that follows, so a condition that never holds reports
+	// its own description rather than this case's timeout.
 	it(
 		'settles ending at the native exit while a descendant holds the read ends open',
 		{ timeout: 20_000 },
 		async () => {
 			const moments = createRecorder<readonly [string]>()
 			const received: string[] = []
-			// The drain window is left at its default, so the pendency race below reads the same
-			// margin the sibling comparator in `Process.test.ts` reads. An override sized past
-			// the race turns a contended run into a red gate reporting a timeout.
+			// The drain window is left at its default, so the pendency race that follows reads the
+			// same margin the sibling comparator in `Process.test.ts` reads. An override sized
+			// barely past the race turns a contended run into a red gate reporting a timeout.
 			const engine = new Supervisor(
 				{ command: childCommand('orphan'), workspace: process.cwd(), grace: 20 },
 				{
