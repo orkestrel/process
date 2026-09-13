@@ -89,8 +89,12 @@ export interface SpawnInput {
  * Supplies the lookup inputs for resolving a command file to an executable path.
  *
  * @remarks
- * `workspace` is searched before `PATH`, matching Windows command semantics. `environment` is the
- * child's effective environment, so the lookup reads the same `PATH` and `PATHEXT` the child will.
+ * {@link buildExecutableCandidates} searches `workspace` before `PATH`, matching Windows command
+ * semantics. For an extensionless Windows name, it enumerates `PATHEXT` candidates. For an
+ * extension-bearing Windows name, it enumerates the literal path before `PATHEXT` candidates.
+ * `environment` is the child's effective environment, so the lookup reads the same `PATH` and
+ * `PATHEXT` the child will. On a lookup miss, {@link buildSpawn} preserves the command file as
+ * written for native spawning.
  */
 export interface ExecutableOptions {
 	/** Names the directory searched first. Default: the current working directory. */

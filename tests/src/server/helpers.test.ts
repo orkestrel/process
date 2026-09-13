@@ -3,7 +3,7 @@ import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { holds } from '@orkestrel/contract'
 import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
@@ -180,22 +180,129 @@ describe('quoteArgument', () => {
 })
 
 describe('resolveExecutable', () => {
-	it('builds the Windows search order and leaves the POSIX lookup to execvp', () => {
-		const environment = { Path: 'C:\\bin;D:\\tools', PathExt: '.CMD;.EXE' }
+	it('builds Windows extensionless candidates and retains extension-bearing literal precedence', () => {
+		const workspace = win32.resolve('C:\\workspace')
+		const pathDirectory = win32.resolve('D:\\path')
+		const toolsDirectory = win32.resolve('E:\\tools')
+		const environment = { Path: [pathDirectory, toolsDirectory].join(';') }
 
-		expect(buildExecutableCandidates('report.txt', 'C:\\workspace', environment, 'win32')).toEqual([
-			'C:\\workspace\\report.txt',
-			'C:\\workspace\\report.txt.CMD',
-			'C:\\workspace\\report.txt.EXE',
-			'C:\\bin\\report.txt',
-			'C:\\bin\\report.txt.CMD',
-			'C:\\bin\\report.txt.EXE',
-			'D:\\tools\\report.txt',
-			'D:\\tools\\report.txt.CMD',
-			'D:\\tools\\report.txt.EXE',
+		expect(buildExecutableCandidates('worker', workspace, environment, 'win32')).toEqual([
+			win32.resolve(workspace, 'worker.COM'),
+			win32.resolve(workspace, 'worker.EXE'),
+			win32.resolve(workspace, 'worker.BAT'),
+			win32.resolve(workspace, 'worker.CMD'),
+			win32.resolve(pathDirectory, 'worker.COM'),
+			win32.resolve(pathDirectory, 'worker.EXE'),
+			win32.resolve(pathDirectory, 'worker.BAT'),
+			win32.resolve(pathDirectory, 'worker.CMD'),
+			win32.resolve(toolsDirectory, 'worker.COM'),
+			win32.resolve(toolsDirectory, 'worker.EXE'),
+			win32.resolve(toolsDirectory, 'worker.BAT'),
+			win32.resolve(toolsDirectory, 'worker.CMD'),
 		])
-		expect(buildExecutableCandidates('report.txt', '/workspace', environment, 'linux')).toEqual([])
+
+		const relative = win32.format({ dir: '.', base: 'worker' })
+		expect(
+			buildExecutableCandidates(
+				relative,
+				workspace,
+				{ PATH: pathDirectory, PATHEXT: '.CMD;.EXE' },
+				'win32',
+			),
+		).toEqual([
+			win32.resolve(workspace, `${relative}.CMD`),
+			win32.resolve(workspace, `${relative}.EXE`),
+		])
+
+		const absolute = win32.resolve(pathDirectory, 'worker')
+		expect(
+			buildExecutableCandidates(
+				absolute,
+				workspace,
+				{ PATH: toolsDirectory, PATHEXT: '.EXE;.CMD' },
+				'win32',
+			),
+		).toEqual([`${absolute}.EXE`, `${absolute}.CMD`])
+
+		expect(
+			buildExecutableCandidates(
+				'report.txt',
+				workspace,
+				{ PATH: pathDirectory, PATHEXT: '.CMD;.EXE' },
+				'win32',
+			),
+		).toEqual([
+			win32.resolve(workspace, 'report.txt'),
+			win32.resolve(workspace, 'report.txt.CMD'),
+			win32.resolve(workspace, 'report.txt.EXE'),
+			win32.resolve(pathDirectory, 'report.txt'),
+			win32.resolve(pathDirectory, 'report.txt.CMD'),
+			win32.resolve(pathDirectory, 'report.txt.EXE'),
+		])
+		expect(buildExecutableCandidates('worker', '/workspace', environment, 'linux')).toEqual([])
 	})
+
+	// Only Windows applies `PATHEXT` and routes a `.cmd` target through `cmd.exe`, so another host
+	// cannot drive the sibling selection and execution this case proves.
+	it.skipIf(process.platform !== 'win32')(
+		'resolves and runs Windows sibling launchers through public entry points',
+		async () => {
+			const scratch = createScratch()
+			try {
+				const workspace = scratch.ensure('workspace')
+				const pathDirectory = scratch.ensure('path')
+				scratch.write('workspace/worker', '#!/bin/sh\nprintf "unsuffixed-ran\\n"\n')
+				const launcher = scratch.write('workspace/worker.cmd', '@echo off\r\necho sibling-ran\r\n')
+				scratch.write('workspace/worker.bat', '@echo off\r\necho wrong-extension-ran\r\n')
+				scratch.write('path/worker.cmd', '@echo off\r\necho wrong-path-ran\r\n')
+				scratch.write('workspace/lonely', '#!/bin/sh\nprintf "lonely-ran\\n"\n')
+				const environment = { PATH: pathDirectory, PATHEXT: '.CMD;.BAT' }
+				const relative = win32.format({ dir: '.', base: 'worker' })
+				const absolute = win32.resolve(workspace, 'worker')
+
+				expect(
+					resolveExecutable('worker', {
+						workspace,
+						environment,
+					})?.toLowerCase(),
+				).toBe(launcher.toLowerCase())
+				expect(
+					resolveExecutable(relative, {
+						workspace,
+						environment,
+					})?.toLowerCase(),
+				).toBe(launcher.toLowerCase())
+				expect(
+					resolveExecutable(absolute, {
+						workspace,
+						environment,
+					})?.toLowerCase(),
+				).toBe(launcher.toLowerCase())
+				expect(
+					resolveExecutable('lonely', {
+						workspace,
+						environment,
+					}),
+				).toBeUndefined()
+
+				const synchronous = executeSync(
+					{ file: relative, arguments: [] },
+					{ workspace, environment, strict: false },
+				)
+				const asynchronous = await execute(
+					{ file: absolute, arguments: [] },
+					{ workspace, environment, strict: false },
+				)
+
+				expect(synchronous.failed).toBe(false)
+				expect(synchronous.stdout.trim()).toBe('sibling-ran')
+				expect(asynchronous.failed).toBe(false)
+				expect(asynchronous.stdout.trim()).toBe('sibling-ran')
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
 
 	// A bare command name is resolved by the caller only on Windows, where the host appends a
 	// PATHEXT extension and searches the working directory first. Every other host resolves the
@@ -237,7 +344,7 @@ describe('resolveExecutable', () => {
 				scratch.write('report.txt.cmd', '@echo off\r\necho appended\r\n')
 				scratch.write('notes.txt.cmd', '@echo off\r\necho appended\r\n')
 
-				// The literal name is a regular file, so it wins over every appended candidate.
+				// The literal name is a regular file, so it wins over every PATHEXT candidate.
 				expect(
 					resolveExecutable('report.txt', {
 						environment: { PATH: scratch.path },
@@ -320,6 +427,17 @@ describe('buildSpawn', () => {
 		expect(plan.file).toBe(process.execPath)
 		expect(plan.arguments).toEqual(['--version'])
 		expect(plan.verbatim).toBe(false)
+	})
+
+	it('keeps an unresolved command file as written for the native spawn fallback', () => {
+		const file = 'orkestrel-unresolved-native-fallback'
+
+		expect(
+			buildSpawn(
+				{ file, arguments: ['--version'] },
+				{ workspace: process.cwd(), environment: { PATH: '', PATHEXT: '.EXE' } },
+			),
+		).toEqual({ file, arguments: ['--version'], verbatim: false })
 	})
 
 	it('passes a percent-delimited argument literally to a target that is not batch', () => {

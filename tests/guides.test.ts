@@ -883,6 +883,16 @@ await new GuideCommand({
 			expect(quoteArgument('status')).toBe('status')
 			expect(quoteArgument('a&b')).toBe('"a&b"')
 			expect(quoteArgument('%1')).toBe('"%1"')
+			expect(buildExecutableCandidates('git', 'C:\\work', { PATH: 'C:\\bin' }, 'win32')).toEqual([
+				'C:\\work\\git.COM',
+				'C:\\work\\git.EXE',
+				'C:\\work\\git.BAT',
+				'C:\\work\\git.CMD',
+				'C:\\bin\\git.COM',
+				'C:\\bin\\git.EXE',
+				'C:\\bin\\git.BAT',
+				'C:\\bin\\git.CMD',
+			])
 			expect(buildSpawn({ file: 'node', arguments: ['--version'] }).verbatim).toBe(false)
 		})
 
@@ -1215,22 +1225,6 @@ await new GuideCommand({
 			value: buildPlatformSpawn({ file: 'node', arguments: ['--version'] }, 'node', {}, 'linux')
 				.verbatim,
 			claim: false,
-		},
-		{
-			name: 'buildExecutableCandidates',
-			value: buildExecutableCandidates('git', 'C:\\work', { PATH: 'C:\\bin' }, 'win32'),
-			claim: [
-				'C:\\work\\git',
-				'C:\\work\\git.COM',
-				'C:\\work\\git.EXE',
-				'C:\\work\\git.BAT',
-				'C:\\work\\git.CMD',
-				'C:\\bin\\git',
-				'C:\\bin\\git.COM',
-				'C:\\bin\\git.EXE',
-				'C:\\bin\\git.BAT',
-				'C:\\bin\\git.CMD',
-			],
 		},
 		{
 			name: 'captureChunk',

@@ -296,15 +296,15 @@ export function isFile(target: string): boolean {
  *
  * @remarks
  * Windows alone needs this list: the host searches the working directory before `PATH` and applies
- * `PATHEXT`, and Node reproduces neither for a direct spawn. Within each searched directory the
- * literal name is tried first and each `PATHEXT` candidate after it, whether or not the name already
- * carries an extension — so `report.txt` resolves to a `report.txt` file where one exists and to
- * `report.txt.cmd` where none does. The lookup reads the child's effective environment, so an
- * overridden `PATH` selects the executable the child would have found. A POSIX host resolves the
- * file itself, so the candidate list there is empty. An appended extension is spelled the way
- * `PATHEXT` spells it rather than the way the directory entry does, which the case-insensitive host
- * treats as the same file. A non-Windows platform returns an empty list because `execvp` performs
- * its own lookup.
+ * `PATHEXT`, and Node reproduces neither for a direct spawn. Within each searched directory,
+ * {@link buildExecutableCandidates} enumerates `PATHEXT` candidates for an extensionless name. For
+ * an extension-bearing name, it enumerates the literal path before `PATHEXT` candidates, so
+ * `report.txt` resolves to a `report.txt` file where one exists and to `report.txt.cmd` where none
+ * does. The lookup reads the child's effective environment, so an overridden `PATH` selects the
+ * executable the child would have found. A POSIX host resolves the file itself, so the candidate
+ * list there is empty. A `PATHEXT` candidate keeps the extension spelling from `PATHEXT`, which the
+ * case-insensitive host treats as the same file. A non-Windows platform returns an empty list
+ * because `execvp` performs its own lookup.
  *
  * @param file - The command executable name or path
  * @param workspace - The directory searched first
@@ -327,7 +327,10 @@ export function buildExecutableCandidates(
 	const extensions = (readPlatformVariable(environment, 'PATHEXT', platform) ?? PROCESS_PATHEXT)
 		.split(';')
 		.filter((extension) => extension.length > 0)
-	const candidates = [file, ...extensions.map((extension) => `${file}${extension}`)]
+	const candidates =
+		win32.extname(file).length === 0
+			? extensions.map((extension) => `${file}${extension}`)
+			: [file, ...extensions.map((extension) => `${file}${extension}`)]
 	const rooted = file.includes('/') || file.includes('\\')
 	const directories = rooted
 		? [workspace]
@@ -345,6 +348,10 @@ export function buildExecutableCandidates(
 /**
  * Resolves a command file to the executable path the host would launch, or to `undefined` on a POSIX
  * host, which performs its own lookup.
+ *
+ * @remarks
+ * A Windows lookup miss also returns `undefined`. {@link buildSpawn} preserves the command file as
+ * written for native spawning.
  *
  * @param file - The command executable name or path
  * @param options - The directory searched first and the child's effective environment
@@ -444,6 +451,10 @@ export function buildPlatformSpawn(
 
 /**
  * Builds the resolved spawn form of one command for the current host.
+ *
+ * @remarks
+ * When executable lookup returns no regular-file candidate, {@link buildSpawn} preserves the
+ * command file as written for native spawning.
  *
  * @param command - The executable and its argument vector
  * @param options - The directory searched first and the child's effective environment
