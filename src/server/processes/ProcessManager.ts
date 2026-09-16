@@ -7,6 +7,7 @@ import type {
 	ProcessManagerOptions,
 	ProcessOptions,
 } from '@src/core'
+import { isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { createDuplicateError, createProtocolError } from '@src/core'
 import { Process } from './Process.js'
@@ -158,7 +159,7 @@ export class ProcessManager implements ProcessManagerInterface {
 	stop(): Promise<void>
 	stop(target?: string | readonly string[]): Promise<boolean | void> {
 		if (target === undefined) return this.#stopAll()
-		if (typeof target === 'string') return this.#stopOne(target)
+		if (isString(target)) return this.#stopOne(target)
 		return this.#stopMany(target)
 	}
 

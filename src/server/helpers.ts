@@ -18,6 +18,7 @@ import { platform as hostPlatform } from 'node:process'
 import {
 	boundsOf,
 	holds,
+	isError,
 	isNonEmptyString,
 	isNonNegativeInteger,
 	isString,
@@ -652,7 +653,7 @@ export function killProcess(
 		}
 		process.kill(-child.pid, signal)
 	} catch (error) {
-		if (error instanceof Error && 'code' in error && error.code === 'ESRCH') {
+		if (isError(error) && 'code' in error && error.code === 'ESRCH') {
 			holds(() => child.kill(signal))
 			return
 		}
