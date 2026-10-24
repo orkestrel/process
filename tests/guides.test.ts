@@ -61,7 +61,7 @@ await new GuideCommand({
 }).execute(async ({ files, report, root, rows }) => {
 	const { Buffer } = await import('node:buffer')
 	const { spawn } = await import('node:child_process')
-	const { getEventListeners } = await import('node:events')
+	const { getEventListeners } = (await import('node:events')).EventEmitter
 	const { existsSync } = await import('node:fs')
 	const { isAbsolute, resolve } = await import('node:path')
 	const { holds, isRecord, parseJSON } = await import('@orkestrel/contract')

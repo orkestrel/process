@@ -89,7 +89,7 @@ export class Supervisor {
 	readonly #exit = Promise.withResolvers<ProcessExit>()
 	readonly #ending = Promise.withResolvers<void>()
 	readonly #signal: AbortSignal | undefined
-	readonly #abort: EventListener | undefined
+	readonly #abort: (() => void) | undefined
 	readonly #writes = new Map<
 		PromiseWithResolvers<boolean>,
 		ReturnType<typeof setTimeout> | undefined
