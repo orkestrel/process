@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { describe, expect, it } from 'vitest'
 import { holds } from '@orkestrel/contract'
-import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
+import { captureError, createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import { isProcessError, ProcessError } from '@src/core'
 import { createSession } from '@src/server'
@@ -56,10 +56,9 @@ describe('Session bytes', () => {
 
 		await session.exit
 		const received = Buffer.concat(chunks.calls.map((call) => call[0]))
-		const wrong: number[] = []
-		for (let index = 0; index < received.length; index += 1) {
-			if (received[index] !== index % 251) wrong.push(index)
-		}
+		const wrong = Array.from(received.entries()).flatMap(([index, byte]) =>
+			byte === index % 251 ? [] : [index],
+		)
 
 		// The stream is far larger than one host read, so the assertion is about reassembly rather
 		// than about a single chunk: every byte at its own offset, and no byte lost or repeated.
@@ -338,16 +337,16 @@ describe('Session end', () => {
 		await live.end()
 		await reading.end()
 		const observed = await Promise.race([
-			live.ending.then(() => 'ended'),
+			live.ended.then(() => 'ended'),
 			waitForDelay(200).then(() => 'live'),
 		])
 		const control = await Promise.race([
-			reading.ending.then(() => 'ended'),
+			reading.ended.then(() => 'ended'),
 			waitForDelay(5_000).then(() => 'live'),
 		])
 
 		expect(observed).toBe('live')
-		expect(live.stopping).toBe(false)
+		expect(live.terminated).toBe(false)
 		expect(live.settled).toBe(false)
 		expect({ code: live.code, signal: live.signal }).toEqual({ code: null, signal: null })
 		// The control ends itself because its input ended, which is what the live reading is measured
@@ -387,11 +386,11 @@ describe('Session end', () => {
 
 		expect(await session.write(Uint8Array.from([65, 66]))).toBe(true)
 		await session.end()
-		await session.ending
+		await session.ended
 		const exit = await session.exit
 
 		expect(exit).toEqual({ code: 0, signal: null, drained: true })
-		expect(session.stopping).toBe(false)
+		expect(session.terminated).toBe(false)
 		expect(session.settled).toBe(true)
 		expect(exits.count).toBe(1)
 		await session.destroy()
@@ -408,7 +407,7 @@ describe('Session end', () => {
 
 		await session.end()
 		const cooperative = await Promise.race([
-			session.ending.then(() => 'ended'),
+			session.ended.then(() => 'ended'),
 			waitForDelay(150).then(() => 'expired'),
 		])
 		const confirmed = await session.stop()
@@ -416,7 +415,7 @@ describe('Session end', () => {
 
 		expect(cooperative).toBe('expired')
 		expect(confirmed).toBe(true)
-		expect(session.stopping).toBe(true)
+		expect(session.terminated).toBe(true)
 		expect(exit.code !== null || exit.signal !== null).toBe(true)
 		await session.destroy()
 	})
@@ -471,14 +470,14 @@ describe('Session end', () => {
 		await session.stop()
 		const before = {
 			settled: session.settled,
-			stopping: session.stopping,
+			stopping: session.terminated,
 			evidence: session.evidence,
 			exit: await session.exit,
 		}
 		await session.end()
 		const after = {
 			settled: session.settled,
-			stopping: session.stopping,
+			stopping: session.terminated,
 			evidence: session.evidence,
 			exit: await session.exit,
 		}
@@ -519,7 +518,7 @@ describe('Session endings', () => {
 		const held = Number.parseInt(announced.replace('grandchild:', ''), 10)
 
 		try {
-			await session.ending
+			await session.ended
 			const holding = isRunning(held)
 			const settledAtEnding = session.settled
 			const pending = await Promise.race([
@@ -534,7 +533,7 @@ describe('Session endings', () => {
 				grace: 20,
 				drain: 500,
 			})
-			await alone.ending
+			await alone.ended
 			const together = await Promise.race([
 				alone.exit.then(() => 'settled'),
 				waitForDelay(150).then(() => 'pending'),
@@ -547,7 +546,7 @@ describe('Session endings', () => {
 			expect(session.code).toBe(0)
 			expect(pending).toBe('pending')
 			expect(exit).toEqual({ code: 0, signal: null, drained: false })
-			expect(session.stopping).toBe(false)
+			expect(session.terminated).toBe(false)
 			// The control settles both at once, which is what makes the pending reading discriminate.
 			expect(together).toBe('settled')
 			await alone.destroy()
@@ -614,7 +613,7 @@ describe('Session endings', () => {
 			on: { error: errors.handler },
 		})
 
-		await session.ending
+		await session.ended
 		const exit = await session.exit
 
 		expect(session.pid).toBeUndefined()
@@ -643,16 +642,13 @@ describe('Session validation', () => {
 	})
 
 	it('codes a refused input as invalid and carries the rejected value', () => {
-		let thrown: unknown
-		try {
+		const thrown = captureError(() => {
 			createSession({
 				command: childCommand('exit', '0'),
 				workspace: process.cwd(),
 				evidence: -1,
 			})
-		} catch (error) {
-			thrown = error
-		}
+		})
 
 		expect(isProcessError(thrown)).toBe(true)
 		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('invalid')
@@ -660,19 +656,19 @@ describe('Session validation', () => {
 	})
 
 	it('reads each option once, so a getter runs while nothing has started', async () => {
-		let reads = 0
+		const reads = createRecorder<readonly [string]>()
 		const session = createSession({
 			command: childCommand('exit', '0'),
 			workspace: process.cwd(),
 			get grace() {
-				reads += 1
+				reads.handler('grace')
 				return 20
 			},
 		})
 
 		const exit = await session.exit
 
-		expect(reads).toBe(1)
+		expect(reads.calls).toEqual([['grace']])
 		expect(exit.code).toBe(0)
 		await session.destroy()
 	})

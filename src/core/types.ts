@@ -13,7 +13,7 @@ import type { PROCESS_ERROR_CODES } from './constants.js'
  *   primitive.
  * - **{@link SessionInterface}** — the same supervised child observed as raw bytes: an owned
  *   `Uint8Array` per stdout chunk, an open stdin channel closed by `end` rather than by a switch,
- *   the child's own `ending` beside the terminal `exit`, and a typed {@link SessionEventMap}
+ *   the child's own `ended` beside the terminal `exit`, and a typed {@link SessionEventMap}
  *   emitter. The transport primitive, for a child speaking a framed protocol.
  * - **{@link ExecuteResult} / execute** — a one-shot spawn that buffers a child to completion and settles
  *   with its output and exit, the ergonomic layer for fire-and-collect commands.
@@ -269,7 +269,7 @@ export interface ProcessInterface {
 	 * a consumer acts on: a child that was asked to end is not a child to send new work to. A child
 	 * that exited on its own reports `false` here with `settled` true.
 	 */
-	readonly stopping: boolean
+	readonly terminated: boolean
 	/**
 	 * Settles with the terminal child state, delivered once.
 	 *
@@ -333,7 +333,7 @@ export interface ProcessInterface {
 
 /**
  * Represents the push observation surface of a {@link SessionInterface} — the moments a byte-oriented observer
- * subscribes to, alongside the `ending` and `exit` promises.
+ * subscribes to, alongside the `ended` and `exit` promises.
  *
  * @remarks
  * Declared as a `type` alias so it satisfies the emitter's `EventMap` constraint structurally.
@@ -414,11 +414,11 @@ export interface SessionOptions {
  * attach to a failed exit — and the typed `emitter` carries the live `stdout` and `stderr` payloads,
  * the child `error` cause, and the terminal `exit`.
  *
- * **Two endings, named apart.** `ending` settles at the child's own native exit and resolves no
+ * **Two endings, named apart.** `ended` settles at the child's own native exit and resolves no
  * value, because `code` and `signal` already carry the terminal facts as soon as the host records
  * them. `exit` settles at the terminal moment, which is the native exit plus at most `drain` when a
  * descendant that inherited the child's stdio still holds the read ends open. A caller racing a
- * cooperative shutdown window therefore awaits `ending`, and a caller collecting the final
+ * cooperative shutdown window therefore awaits `ended`, and a caller collecting the final
  * observation awaits `exit`. `settled`, the `exit` event, and `evidence` freezing all name that same
  * terminal moment, exactly as they do on {@link ProcessInterface}.
  *
@@ -469,7 +469,7 @@ export interface SessionInterface {
 	 * turns it true, because closing the input channel terminates nothing. A child that exited on its
 	 * own reports `false` here with `settled` true.
 	 */
-	readonly stopping: boolean
+	readonly terminated: boolean
 	/**
 	 * Settles at the child's own ending, awaited without the terminal moment's drain window.
 	 *
@@ -482,7 +482,7 @@ export interface SessionInterface {
 	 * descendant holding the pipe, and a caller racing that promise escalates against a child that
 	 * already ended.
 	 */
-	readonly ending: Promise<void>
+	readonly ended: Promise<void>
 	/**
 	 * Settles with the terminal child state, delivered once.
 	 *
@@ -517,9 +517,9 @@ export interface SessionInterface {
 	 * Closes the standard-input channel and leaves the child running.
 	 *
 	 * @remarks
-	 * Never rejects, and terminates nothing: `stopping` stays false, no signal is sent, no drain
+	 * Never rejects, and terminates nothing: `terminated` stays false, no signal is sent, no drain
 	 * window is armed, and the terminal moment does not arrive. The child observes end of input, which
-	 * is how a cooperative protocol asks it to finish and exit on its own; await `ending` for that
+	 * is how a cooperative protocol asks it to finish and exit on its own; await `ended` for that
 	 * exit and `stop` when it does not come.
 	 *
 	 * Every call shares one barrier, and it resolves after the host flushes the writes it had already

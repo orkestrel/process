@@ -1,12 +1,30 @@
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
-import { childCommand, resolveChildFixture } from './setupServer.js'
+import { createRecorder } from '@orkestrel/test'
+import { childCommand, ExitBoundary, resolveChildFixture } from './setupServer.js'
 
 // This proof drives the command `childCommand` builds through a real child process, so the
 // asserted values come from the fixture's own independent parsing of `process.argv` rather than
 // from re-deriving what `childCommand` already computed. `tests/setup.test.ts` covers the
 // structural shape of the returned command; this file covers that the shape actually spawns and
 // behaves as the workspace's server suites rely on.
+
+describe('ExitBoundary', () => {
+	it('retains registered listener identities and removes the requested listener', () => {
+		const boundary = new ExitBoundary()
+		const first = createRecorder<[]>()
+		const second = createRecorder<[]>()
+		expect([boundary.exitCode, boundary.signalCode]).toEqual([null, null])
+		expect(boundary.listeners).toEqual([])
+		boundary.once('exit', first.handler)
+		boundary.once('exit', second.handler)
+		expect(boundary.listeners).toEqual([first.handler, second.handler])
+		boundary.off('exit', first.handler)
+		expect(boundary.listeners).toEqual([second.handler])
+		boundary.off('exit', second.handler)
+		expect(boundary.listeners).toEqual([])
+	})
+})
 
 describe('childCommand spawned for real', () => {
 	it('spawns a real child that exits with the requested code and reports it through stdout and stderr', () => {

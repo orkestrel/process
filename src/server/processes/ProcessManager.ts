@@ -49,11 +49,11 @@ export class ProcessManager implements ProcessManagerInterface {
 	// The children a launch spawned into a registry that was already being destroyed. They are never
 	// registered, so `#teardown` cannot reach them through `#children`, and it drains this set instead.
 	readonly #orphans = new Set<ProcessInterface>()
-	// A guard reads `#destroying`, never `#ending !== undefined`. `destroy` assigns the boolean before
+	// A guard reads `#destroying`, never `#ended !== undefined`. `destroy` assigns the boolean before
 	// it assigns the barrier, so the boolean also covers the synchronous prefix of the teardown, which
-	// runs while `#ending` is still `undefined`.
+	// runs while `#ended` is still `undefined`.
 	#destroying = false
-	#ending: Promise<void> | undefined
+	#ended: Promise<void> | undefined
 
 	/**
 	 * Constructs a process registry.
@@ -174,10 +174,10 @@ export class ProcessManager implements ProcessManagerInterface {
 	 * @returns The stable barrier shared by every call
 	 */
 	destroy(): Promise<void> {
-		if (this.#ending !== undefined) return this.#ending
+		if (this.#ended !== undefined) return this.#ended
 		this.#destroying = true
-		this.#ending = this.#teardown()
-		return this.#ending
+		this.#ended = this.#teardown()
+		return this.#ended
 	}
 
 	// Releases the reservation when construction throws, so a refused launch strands no id.

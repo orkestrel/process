@@ -2,54 +2,16 @@ import type { ProcessExit } from '@src/core'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { createRecorder, waitForCondition } from '@orkestrel/test'
+import { captureError, createRecorder, waitForCondition } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { isProcessError } from '@src/core'
 import { createProcess, createProcessManager, createSession } from '@src/server'
-import { childCommand } from '../../setupServer.js'
-
-// The members each factory's return must carry, read off the interface each one declares as its
-// return type. A factory that returned the wrong entity, or a class that lost a member, fails here
-// rather than at the first call site that reaches for one.
-const PROCESS_MEMBERS: readonly string[] = Object.freeze([
-	'pid',
-	'code',
-	'signal',
-	'emitter',
-	'lines',
-	'evidence',
-	'truncated',
-	'settled',
-	'stopping',
-	'exit',
-	'send',
-	'stop',
-	'destroy',
-])
-const SESSION_MEMBERS: readonly string[] = Object.freeze([
-	'pid',
-	'code',
-	'signal',
-	'emitter',
-	'evidence',
-	'settled',
-	'stopping',
-	'ending',
-	'exit',
-	'write',
-	'end',
-	'stop',
-	'destroy',
-])
-const MANAGER_MEMBERS: readonly string[] = Object.freeze([
-	'emitter',
-	'count',
-	'process',
-	'processes',
-	'launch',
-	'stop',
-	'destroy',
-])
+import {
+	childCommand,
+	MANAGER_MEMBERS,
+	PROCESS_MEMBERS,
+	SESSION_MEMBERS,
+} from '../../setupServer.js'
 
 describe('createProcess', () => {
 	it('returns a child carrying every member its interface declares', async () => {
@@ -102,18 +64,14 @@ describe('createProcess', () => {
 		const scratch = createScratch()
 		const refused = join(scratch.path, 'refused.txt')
 		const control = join(scratch.path, 'control.txt')
-		let thrown: unknown
-
 		try {
-			try {
+			const thrown = captureError(() => {
 				createProcess({
 					command: childCommand('write', refused),
 					workspace: process.cwd(),
 					backlog: 0,
 				})
-			} catch (error) {
-				thrown = error
-			}
+			})
 			const spawned = createProcess({
 				command: childCommand('write', control),
 				workspace: process.cwd(),

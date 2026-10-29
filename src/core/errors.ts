@@ -4,7 +4,7 @@ import type {
 	ProcessErrorOptions,
 	ExecuteResult,
 } from './types.js'
-import { holds, isError } from '@orkestrel/contract'
+import { holds, INTRINSICS, isObject } from '@orkestrel/contract'
 import { PROCESS_ERROR_CODES } from './constants.js'
 
 /**
@@ -35,7 +35,7 @@ export class ProcessError extends Error {
 	constructor(message: string, options: ProcessErrorOptions) {
 		const cause = options.cause
 		super(message, cause === undefined ? undefined : { cause })
-		Object.defineProperty(this, Symbol.for('@orkestrel/process.error'), { value: true })
+		INTRINSICS.define(this, Symbol.for('@orkestrel/process.error'), { value: this })
 		this.code = options.code
 		if (options.context !== undefined) this.context = options.context
 		if (options.result !== undefined) this.result = options.result
@@ -46,11 +46,11 @@ export class ProcessError extends Error {
  * Checks whether an unknown value is a {@link ProcessError}.
  *
  * @remarks
- * Recognition combines a global own-property brand with the native `Error` base, the subclass
- * prototype, the fixed name, and a code {@link PROCESS_ERROR_CODES} declares. The brand is
- * recognized across duplicate installations and ESM/CommonJS module copies at 0.0.4 or later. A copy
- * earlier than 0.0.4 stamps no brand, so an error it throws stays outside the type, and so does a
- * plain or property-only lookalike.
+ * Recognition requires a global own-property identity brand, the native `Error` base, a subclass
+ * prototype, a declared code, and correctly shaped optional context and result members. Subclass
+ * instances pass without reading `name`. Duplicate installations and ESM/CommonJS copies that stamp
+ * their own identity recognize each other. Older boolean brands, transparent proxies, and plain
+ * objects fail recognition.
  *
  * @param value - The value to inspect
  * @returns True if the value is a `ProcessError` instance; false otherwise
@@ -62,17 +62,44 @@ export class ProcessError extends Error {
  * ```
  */
 export function isProcessError(value: unknown): value is ProcessError {
-	if (!isError(value)) return false
+	if (!isObject(value)) return false
 	return holds(() => {
-		if (Object.getPrototypeOf(value) === Error.prototype) return false
-		if (value.name !== 'ProcessError' || !('code' in value)) return false
-		const descriptor = Object.getOwnPropertyDescriptor(
-			value,
-			Symbol.for('@orkestrel/process.error'),
+		if (!(value instanceof INTRINSICS.error)) return false
+		if (INTRINSICS.prototype(value) === INTRINSICS.error.prototype) return false
+		const descriptor = INTRINSICS.describe(value, Symbol.for('@orkestrel/process.error'))
+		if (descriptor?.value !== value) return false
+		const code: unknown = INTRINSICS.reflect.read(value, 'code')
+		if (!PROCESS_ERROR_CODES.some((declared) => declared === code)) return false
+		const context: unknown = INTRINSICS.reflect.read(value, 'context')
+		if (context !== undefined) {
+			if (!isObject(context)) return false
+			if (
+				!['id', 'command'].every((key) => {
+					const member: unknown = INTRINSICS.reflect.read(context, key)
+					return member === undefined || typeof member === 'string'
+				})
+			)
+				return false
+			const exit: unknown = INTRINSICS.reflect.read(context, 'code')
+			const signal: unknown = INTRINSICS.reflect.read(context, 'signal')
+			if (exit !== undefined && exit !== null && typeof exit !== 'number') return false
+			if (signal !== undefined && signal !== null && typeof signal !== 'string') return false
+		}
+		const result: unknown = INTRINSICS.reflect.read(value, 'result')
+		if (result === undefined) return true
+		if (!isObject(result)) return false
+		const exit: unknown = INTRINSICS.reflect.read(result, 'code')
+		const signal: unknown = INTRINSICS.reflect.read(result, 'signal')
+		return (
+			(exit === null || typeof exit === 'number') &&
+			(signal === null || typeof signal === 'string') &&
+			['command', 'stdout', 'stderr'].every(
+				(key) => typeof INTRINSICS.reflect.read(result, key) === 'string',
+			) &&
+			['failed', 'expired', 'aborted', 'truncated'].every(
+				(key) => typeof INTRINSICS.reflect.read(result, key) === 'boolean',
+			)
 		)
-		if (descriptor?.value !== true) return false
-		const code: unknown = value.code
-		return PROCESS_ERROR_CODES.some((declared) => declared === code)
 	})
 }
 
@@ -133,11 +160,11 @@ export function createInvalidError(subject: string, value: unknown): ProcessErro
  * @returns A typed run failure carrying its {@link ExecuteResult}
  */
 export function createExecuteError(result: ExecuteResult, cause?: unknown): ProcessError {
-	let reason = `exited with code ${String(result.code)}`
-	if (result.signal !== null) reason = `was killed by ${result.signal}`
-	if (result.truncated) reason = 'exceeded its output limit'
-	if (result.aborted) reason = 'was aborted'
-	if (result.expired) reason = 'timed out'
+	const exit = `exited with code ${String(result.code)}`
+	const signal = result.signal !== null ? `was killed by ${result.signal}` : exit
+	const output = result.truncated ? 'exceeded its output limit' : signal
+	const abort = result.aborted ? 'was aborted' : output
+	const reason = result.expired ? 'timed out' : abort
 	return new ProcessError(`Command '${result.command}' ${reason}`, {
 		code: result.expired ? 'timeout' : 'spawn',
 		context: { command: result.command, code: result.code, signal: result.signal },

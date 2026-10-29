@@ -22,3 +22,65 @@ export function childCommand(mode: string, detail?: string): ProcessCommand {
 		detail === undefined ? [resolveChildFixture(), mode] : [resolveChildFixture(), mode, detail]
 	return { file: process.execPath, arguments: argumentsList }
 }
+
+// The members each factory's return must carry, read off the interface each one declares as its
+// return type. A factory that returned the wrong entity, or a class that lost a member, fails here
+// rather than at the first call site that reaches for one.
+export const PROCESS_MEMBERS: readonly string[] = Object.freeze([
+	'pid',
+	'code',
+	'signal',
+	'emitter',
+	'lines',
+	'evidence',
+	'truncated',
+	'settled',
+	'terminated',
+	'exit',
+	'send',
+	'stop',
+	'destroy',
+])
+export const SESSION_MEMBERS: readonly string[] = Object.freeze([
+	'pid',
+	'code',
+	'signal',
+	'emitter',
+	'evidence',
+	'settled',
+	'terminated',
+	'ended',
+	'exit',
+	'write',
+	'end',
+	'stop',
+	'destroy',
+])
+export const MANAGER_MEMBERS: readonly string[] = Object.freeze([
+	'emitter',
+	'count',
+	'process',
+	'processes',
+	'launch',
+	'stop',
+	'destroy',
+])
+
+/** Records the exit listeners installed by a bounded native-exit wait. */
+export class ExitBoundary {
+	#listeners: Array<() => void> = []
+	readonly exitCode = null
+	readonly signalCode = null
+
+	get listeners(): ReadonlyArray<() => void> {
+		return this.#listeners
+	}
+
+	once(_event: 'exit', listener: () => void): void {
+		this.#listeners = [...this.#listeners, listener]
+	}
+
+	off(_event: 'exit', listener: () => void): void {
+		this.#listeners.splice(this.#listeners.indexOf(listener), 1)
+	}
+}

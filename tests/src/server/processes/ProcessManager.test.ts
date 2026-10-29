@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { holds } from '@orkestrel/contract'
-import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
+import { captureError, createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch, isRunning } from '@orkestrel/test/server'
 import { isProcessError, ProcessError } from '@src/core'
 import { createProcessManager } from '@src/server'
@@ -39,12 +39,9 @@ describe('ProcessManager', () => {
 		const options = { command: childCommand('sleep'), workspace: process.cwd(), grace: 20 }
 
 		manager.launch('unit', options)
-		let thrown: unknown
-		try {
+		const thrown = captureError(() => {
 			manager.launch('unit', options)
-		} catch (error) {
-			thrown = error
-		}
+		})
 
 		expect(launched.calls).toEqual([['unit']])
 		expect(isProcessError(thrown)).toBe(true)
@@ -80,15 +77,15 @@ describe('ProcessManager', () => {
 			workspace: process.cwd(),
 			grace: 20,
 		})
-		let registered: boolean | undefined
+		const registered = Promise.withResolvers<boolean>()
 		child.emitter.on('exit', () => {
-			registered = manager.process('job') === child
+			registered.resolve(manager.process('job') === child)
 		})
 
 		await child.exit
 		await waitForDelay()
 
-		expect(registered).toBe(true)
+		expect(await registered.promise).toBe(true)
 		expect(manager.count).toBe(0)
 
 		await manager.destroy()
@@ -135,12 +132,9 @@ describe('ProcessManager', () => {
 		const manager = createProcessManager()
 		const ending = manager.destroy()
 
-		let thrown: unknown
-		try {
+		const thrown = captureError(() => {
 			manager.launch('late', { command: childCommand('exit', '0'), workspace: process.cwd() })
-		} catch (error) {
-			thrown = error
-		}
+		})
 		await ending
 
 		expect(isProcessError(thrown)).toBe(true)
@@ -167,8 +161,7 @@ describe('ProcessManager', () => {
 			const refused = createRecorder<readonly [ProcessExit]>()
 			const teardown: Array<Promise<void>> = []
 
-			let thrown: unknown
-			try {
+			const thrown = captureError(() => {
 				manager.launch('racer', {
 					command: childCommand('sleep'),
 					workspace: process.cwd(),
@@ -180,9 +173,7 @@ describe('ProcessManager', () => {
 						return 20
 					},
 				})
-			} catch (error) {
-				thrown = error
-			}
+			})
 			await Promise.all(teardown)
 			// The recorder as the barrier resolved. Every later read waits, so this snapshot is the only
 			// value that can report whether the barrier itself carried the teardown.
@@ -235,11 +226,9 @@ describe('ProcessManager', () => {
 		const scratch = createScratch()
 		const marker = join(scratch.path, 'stranded.pid')
 		const teardown: Array<Promise<void>> = []
-		let pid = 0
 
 		try {
-			let thrown: unknown
-			try {
+			const thrown = captureError(() => {
 				manager.launch('thrower', {
 					command: childCommand('announce', marker),
 					workspace: process.cwd(),
@@ -252,14 +241,12 @@ describe('ProcessManager', () => {
 						throw new Error('option getter refused')
 					},
 				})
-			} catch (error) {
-				thrown = error
-			}
+			})
 			await Promise.all(teardown)
 			// The fixture publishes its own process id the moment it starts, so an absent marker after
 			// the child-startup window proves that the refused launch spawned nothing at all.
 			await waitForDelay(1_000)
-			if (existsSync(marker)) pid = Number.parseInt(readFileSync(marker, 'utf8'), 10)
+			const pid = existsSync(marker) ? Number.parseInt(readFileSync(marker, 'utf8'), 10) : 0
 
 			expect(thrown).toBeInstanceOf(Error)
 			expect(isProcessError(thrown)).toBe(false)
@@ -267,6 +254,7 @@ describe('ProcessManager', () => {
 			expect(existsSync(marker)).toBe(false)
 			expect(pid).toBe(0)
 		} finally {
+			const pid = existsSync(marker) ? Number.parseInt(readFileSync(marker, 'utf8'), 10) : 0
 			if (pid > 0) holds(() => process.kill(pid, 'SIGKILL'))
 			scratch.destroy()
 		}

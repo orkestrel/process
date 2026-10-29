@@ -92,7 +92,7 @@ describe('Supervisor moments', () => {
 
 				expect(relieved).toBe(true)
 				expect(settledAtRelease).toBe(false)
-				expect(engine.stopping).toBe(true)
+				expect(engine.terminated).toBe(true)
 				expect(order.filter((moment) => moment === 'relieve')).toEqual(['relieve'])
 				expect(order.indexOf('relieve')).toBeLessThan(order.indexOf('terminal'))
 			} finally {
@@ -126,17 +126,14 @@ describe('Supervisor moments', () => {
 				received.push(chunk.toString('utf8'))
 			})
 
-			let held: number | undefined
 			try {
 				await waitForCondition(
 					'the orphan root announces the descendant holding its read ends',
 					() => received.join('').includes('\n'),
 					{ budget: 10_000 },
 				)
-				const [line = ''] = received.join('').split(/\r\n|\n/u)
-				held = Number.parseInt(line.replace('grandchild:', ''), 10)
 
-				await engine.ending
+				await engine.ended
 				const settlement = await Promise.race([
 					engine.exit.then(() => 'settled'),
 					waitForDelay(150).then(() => 'pending'),
@@ -150,8 +147,9 @@ describe('Supervisor moments', () => {
 				expect((await engine.exit).drained).toBe(false)
 				expect(moments.calls.map((call) => call[0])).not.toContain('fault')
 			} finally {
-				const pid = held
-				if (pid !== undefined) holds(() => process.kill(pid, 'SIGKILL'))
+				const [line = ''] = received.join('').split(/\r\n|\n/u)
+				const pid = Number.parseInt(line.replace('grandchild:', ''), 10)
+				if (pid > 0) holds(() => process.kill(pid, 'SIGKILL'))
 				await engine.destroy()
 			}
 		},

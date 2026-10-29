@@ -3,6 +3,30 @@ import { describe, expect, it } from 'vitest'
 import { isConstructor, isFunction, isRecord } from '@orkestrel/contract'
 
 describe('process error', () => {
+	it('uses its own identity brand and accepts renamed subclasses', () => {
+		const error = new ProcessError('fixture', { code: 'invalid' })
+		expect(Object.getOwnPropertyDescriptor(error, Symbol.for('@orkestrel/process.error'))).toEqual({
+			value: error,
+			writable: false,
+			enumerable: false,
+			configurable: false,
+		})
+		Object.defineProperty(error, 'name', { value: 'SpecializedError' })
+		expect(isProcessError(error)).toBe(true)
+		expect(isProcessError(new Proxy(error, {}))).toBe(false)
+	})
+
+	it('checks the declared optional context and result members', () => {
+		for (const context of [null, { id: 1 }, { command: false }, { code: '1' }, { signal: 1 }]) {
+			const error = new ProcessError('fixture', { code: 'invalid' })
+			Object.defineProperty(error, 'context', { value: context })
+			expect(isProcessError(error)).toBe(false)
+		}
+		const error = new ProcessError('fixture', { code: 'spawn' })
+		Object.defineProperty(error, 'result', { value: {} })
+		expect(isProcessError(error)).toBe(false)
+	})
+
 	it('narrows its own error and refuses a plain Error', () => {
 		const error = createDuplicateError('unit')
 		expect(isProcessError(error)).toBe(true)

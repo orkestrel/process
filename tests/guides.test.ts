@@ -28,7 +28,7 @@ const MODULES = Object.freeze({
  */
 const INTERNALS: Readonly<Record<string, readonly string[]>> = Object.freeze({
 	'@orkestrel/process': Object.freeze([]),
-	'@orkestrel/process/server': Object.freeze([]),
+	'@orkestrel/process/server': Object.freeze(['class Execution']),
 })
 /**
  * Declarations deliberately kept out of the barrel, as `computeSymbolKey` strings.
@@ -75,7 +75,8 @@ await new GuideCommand({
 		isExternalLink,
 		resolveLink,
 	} = await import('@orkestrel/guide')
-	const { requireValue, waitForCondition, waitForDelay } = await import('@orkestrel/test')
+	const { captureError, requireValue, waitForCondition, waitForDelay } =
+		await import('@orkestrel/test')
 	const {
 		createDuplicateError,
 		createExecuteError,
@@ -105,6 +106,7 @@ await new GuideCommand({
 		execute,
 		executeSync,
 		formatCommand,
+		inspectProcess,
 		isExited,
 		isFile,
 		killProcess,
@@ -197,6 +199,7 @@ await new GuideCommand({
 				'execute',
 				'executeSync',
 				'formatCommand',
+				'inspectProcess',
 				'isExited',
 				'isFile',
 				'killProcess',
@@ -742,7 +745,7 @@ await new GuideCommand({
 
 		// The terminal-moment fence, whose point is that every surface reports one moment, so each is
 		// read back. The child ends itself, which is the path a reader meets first and the one where
-		// `stopping` stays false.
+		// `terminated` stays false.
 		it('reports one terminal moment across every surface of the terminal-moment fence', async () => {
 			const child = createProcess({
 				command: { file: 'node', arguments: ['-e', 'console.error("done")'] },
@@ -753,14 +756,14 @@ await new GuideCommand({
 			const exit = await child.exit
 			expect(exit.drained).toBe(true)
 			expect(child.settled).toBe(true)
-			expect(child.stopping).toBe(false)
+			expect(child.terminated).toBe(false)
 			expect(child.evidence).toBe('done\n')
 			await child.destroy()
 		})
 
 		// The byte-session fence, whose point is that the exact bytes come back and that `end` is not a
 		// termination. Each is read back: the echo against the payload with no terminator added, and
-		// `stopping` against the child ending itself because its input ended.
+		// `terminated` against the child ending itself because its input ended.
 		it('echoes the byte-session fence back unaltered and ends its child without terminating it', async () => {
 			const session = createSession({
 				command: { file: 'node', arguments: ['-e', 'process.stdin.pipe(process.stdout)'] },
@@ -772,17 +775,17 @@ await new GuideCommand({
 
 			expect(await session.write(new TextEncoder().encode('ping'))).toBe(true)
 			await session.end()
-			await session.ending
+			await session.ended
 
 			expect(Buffer.concat(received).toString('utf8')).toBe('ping')
 			const exit = await session.exit
 			expect(exit.code).toBe(0)
-			expect(session.stopping).toBe(false)
+			expect(session.terminated).toBe(false)
 			await session.destroy()
 		})
 
 		// The Vocabulary ruling that the two endings are named apart because a transport acts on each
-		// differently, and the Practices bullet telling a caller to race `ending` rather than `exit`. The
+		// differently, and the Practices bullet telling a caller to race `ended` rather than `exit`. The
 		// sentence is only worth asserting if the two really separate, so the case that separates them is
 		// driven here: a child that ends itself while a descendant it spawned keeps the inherited read
 		// ends open.
@@ -791,7 +794,7 @@ await new GuideCommand({
 				files['guides/process.md'],
 				'Missing file: guides/process.md',
 			).replace(/\s+/gu, ' ')
-			expect(guide).toContain('Race a cooperative shutdown window against `ending`')
+			expect(guide).toContain('Race a cooperative shutdown window against `ended`')
 
 			const received: Uint8Array[] = []
 			const session = createSession({
@@ -824,7 +827,7 @@ await new GuideCommand({
 			)
 
 			try {
-				await session.ending
+				await session.ended
 				const pending = await Promise.race([
 					session.exit.then(() => 'settled'),
 					waitForDelay(150).then(() => 'pending'),
@@ -965,25 +968,23 @@ await new GuideCommand({
 
 			const manager = createProcessManager()
 			const order: string[] = []
-			let ending: Promise<void> | undefined
-			let thrown: unknown
-			try {
+			const ending = Promise.withResolvers<void>()
+			const thrown = captureError(() => {
 				manager.launch('racer', {
 					command: { file: process.execPath, arguments: ['-e', ''] },
 					workspace: process.cwd(),
 					on: { exit: () => order.push('terminal') },
 					get grace() {
-						ending = manager.destroy()
-						void ending.then(() => order.push('barrier'))
+						void manager.destroy().then(() => {
+							order.push('barrier')
+							ending.resolve()
+						}, ending.reject)
 						return 20
 					},
 				})
-			} catch (error) {
-				thrown = error
-				order.push('refusal')
-			}
-			if (ending === undefined) throw new Error('The getter did not start destruction')
-			await ending
+			})
+			order.push('refusal')
+			await ending.promise
 
 			expect(isProcessError(thrown) ? thrown.code : undefined).toBe('protocol')
 			expect(order).toEqual(['refusal', 'terminal', 'barrier'])
@@ -1031,7 +1032,7 @@ await new GuideCommand({
 				files['guides/process.md'],
 				'Missing file: guides/process.md',
 			).replace(/\s+/gu, ' ')
-			expect(guide).toContain('Recognition holds across copies at 0.0.4 or later')
+			expect(guide).toContain('Recognition holds across copies that stamp their own identity')
 
 			const branded = createInvalidError("option 'grace'", -1)
 			// What a copy earlier than 0.0.4 throws: the same shape, the same name, the same declared
@@ -1182,12 +1183,9 @@ await new GuideCommand({
 		})
 
 		it('refuses the validation fence input before it spawns anything', () => {
-			let thrown: unknown
-			try {
+			const thrown = captureError(() => {
 				executeSync({ file: 'node', arguments: ['--version'] }, { timeout: -1 })
-			} catch (error) {
-				thrown = error
-			}
+			})
 			if (!isProcessError(thrown)) throw new Error('executeSync accepted a negative timeout')
 			expect(thrown.code).toBe('invalid')
 			expect(thrown.context?.value).toBe(-1)
@@ -1232,6 +1230,7 @@ await new GuideCommand({
 			claim: Buffer.from('hel'),
 		},
 		{ name: 'isFile', value: isFile(process.execPath), claim: true },
+		{ name: 'inspectProcess', value: inspectProcess(process.pid), claim: true },
 		{
 			name: 'mergePlatformEnvironment',
 			value: mergePlatformEnvironment('linux', {}, false, { TOKEN: 'a' }, { TOKEN: undefined }),

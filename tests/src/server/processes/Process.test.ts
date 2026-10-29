@@ -3,7 +3,13 @@ import { getEventListeners } from 'node:events'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { holds } from '@orkestrel/contract'
-import { collect, createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
+import {
+	captureError,
+	collect,
+	createRecorder,
+	waitForCondition,
+	waitForDelay,
+} from '@orkestrel/test'
 import { createScratch, destroyScratch, isRunning } from '@orkestrel/test/server'
 import { isProcessError, PROCESS_TIMER, ProcessError } from '@src/core'
 import { createProcess } from '@src/server'
@@ -1215,12 +1221,12 @@ describe('Process', () => {
 			expect(exit).toEqual({ code: 0, signal: null, drained: false })
 			expect(cut.settled).toBe(true)
 			// No verb was called on either child: the terminal moment arrived without one.
-			expect(cut.stopping).toBe(false)
+			expect(cut.terminated).toBe(false)
 			expect(ended).toEqual({ done: true, value: undefined })
 			expect(cut.evidence).toBe(frozen)
 			expect(closedExit).toEqual({ code: 0, signal: null, drained: true })
 			expect(closed.settled).toBe(true)
-			expect(closed.stopping).toBe(false)
+			expect(closed.terminated).toBe(false)
 		} finally {
 			holds(() => process.kill(cutHeld, 'SIGKILL'))
 			holds(() => process.kill(closedHeld, 'SIGKILL'))
@@ -1237,9 +1243,9 @@ describe('Process', () => {
 			writable: true,
 		})
 
-		const before = child.stopping
+		const before = child.terminated
 		const stopping = child.stop()
-		const during = child.stopping
+		const during = child.terminated
 		const accepted = await child.send('after stop')
 		await stopping
 
@@ -1255,9 +1261,9 @@ describe('Process', () => {
 		expect(before).toBe(false)
 		expect(during).toBe(true)
 		expect(accepted).toBe(false)
-		expect(child.stopping).toBe(true)
+		expect(child.terminated).toBe(true)
 		expect(child.settled).toBe(true)
-		expect(natural.stopping).toBe(false)
+		expect(natural.terminated).toBe(false)
 		expect(natural.settled).toBe(true)
 	})
 
@@ -1444,12 +1450,12 @@ describe('Process validation', () => {
 	})
 
 	it('spawns the same command file that it validated', async () => {
-		let reads = 0
+		const reads = createRecorder<readonly [string]>()
 		const child = createProcess({
 			command: {
 				get file() {
-					reads += 1
-					return reads === 1 ? process.execPath : `${process.execPath}\0changed`
+					reads.handler('file')
+					return reads.count === 1 ? process.execPath : `${process.execPath}\0changed`
 				},
 				arguments: [resolveChildFixture(), 'exit', '0'],
 			},
@@ -1458,7 +1464,7 @@ describe('Process validation', () => {
 
 		const exit = await child.exit
 
-		expect(reads).toBe(1)
+		expect(reads.calls).toEqual([['file']])
 		expect(exit.code).toBe(0)
 	})
 
@@ -1506,12 +1512,9 @@ describe('Process validation', () => {
 
 	it('refuses a drain outside its bounds and accepts both ends of the range', async () => {
 		for (const drain of [-1, 1.5, PROCESS_TIMER + 1]) {
-			let thrown: unknown
-			try {
+			const thrown = captureError(() => {
 				createProcess({ command: childCommand('exit', '0'), workspace: process.cwd(), drain })
-			} catch (error) {
-				thrown = error
-			}
+			})
 
 			expect(isProcessError(thrown), `drain ${String(drain)}`).toBe(true)
 			expect(isProcessError(thrown) ? thrown.code : undefined, `drain ${String(drain)}`).toBe(
@@ -1543,16 +1546,13 @@ describe('Process validation', () => {
 	})
 
 	it('codes a refused input as invalid and carries the rejected value', () => {
-		let thrown: unknown
-		try {
+		const thrown = captureError(() => {
 			createProcess({
 				command: childCommand('exit', '0'),
 				workspace: process.cwd(),
 				backlog: -1,
 			})
-		} catch (error) {
-			thrown = error
-		}
+		})
 
 		expect(isProcessError(thrown)).toBe(true)
 		expect(isProcessError(thrown) ? thrown.code : undefined).toBe('invalid')
@@ -1563,16 +1563,13 @@ describe('Process validation', () => {
 	// validation order made observable. The command is read and refused before the line pipeline's own
 	// `backlog`, so a face that validated `backlog` first would report that option here instead.
 	it('reports the command refusal when the command file and the backlog are both invalid', () => {
-		let thrown: unknown
-		try {
+		const thrown = captureError(() => {
 			createProcess({
 				command: { file: '', arguments: [] },
 				workspace: process.cwd(),
 				backlog: 0,
 			})
-		} catch (error) {
-			thrown = error
-		}
+		})
 
 		expect(isProcessError(thrown)).toBe(true)
 		expect(isProcessError(thrown) ? thrown.message : undefined).toBe('Invalid command file')
@@ -1583,16 +1580,13 @@ describe('Process validation', () => {
 	// that row reports the command because the order puts the command first, not because `backlog`
 	// stopped being validated.
 	it('reports the backlog refusal when the backlog alone is invalid', () => {
-		let thrown: unknown
-		try {
+		const thrown = captureError(() => {
 			createProcess({
 				command: childCommand('exit', '0'),
 				workspace: process.cwd(),
 				backlog: 0,
 			})
-		} catch (error) {
-			thrown = error
-		}
+		})
 
 		expect(isProcessError(thrown)).toBe(true)
 		expect(isProcessError(thrown) ? thrown.message : undefined).toBe("Invalid option 'backlog'")

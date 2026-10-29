@@ -1,17 +1,14 @@
-import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import type {
 	DetachOptions,
 	ExecutableOptions,
 	ExecuteInput,
-	ExecuteOptions,
 	ExecuteResult,
-	ExecuteSyncOptions,
 	ProcessCommand,
 	SpawnInput,
 } from '@src/core'
 import type { ProcessChildInterface } from './types.js'
 import { Buffer } from 'node:buffer'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { statSync } from 'node:fs'
 import { join, posix, win32 } from 'node:path'
 import { platform as hostPlatform } from 'node:process'
@@ -23,16 +20,7 @@ import {
 	isNonNegativeInteger,
 	isString,
 } from '@orkestrel/contract'
-import {
-	createExecuteError,
-	createInvalidError,
-	PROCESS_CONFIRMATION,
-	PROCESS_GRACE,
-	PROCESS_OUTPUT,
-	PROCESS_PATHEXT,
-	PROCESS_TIMER,
-	ProcessError,
-} from '@src/core'
+import { createInvalidError, PROCESS_PATHEXT, PROCESS_TIMER } from '@src/core'
 import { snapshotCommand } from './cloners.js'
 
 /**
@@ -55,13 +43,16 @@ import { snapshotCommand } from './cloners.js'
 export function trimTail(bytes: Uint8Array, limit: number): Buffer {
 	const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)
 	if (buffer.byteLength <= limit) return buffer
-	let start = buffer.byteLength - limit
-	while (start < buffer.byteLength) {
+	const offset = buffer.byteLength - limit
+	if (!(offset < buffer.byteLength)) return Buffer.from(buffer.subarray(offset))
+	for (const start of Array.from(
+		{ length: Math.ceil(buffer.byteLength - offset) },
+		(_, index) => offset + index,
+	)) {
 		const byte = buffer[start]
-		if (byte === undefined || (byte & 0xc0) !== 0x80) break
-		start += 1
+		if (byte === undefined || (byte & 0xc0) !== 0x80) return Buffer.from(buffer.subarray(start))
 	}
-	return Buffer.from(buffer.subarray(start))
+	return Buffer.from(buffer.subarray(buffer.byteLength))
 }
 
 /**
@@ -93,18 +84,17 @@ export function trimHead(bytes: Uint8Array, limit: number): Buffer {
 	// A lead byte opens at most a four-byte sequence, so only the three bytes before the cut can hold
 	// the lead of a sequence that reaches it.
 	const floor = Math.max(0, limit - 3)
-	let start = limit - 1
-	while (start >= floor) {
+	for (const start of Array.from(
+		{ length: Math.max(0, Math.floor(limit - floor)) },
+		(_, index) => limit - 1 - index,
+	)) {
 		const lead = buffer[start]
 		if (lead !== undefined && (lead & 0xc0) !== 0x80) {
-			let span = 1
-			if ((lead & 0xe0) === 0xc0) span = 2
-			else if ((lead & 0xf0) === 0xe0) span = 3
-			else if ((lead & 0xf8) === 0xf0) span = 4
+			const span =
+				(lead & 0xe0) === 0xc0 ? 2 : (lead & 0xf0) === 0xe0 ? 3 : (lead & 0xf8) === 0xf0 ? 4 : 1
 			if (start + span > limit) return Buffer.from(buffer.subarray(0, start))
 			break
 		}
-		start -= 1
 	}
 	return Buffer.from(buffer.subarray(0, limit))
 }
@@ -623,6 +613,30 @@ export function isExited(child: Pick<ProcessChildInterface, 'exitCode' | 'signal
 }
 
 /**
+ * Reports whether a process or POSIX process group still exists.
+ *
+ * @param pid - A positive process id, or a negative POSIX process-group id
+ * @returns True when the host confirms existence or refuses permission; false for ESRCH; undefined for another host failure
+ * @throws A {@link ProcessError} coded `invalid` for a noninteger id, zero, or minus one
+ * @remarks A negative id uses the host's process-group convention on POSIX. Windows supports positive process ids only.
+ * @example
+ * ```ts
+ * inspectProcess(process.pid) // true
+ * ```
+ */
+export function inspectProcess(pid: number): boolean | undefined {
+	if (!Number.isSafeInteger(pid) || pid === 0 || pid === -1) {
+		throw createInvalidError('process id', pid)
+	}
+	try {
+		return process.kill(pid, 0)
+	} catch (error) {
+		const code = isError(error) && 'code' in error ? error.code : undefined
+		return code === 'ESRCH' ? false : code === 'EPERM' ? true : undefined
+	}
+}
+
+/**
  * Signals one owned child process, or its detached process group on a POSIX host.
  *
  * @remarks
@@ -833,289 +847,6 @@ export function buildExecuteResult(input: ExecuteInput): ExecuteResult {
 		aborted: input.aborted,
 		truncated: input.truncated,
 	})
-}
-
-/**
- * Runs one command to completion, buffering its output, and settles with the outcome.
- *
- * @remarks
- * The executable is resolved through {@link buildSpawn}, so no run uses a shell. On a POSIX host the
- * child is detached, which is what lets its whole process group be terminated. Standard output and
- * error are each byte-bounded by `limit` (default {@link PROCESS_OUTPUT}) and `truncated` reports
- * whether either stream exceeded it. Each capture keeps one byte beyond `limit`, so the single
- * code-point-boundary trim in {@link buildExecuteResult} reads the first excluded byte and never
- * delivers a split multibyte sequence. A positive `timeout` and an aborting `signal` both terminate the
- * child through the same bounded stop, and only the earliest is recorded: a timeout reports
- * `expired` and an abort reports `aborted`, never both. After termination the outcome is awaited for
- * a bounded window, so a descendant holding the child's stdio cannot keep the run pending. That bound
- * covers a terminated run alone: a run with no `timeout` and no `signal` settles on stdio completion
- * rather than on process exit, so a descendant that inherited the child's stdio holds the run open
- * after the child itself has gone. Give such a run a `timeout`. The child's `environment` merges over
- * the parent unless the command is `isolated`, then `options.environment` on top, and `options.input`
- * overrides `command.input`. A host fault while writing that input terminates the run by design and
- * marks its result failed; a strict rejection carries the host fault as its cause. This differs
- * from `Process` constructor input, whose package-initiated input phase stays quiet. Unless `strict`
- * is `false`, a failed run rejects with a {@link ProcessError} carrying the {@link ExecuteResult};
- * {@link createExecuteError} constructs every rejection outside the input-fault door. An invalid
- * option or command string rejects before the child is spawned, because an async function cannot
- * throw synchronously.
- *
- * @param command - The executable, arguments, and optional environment and input
- * @param options - Working directory, timeout, grace, signal, capture limit, and failure delivery
- * @returns The settled run outcome
- * @throws A {@link ProcessError} coded `invalid` for a malformed option, command string, or batch-bound argument, or one carrying the {@link ExecuteResult} when the run failed and `strict` is not `false`
- *
- * @example
- * ```ts
- * const result = await execute({ file: 'git', arguments: ['status'] }, { workspace: process.cwd() })
- * ```
- */
-export async function execute(
-	command: ProcessCommand,
-	options?: ExecuteOptions,
-): Promise<ExecuteResult> {
-	const snapshot = snapshotCommand(command)
-	const optionEnvironment = options?.environment
-	const optionWorkspace = options?.workspace
-	const optionInput = options?.input
-	const optionTimeout = options?.timeout
-	const optionGrace = options?.grace
-	const optionSignal = options?.signal
-	const optionStrict = options?.strict
-	const optionLimit = options?.limit
-	validateCommand(snapshot)
-	validateEnvironment(optionEnvironment)
-	validateWorkspace(optionWorkspace)
-	validateTimer(optionTimeout, "option 'timeout'")
-	validateTimer(optionGrace, "option 'grace'")
-	validateBytes(optionLimit, "option 'limit'", 0)
-	const limit = optionLimit ?? PROCESS_OUTPUT
-	const grace = optionGrace ?? PROCESS_GRACE
-	const timeout = optionTimeout ?? 0
-	const strict = optionStrict ?? true
-	const text = optionInput ?? snapshot.input
-	const line = formatCommand(snapshot)
-	const workspace = optionWorkspace ?? process.cwd()
-	const environment = mergeEnvironment(
-		snapshot.isolated === true,
-		snapshot.environment,
-		optionEnvironment,
-	)
-	const plan = buildSpawn(snapshot, { workspace, environment })
-	const settled = Promise.withResolvers<ExecuteResult>()
-	const terminate = new AbortController()
-	const cleanup = new AbortController()
-	const finish = new AbortController()
-	const inputFailure = new AbortController()
-	const outChunks: Buffer[] = []
-	const errChunks: Buffer[] = []
-	let spawned = false
-	let expired = false
-	let aborted = false
-	let outRetained = 0
-	let errRetained = 0
-	let cause: unknown
-	let timeoutTimer: ReturnType<typeof setTimeout> | undefined
-	let confirmTimer: ReturnType<typeof setTimeout> | undefined
-
-	const child: ChildProcessWithoutNullStreams = spawn(plan.file, [...plan.arguments], {
-		cwd: workspace,
-		detached: process.platform !== 'win32',
-		env: environment,
-		stdio: ['pipe', 'pipe', 'pipe'],
-		windowsHide: true,
-		windowsVerbatimArguments: plan.verbatim,
-	})
-
-	finish.signal.addEventListener(
-		'abort',
-		() => {
-			clearTimeout(timeoutTimer)
-			clearTimeout(confirmTimer)
-			cleanup.abort()
-			settled.resolve(
-				buildExecuteResult({
-					command: line,
-					stdout: Buffer.concat(outChunks),
-					stderr: Buffer.concat(errChunks),
-					code: child.exitCode,
-					signal: child.signalCode,
-					expired,
-					aborted,
-					truncated: outRetained > limit || errRetained > limit,
-					limit,
-					...(cause === undefined ? {} : { cause }),
-				}),
-			)
-		},
-		{ once: true },
-	)
-
-	terminate.signal.addEventListener(
-		'abort',
-		() => {
-			if (finish.signal.aborted) return
-			clearTimeout(timeoutTimer)
-			cleanup.abort()
-			void stopChild(child, grace, PROCESS_CONFIRMATION).then(() => {
-				if (finish.signal.aborted) return
-				confirmTimer = setTimeout(() => finish.abort(), PROCESS_CONFIRMATION)
-			})
-		},
-		{ once: true },
-	)
-
-	inputFailure.signal.addEventListener(
-		'abort',
-		() => {
-			if (finish.signal.aborted) return
-			cause = inputFailure.signal.reason
-			terminate.abort()
-		},
-		{ once: true },
-	)
-
-	child.stdin.on('error', (error: Error) => inputFailure.abort(error))
-	child.stdout.on('data', (chunk: unknown) => {
-		const captured = captureChunk(chunk, limit + 1 - outRetained)
-		if (captured === undefined) return
-		outRetained += captured.byteLength
-		outChunks.push(captured)
-	})
-	child.stderr.on('data', (chunk: unknown) => {
-		const captured = captureChunk(chunk, limit + 1 - errRetained)
-		if (captured === undefined) return
-		errRetained += captured.byteLength
-		errChunks.push(captured)
-	})
-	child.once('spawn', () => {
-		spawned = true
-	})
-	child.once('error', (error: unknown) => {
-		if (spawned) return
-		cause = error
-		finish.abort()
-	})
-	child.once('close', () => finish.abort())
-
-	if (text !== undefined) {
-		child.stdin.write(text, (error?: Error | null) => {
-			if (error !== undefined && error !== null) inputFailure.abort(error)
-		})
-	}
-	child.stdin.end()
-	if (timeout > 0) {
-		timeoutTimer = setTimeout(() => {
-			expired = true
-			terminate.abort()
-		}, timeout)
-	}
-	if (optionSignal !== undefined) {
-		optionSignal.addEventListener(
-			'abort',
-			() => {
-				aborted = true
-				terminate.abort()
-			},
-			{ once: true, signal: cleanup.signal },
-		)
-		if (optionSignal.aborted) {
-			aborted = true
-			terminate.abort()
-		}
-	}
-
-	const result = await settled.promise
-	if (result.failed && strict) {
-		if (cause !== undefined && cause === inputFailure.signal.reason) {
-			throw new ProcessError(`Command '${result.command}' failed while writing standard input`, {
-				code: 'input',
-				context: { command: result.command, code: result.code, signal: result.signal },
-				cause: inputFailure.signal.reason,
-				result,
-			})
-		}
-		throw createExecuteError(result, cause)
-	}
-	return result
-}
-
-/**
- * Runs one command to completion synchronously, buffering its output, and returns the outcome.
- *
- * @remarks
- * The synchronous counterpart of {@link execute}, spawned through the same resolver and never through a
- * shell. The host offers no cooperative termination window and no in-flight cancellation, so this
- * contract carries neither. A positive `timeout` ends only the root process and can leave
- * descendants running; use {@link execute} or {@link Process} when timeout must terminate the tree. A
- * timeout and an output overflow both end the root with `SIGKILL`: an overflow reports `truncated`
- * and `failed` together and trims the partial output to `limit`, where {@link execute} keeps reading and
- * reports `truncated` without failing. The environment and input follow the same merge as
- * {@link execute}. Unless `strict` is `false`, a failed run throws a {@link createExecuteError}
- * carrying the {@link ExecuteResult}.
- *
- * @param command - The executable, arguments, and optional environment and input
- * @param options - Working directory, timeout, capture limit, and failure delivery
- * @returns The run outcome
- * @throws A {@link ProcessError} coded `invalid` for a malformed option, command string, or batch-bound argument, or one carrying the {@link ExecuteResult} when the run failed and `strict` is not `false`
- *
- * @example
- * ```ts
- * const result = executeSync({ file: 'git', arguments: ['--version'] }, { strict: false })
- * ```
- */
-export function executeSync(command: ProcessCommand, options?: ExecuteSyncOptions): ExecuteResult {
-	const snapshot = snapshotCommand(command)
-	const optionEnvironment = options?.environment
-	const optionWorkspace = options?.workspace
-	const optionInput = options?.input
-	const optionTimeout = options?.timeout
-	const optionStrict = options?.strict
-	const optionLimit = options?.limit
-	validateCommand(snapshot)
-	validateEnvironment(optionEnvironment)
-	validateWorkspace(optionWorkspace)
-	validateTimer(optionTimeout, "option 'timeout'")
-	validateBytes(optionLimit, "option 'limit'", 0)
-	const limit = optionLimit ?? PROCESS_OUTPUT
-	const timeout = optionTimeout ?? 0
-	const strict = optionStrict ?? true
-	const text = optionInput ?? snapshot.input
-	const line = formatCommand(snapshot)
-	const workspace = optionWorkspace ?? process.cwd()
-	const environment = mergeEnvironment(
-		snapshot.isolated === true,
-		snapshot.environment,
-		optionEnvironment,
-	)
-	const plan = buildSpawn(snapshot, { workspace, environment })
-	const outcome = spawnSync(plan.file, [...plan.arguments], {
-		cwd: workspace,
-		env: environment,
-		encoding: 'buffer',
-		maxBuffer: limit,
-		killSignal: 'SIGKILL',
-		windowsHide: true,
-		windowsVerbatimArguments: plan.verbatim,
-		...(text !== undefined ? { input: Buffer.from(text) } : {}),
-		...(timeout > 0 ? { timeout } : {}),
-	})
-	const error = outcome.error
-	const fault = error !== undefined && 'code' in error && isString(error.code) ? error.code : ''
-	const result = buildExecuteResult({
-		command: line,
-		stdout: Buffer.isBuffer(outcome.stdout) ? outcome.stdout : Buffer.alloc(0),
-		stderr: Buffer.isBuffer(outcome.stderr) ? outcome.stderr : Buffer.alloc(0),
-		code: outcome.status,
-		signal: outcome.signal,
-		expired: fault === 'ETIMEDOUT',
-		aborted: false,
-		truncated: fault === 'ENOBUFS',
-		limit,
-		...(error === undefined ? {} : { cause: error }),
-	})
-	if (result.failed && strict) throw createExecuteError(result, error)
-	return result
 }
 
 /**

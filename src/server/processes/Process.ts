@@ -163,8 +163,8 @@ export class Process implements ProcessInterface {
 	}
 
 	/** Reports whether termination began, including after the terminal moment. */
-	get stopping(): boolean {
-		return this.#engine.stopping
+	get terminated(): boolean {
+		return this.#engine.terminated
 	}
 
 	/** Settles with the terminal child state, observed once after stream close or the drain cutoff. */
@@ -263,9 +263,9 @@ export class Process implements ProcessInterface {
 		// With no consumer ever attached, retention stops at the mark and the stream keeps draining
 		// so the child can exit; a consumer attaching later receives the head, a gap, then the live
 		// stream.
-		const stopping = this.#engine.stopping
-		const limit = stopping ? this.#backlog * 2 : this.#backlog
-		if ((!this.#requested || stopping) && this.#pending + bytes > limit) {
+		const terminated = this.#engine.terminated
+		const limit = terminated ? this.#backlog * 2 : this.#backlog
+		if ((!this.#requested || terminated) && this.#pending + bytes > limit) {
 			this.#truncated = true
 			return
 		}
@@ -275,7 +275,7 @@ export class Process implements ProcessInterface {
 	}
 
 	#restrain(): void {
-		if (this.#paused || this.#engine.stopping || !this.#requested) return
+		if (this.#paused || this.#engine.terminated || !this.#requested) return
 		if (this.#pending < this.#backlog) return
 		this.#paused = true
 		this.#reader.pause()
@@ -283,7 +283,7 @@ export class Process implements ProcessInterface {
 
 	#relieve(): void {
 		if (!this.#paused || this.#ended) return
-		if (!this.#engine.stopping && this.#pending > this.#backlog / 2) return
+		if (!this.#engine.terminated && this.#pending > this.#backlog / 2) return
 		this.#paused = false
 		this.#reader.resume()
 	}

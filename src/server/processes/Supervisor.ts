@@ -37,7 +37,7 @@ import {
  * emitter and event map its consumers subscribe to.
  *
  * The child's ending and the supervision's ending are distinct. `pid`, `code`, and `signal` read the
- * host child directly, so they expose native exit as soon as the host records it, and `ending`
+ * host child directly, so they expose native exit as soon as the host records it, and `ended`
  * settles at that same moment. `settled`, `exit`, and `evidence` reach one terminal moment after the
  * read channels close or the bounded `drain` window cuts them off. That window is armed by the
  * child's native exit and by a termination this package initiated, so every way a child can end
@@ -87,7 +87,7 @@ export class Supervisor {
 	readonly #delivery: number
 	readonly #decoder = new StringDecoder('utf8')
 	readonly #exit = Promise.withResolvers<ProcessExit>()
-	readonly #ending = Promise.withResolvers<void>()
+	readonly #ended = Promise.withResolvers<void>()
 	readonly #signal: AbortSignal | undefined
 	readonly #abort: (() => void) | undefined
 	readonly #writes = new Map<
@@ -95,11 +95,11 @@ export class Supervisor {
 		ReturnType<typeof setTimeout> | undefined
 	>()
 	#tail: Buffer = Buffer.alloc(0)
-	// A guard reads `#stopping`, never `#termination !== undefined`. `#kill` assigns the boolean in
+	// A guard reads `#terminated`, never `#termination !== undefined`. `#kill` assigns the boolean in
 	// its synchronous prefix, which runs while `stop` is still evaluating
 	// `this.#termination = this.#kill()`, so the boolean also covers the retention and backpressure
 	// decisions a face takes while `#termination` is still `undefined`.
-	#stopping = false
+	#terminated = false
 	#settled = false
 	#input = 0
 	#failure: Error | undefined
@@ -215,8 +215,8 @@ export class Supervisor {
 	}
 
 	/** Reports whether termination began, including after the terminal moment. */
-	get stopping(): boolean {
-		return this.#stopping
+	get terminated(): boolean {
+		return this.#terminated
 	}
 
 	/**
@@ -227,8 +227,8 @@ export class Supervisor {
 	 * the host records them. It settles at the native exit, and at the terminal moment for a child
 	 * whose spawn produced no native exit at all, so it can never outlive the supervision.
 	 */
-	get ending(): Promise<void> {
-		return this.#ending.promise
+	get ended(): Promise<void> {
+		return this.#ended.promise
 	}
 
 	/** Settles with the terminal child state, observed once after stream close or the drain cutoff. */
@@ -276,7 +276,7 @@ export class Supervisor {
 	 */
 	deliver(bytes: Uint8Array): Promise<boolean> {
 		const stdin = this.#child.stdin
-		if (this.#settled || this.#stopping || this.#failure !== undefined || !stdin.writable) {
+		if (this.#settled || this.#terminated || this.#failure !== undefined || !stdin.writable) {
 			return Promise.resolve(false)
 		}
 		const settled = Promise.withResolvers<boolean>()
@@ -299,7 +299,7 @@ export class Supervisor {
 	 * Closes the standard-input channel while leaving the child running.
 	 *
 	 * @remarks
-	 * Never rejects, and terminates nothing: no signal is sent, `stopping` stays false, no drain
+	 * Never rejects, and terminates nothing: no signal is sent, `terminated` stays false, no drain
 	 * window is armed, and the terminal moment does not arrive. The child observes end of input and
 	 * decides for itself what to do about it, which is what separates this from `stop`.
 	 *
@@ -364,10 +364,10 @@ export class Supervisor {
 	// A native exit does not close the read ends: a descendant that inherited them holds them open
 	// for its own remaining life, and one that never ends never closes them at all. Arming the same
 	// bounded wait a requested termination awaits is what makes every ending reach the terminal
-	// moment. `ending` settles here rather than at that moment, because it reports the child's own
+	// moment. `ended` settles here rather than at that moment, because it reports the child's own
 	// exit and not the release of the channels a descendant may still hold.
 	#expire(): void {
-		this.#ending.resolve()
+		this.#ended.resolve()
 		if (this.#settled) return
 		void this.#wait()
 	}
@@ -396,8 +396,8 @@ export class Supervisor {
 		const exit = Object.freeze({ code: this.code, signal: this.signal, drained })
 		this.#exit.resolve(exit)
 		// A spawn that produced no child reports no native exit, so the terminal moment is the last
-		// place `ending` can settle rather than wait forever.
-		this.#ending.resolve()
+		// place `ended` can settle rather than wait forever.
+		this.#ended.resolve()
 		this.#terminal(exit)
 		// Release read handles only after every pull surface is final.
 		this.#child.stdout.destroy()
@@ -431,7 +431,7 @@ export class Supervisor {
 	// accepted and reports through the callback either way, which is why this never rejects.
 	#endInput(): Promise<void> {
 		const stdin = this.#child.stdin
-		if (this.#stopping || this.#settled || stdin.writableEnded || stdin.destroyed) {
+		if (this.#terminated || this.#settled || stdin.writableEnded || stdin.destroyed) {
 			return Promise.resolve()
 		}
 		const ended = Promise.withResolvers<void>()
@@ -472,7 +472,7 @@ export class Supervisor {
 			this.#settleWrites()
 			return
 		}
-		if (this.#failure !== undefined || this.#stopping) return
+		if (this.#failure !== undefined || this.#terminated) return
 		this.#failure = cause
 		this.#settleWrites()
 		this.#fault(new ProcessError('The standard-input channel failed', { code: 'protocol', cause }))
@@ -482,7 +482,7 @@ export class Supervisor {
 		// A paused stdout holds the child's own write, and therefore its exit. The face releases its
 		// backpressure before anything is signalled; later output drops at the face's teardown bound
 		// instead of pausing the stream again.
-		this.#stopping = true
+		this.#terminated = true
 		this.#relieve?.()
 		const confirmed = await stopChild(this.#child, this.#grace, PROCESS_CONFIRMATION)
 		this.#settleWrites()

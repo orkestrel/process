@@ -21,7 +21,7 @@ import { Supervisor } from './Supervisor.js'
  *
  * The standard-input channel is open from the spawn, and `end` closes it without terminating
  * anything. That is the member a cooperative protocol reaches for: the child observes end of input
- * and exits on its own, which `ending` reports. `stop` and `destroy` remain the terminations, and
+ * and exits on its own, which `ended` reports. `stop` and `destroy` remain the terminations, and
  * `exit` remains the terminal moment — the native exit plus at most `drain` while a descendant holds
  * the inherited read ends.
  *
@@ -126,13 +126,13 @@ export class Session implements SessionInterface {
 	}
 
 	/** Reports whether termination began, including after the terminal moment. `end` never turns it true. */
-	get stopping(): boolean {
-		return this.#engine.stopping
+	get terminated(): boolean {
+		return this.#engine.terminated
 	}
 
 	/** Settles at the child's own ending, awaited without the terminal moment's drain window. */
-	get ending(): Promise<void> {
-		return this.#engine.ending
+	get ended(): Promise<void> {
+		return this.#engine.ended
 	}
 
 	/** Settles with the terminal child state, observed once after stream close or the drain cutoff. */
@@ -160,7 +160,7 @@ export class Session implements SessionInterface {
 	 * Closes the standard-input channel and leaves the child running.
 	 *
 	 * @remarks
-	 * Never rejects and terminates nothing: `stopping` stays false and the terminal moment does not
+	 * Never rejects and terminates nothing: `terminated` stays false and the terminal moment does not
 	 * arrive. Every call shares one barrier, which resolves after the host flushes the writes it had
 	 * already accepted. A later `write` resolves `false`.
 	 *

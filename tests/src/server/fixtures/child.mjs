@@ -5,6 +5,18 @@ import { spawn } from 'node:child_process'
 import { appendFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
+class Sequence {
+	#index = 0
+
+	get index() {
+		return this.#index
+	}
+
+	advance() {
+		this.#index += 1
+	}
+}
+
 const [mode = 'exit', detail = '0'] = process.argv.slice(2)
 // The raw third argument, which is `undefined` when the caller passed none. `detail` carries a
 // default for the modes that need one, so a mode whose behavior changes on presence alone reads
@@ -62,9 +74,8 @@ if (mode === 'write') {
 	// event never arrives. `hold <ms>` releases it after a bounded window, so a caller can put a
 	// drain bound on either side of a real release. `late <path>` keeps writing diagnostics into the
 	// held pipe and appends the same bytes to a file, so a caller can prove late bytes existed.
-	let holder = ['sleep']
-	if (mode === 'orphan-late') holder = ['late', detail]
-	else if (passed !== undefined) holder = ['hold', passed]
+	const holder =
+		mode === 'orphan-late' ? ['late', detail] : passed !== undefined ? ['hold', passed] : ['sleep']
 	const grandchild = spawn(process.argv[0], [process.argv[1], ...holder], {
 		stdio: ['ignore', 1, 2],
 		detached: process.platform === 'win32',
@@ -95,10 +106,10 @@ if (mode === 'write') {
 	// The held pipe's destruction must not end the file-side proof, so swallow the stream error it
 	// otherwise raises.
 	process.stderr.on('error', () => undefined)
-	let index = 0
+	const sequence = new Sequence()
 	setInterval(() => {
-		const marker = `late:${String(index)}\n`
-		index += 1
+		const marker = `late:${String(sequence.index)}\n`
+		sequence.advance()
 		process.stderr.write(marker)
 		appendFileSync(detail, marker)
 	}, 20)
@@ -115,13 +126,13 @@ if (mode === 'write') {
 } else if (mode === 'chatty') {
 	// Emit far more lines than any consumer reads promptly, then let stdout flush: the eager pump
 	// must drain with no consumer so exit still resolves and a late consumer receives every line.
-	for (let index = 0; index < 4_096; index += 1) {
+	for (const index of Array.from({ length: 4_096 }, (_, position) => position)) {
 		process.stdout.write(`${String(index)}:${'x'.repeat(128)}\n`)
 	}
 } else if (mode === 'empty') {
 	// Emit a flood of empty lines and let stdout flush. Every line carries zero payload bytes, so only
 	// a backlog that charges each retained line its own framing cost can bound this stream.
-	for (let index = 0; index < 50_000; index += 1) process.stdout.write('\n')
+	for (const line of Array.from({ length: 50_000 }, () => '\n')) process.stdout.write(line)
 } else if (mode === 'partial-line') {
 	process.stdout.write('first-line\n')
 	// The final line carries no trailing newline: readline must still flush it as the last line.
@@ -150,13 +161,13 @@ if (mode === 'write') {
 } else if (mode === 'flood') {
 	// Trap the cooperative signal and keep producing framed output while termination drains stdout.
 	// The bounded parent must drop beyond its teardown cap without pausing this stream again.
-	let index = 0
+	const sequence = new Sequence()
 	process.on('SIGTERM', () => undefined)
 	process.stdout.write('ready\n')
 	setInterval(() => {
-		for (let count = 0; count < 256; count += 1) {
-			process.stdout.write(`${String(index)}:${'x'.repeat(128)}\n`)
-			index += 1
+		for (const text of Array.from({ length: 256 }, () => 'x'.repeat(128))) {
+			process.stdout.write(`${String(sequence.index)}:${text}\n`)
+			sequence.advance()
 		}
 	}, 1)
 } else if (mode === 'hang') {
