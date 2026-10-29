@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { isConstructor, isFunction, isRecord } from '@orkestrel/contract'
 
 describe('process error', () => {
+	it('accepts a callable context that carries the declared members', () => {
+		const context = Object.assign(() => undefined, { id: 'worker' })
+		expect(isProcessError(new ProcessError('failure', { code: 'invalid', context }))).toBe(true)
+	})
+
 	it('uses its own identity brand and accepts renamed subclasses', () => {
 		const error = new ProcessError('fixture', { code: 'invalid' })
 		expect(Object.getOwnPropertyDescriptor(error, Symbol.for('@orkestrel/process.error'))).toEqual({

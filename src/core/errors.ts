@@ -4,7 +4,7 @@ import type {
 	ProcessErrorOptions,
 	ExecuteResult,
 } from './types.js'
-import { holds, INTRINSICS, isObject } from '@orkestrel/contract'
+import { holds, INTRINSICS, isFunction, isObject } from '@orkestrel/contract'
 import { PROCESS_ERROR_CODES } from './constants.js'
 
 /**
@@ -72,7 +72,7 @@ export function isProcessError(value: unknown): value is ProcessError {
 		if (!PROCESS_ERROR_CODES.some((declared) => declared === code)) return false
 		const context: unknown = INTRINSICS.reflect.read(value, 'context')
 		if (context !== undefined) {
-			if (!isObject(context)) return false
+			if (!isObject(context) && !isFunction(context)) return false
 			if (
 				!['id', 'command'].every((key) => {
 					const member: unknown = INTRINSICS.reflect.read(context, key)
