@@ -74,10 +74,42 @@ describe('inspectProcess', () => {
 	})
 
 	it('refuses ids that do not identify one process or one group', () => {
-		for (const pid of [0, -1, 1.5, NaN, Infinity]) {
+		for (const pid of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
 			expect(() => inspectProcess(pid)).toThrow(ProcessError)
 		}
 	})
+
+	// The Windows process.kill host has no POSIX process-group probe for a negative id.
+	it.skipIf(process.platform !== 'win32')('refuses negative process ids on Windows', () => {
+		const error = captureError(() => inspectProcess(-2))
+		expect(isProcessError(error)).toBe(true)
+		expect(error).toMatchObject({ code: 'invalid' })
+	})
+
+	// Node's detached spawn creates a process group on POSIX; Windows exposes no group probe.
+	it.skipIf(process.platform === 'win32')(
+		'reports a real POSIX process group alive and then absent',
+		async () => {
+			const child = spawn(process.execPath, [resolveChildFixture(), 'sleep'], {
+				detached: true,
+				stdio: 'ignore',
+			})
+			const pid = child.pid
+			if (pid === undefined) throw new Error('The group fixture did not spawn')
+			try {
+				expect(inspectProcess(-pid)).toBe(true)
+				child.kill('SIGKILL')
+				await waitForExit(child, 5_000)
+				expect(isExited(child)).toBe(true)
+				expect(inspectProcess(-pid)).toBe(false)
+			} finally {
+				if (!isExited(child)) {
+					child.kill('SIGKILL')
+					await waitForExit(child, 5_000)
+				}
+			}
+		},
+	)
 })
 describe('trimHead', () => {
 	it('returns the whole buffer when it fits the limit', () => {

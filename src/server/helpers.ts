@@ -617,15 +617,20 @@ export function isExited(child: Pick<ProcessChildInterface, 'exitCode' | 'signal
  *
  * @param pid - A positive process id, or a negative POSIX process-group id
  * @returns True when the host confirms existence or refuses permission; false for ESRCH; undefined for another host failure
- * @throws A {@link ProcessError} coded `invalid` for a noninteger id, zero, or minus one
- * @remarks A negative id uses the host's process-group convention on POSIX. Windows supports positive process ids only.
+ * @throws A {@link ProcessError} coded `invalid` for an unsafe integer, zero, minus one, or a negative id on Windows
+ * @remarks Negative ids probe POSIX process groups. The `process.platform` branch refuses negative ids on Windows, where the host supports positive process ids only.
  * @example
  * ```ts
  * inspectProcess(process.pid) // true
  * ```
  */
 export function inspectProcess(pid: number): boolean | undefined {
-	if (!Number.isSafeInteger(pid) || pid === 0 || pid === -1) {
+	if (
+		!Number.isSafeInteger(pid) ||
+		pid === 0 ||
+		pid === -1 ||
+		(process.platform === 'win32' && pid < 0)
+	) {
 		throw createInvalidError('process id', pid)
 	}
 	try {

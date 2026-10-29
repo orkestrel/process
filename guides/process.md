@@ -151,6 +151,13 @@ The signalling and confirmation building blocks a bounded stop composes, from
 | `waitForClose`   | function | Waits for one child process's streams to close, bounded by a deadline.              |
 | `stopChild`      | function | Terminates one child process tree and reports whether its native exit was observed. |
 
+`inspectProcess` returns `true` while the process or POSIX process group exists, including
+when the host refuses the probe with `EPERM`. It returns `false` after the target is gone
+(`ESRCH`), and `undefined` for any other host failure. It throws a `ProcessError` coded
+`invalid` for a value that is not a safe integer, zero, or minus one. Windows accepts only
+positive process ids and refuses every negative id before the host call. On POSIX, a negative
+id other than minus one probes the process group identified by its magnitude.
+
 ### Validators
 
 The input refusals every public entry point runs before it spawns anything, from
@@ -1360,7 +1367,7 @@ const confirmed = await stopChild(worker, 5_000, 5_000)
 confirmed // true when the native exit arrived
 ```
 
-`stopChild` reports the child's own ended. Pair it with `waitForClose` to reach the supervision's
+`stopChild` reports the child's own ending. Pair it with `waitForClose` to reach the supervision's
 ending over a child you spawned yourself, and register that wait before the termination so a close
 landing between them is still observed.
 
