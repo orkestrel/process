@@ -53,21 +53,21 @@ await child.destroy()
 
 The interface-oriented constructors, from `@orkestrel/process/server`.
 
-| Name                   | Kind     | Summary                                                                                                                                                                                        |
-| ---------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createProcess`        | function | Creates one supervised child process and returns it as a `ProcessInterface`, so a caller holds the published contract rather than the `Process` class.                                         |
-| `createSession`        | function | Creates one raw byte session over a supervised child process and returns it as a `SessionInterface`, so a caller holds the published contract rather than the `Session` class.                 |
-| `createProcessManager` | function | Creates one empty keyed registry of supervised child processes and returns it as a `ProcessManagerInterface`, so a caller holds the published contract rather than the `ProcessManager` class. |
+| Name                   | Kind     | Signature                                                      | Summary                                                                                                                                                                                        |
+| ---------------------- | -------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createProcess`        | function | `(options: ProcessOptions) => ProcessInterface`                | Creates one supervised child process and returns it as a `ProcessInterface`, so a caller holds the published contract rather than the `Process` class.                                         |
+| `createSession`        | function | `(options: SessionOptions) => SessionInterface`                | Creates one raw byte session over a supervised child process and returns it as a `SessionInterface`, so a caller holds the published contract rather than the `Session` class.                 |
+| `createProcessManager` | function | `(options?: ProcessManagerOptions) => ProcessManagerInterface` | Creates one empty keyed registry of supervised child processes and returns it as a `ProcessManagerInterface`, so a caller holds the published contract rather than the `ProcessManager` class. |
 
 ### Spawns
 
 The one-shot and fire-and-forget spawns, from `@orkestrel/process/server`.
 
-| Name          | Kind     | Summary                                                                                      |
-| ------------- | -------- | -------------------------------------------------------------------------------------------- |
-| `execute`     | function | Runs one command to completion, buffering its output, and settles with the outcome.          |
-| `executeSync` | function | Runs one command to completion synchronously, buffering its output, and returns the outcome. |
-| `detach`      | function | Spawns one command as a detached process and returns without waiting for it.                 |
+| Name          | Kind     | Signature                                                                       | Summary                                                                                      |
+| ------------- | -------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `execute`     | function | `(command: ProcessCommand, options?: ExecuteOptions) => Promise<ExecuteResult>` | Runs one command to completion, buffering its output, and settles with the outcome.          |
+| `executeSync` | function | `(command: ProcessCommand, options?: ExecuteSyncOptions) => ExecuteResult`      | Runs one command to completion synchronously, buffering its output, and returns the outcome. |
+| `detach`      | function | `(command: ProcessCommand, options?: DetachOptions) => void`                    | Spawns one command as a detached process and returns without waiting for it.                 |
 
 ### Classes
 
@@ -76,13 +76,13 @@ The classes a factory constructs and the `Supervisor` engine a consumer construc
 interface, so its readonly data members are named under [Surface notes](#surface-notes) rather than
 in a Surface row.
 
-| Name             | Kind  | Summary                                                                                                                                          |
-| ---------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Process`        | class | Supervises one child, frames its standard output into lines under a bounded backlog, and keeps every observation channel aligned at termination. |
-| `Session`        | class | Supervises one child and publishes its standard output as raw bytes.                                                                             |
-| `Supervisor`     | class | Supervises one child process and reports each lifecycle moment to the face composing it.                                                         |
-| `ProcessManager` | class | Launches supervised children under caller-chosen ids, evicts each one as it settles, and destroys every live child on teardown.                  |
-| `ProcessError`   | class | Represents a child-process failure with a stable machine-readable category.                                                                      |
+| Name             | Kind  | Signature                                                             | Summary                                                                                                                                          |
+| ---------------- | ----- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Process`        | class | `new (options: ProcessOptions) => ProcessInterface`                   | Supervises one child, frames its standard output into lines under a bounded backlog, and keeps every observation channel aligned at termination. |
+| `Session`        | class | `new (options: SessionOptions) => SessionInterface`                   | Supervises one child and publishes its standard output as raw bytes.                                                                             |
+| `Supervisor`     | class | `new (options: ProcessOptions, face: SupervisorFace) => Supervisor`   | Supervises one child process and reports each lifecycle moment to the face composing it.                                                         |
+| `ProcessManager` | class | `new (options?: ProcessManagerOptions) => ProcessManagerInterface`    | Launches supervised children under caller-chosen ids, evicts each one as it settles, and destroys every live child on teardown.                  |
+| `ProcessError`   | class | `new (message: string, options: ProcessErrorOptions) => ProcessError` | Represents a child-process failure with a stable machine-readable category.                                                                      |
 
 ### Guards
 
@@ -90,66 +90,66 @@ The total guard, from `@orkestrel/process`.
 
 In a guard table a `Shape` cell holds the type the guard narrows to.
 
-| Name             | Kind     | Shape          | Summary                                              |
-| ---------------- | -------- | -------------- | ---------------------------------------------------- |
-| `isProcessError` | function | `ProcessError` | Checks whether an unknown value is a `ProcessError`. |
+| Name             | Kind     | Signature                                   | Summary                                              |
+| ---------------- | -------- | ------------------------------------------- | ---------------------------------------------------- |
+| `isProcessError` | function | `(value: unknown) => value is ProcessError` | Checks whether an unknown value is a `ProcessError`. |
 
 ### Error factories
 
 The constructors for each failure category, from `@orkestrel/process`.
 
-| Name                   | Kind     | Summary                                                                                                       |
-| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
-| `createDuplicateError` | function | Creates the `duplicate`-coded failure raised when a manager launch reuses a live id.                          |
-| `createProtocolError`  | function | Creates the `protocol`-coded failure raised when a launch is attempted on a registry that is being destroyed. |
-| `createInvalidError`   | function | Creates the `invalid`-coded failure raised when a public input is refused before anything is spawned.         |
-| `createExecuteError`   | function | Creates the failure raised when a run does not complete successfully and rejection is requested.              |
+| Name                   | Kind     | Signature                                                  | Summary                                                                                                       |
+| ---------------------- | -------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `createDuplicateError` | function | `(id: string) => ProcessError`                             | Creates the `duplicate`-coded failure raised when a manager launch reuses a live id.                          |
+| `createProtocolError`  | function | `(id: string) => ProcessError`                             | Creates the `protocol`-coded failure raised when a launch is attempted on a registry that is being destroyed. |
+| `createInvalidError`   | function | `(subject: string, value: unknown) => ProcessError`        | Creates the `invalid`-coded failure raised when a public input is refused before anything is spawned.         |
+| `createExecuteError`   | function | `(result: ExecuteResult, cause?: unknown) => ProcessError` | Creates the failure raised when a run does not complete successfully and rejection is requested.              |
 
 ### Command helpers
 
 The resolution and environment building blocks every spawn composes, from
 `@orkestrel/process/server`.
 
-| Name                        | Kind     | Summary                                                                                                                                 |
-| --------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `snapshotCommand`           | function | Takes one owned frozen snapshot of a caller's command.                                                                                  |
-| `formatCommand`             | function | Renders one command into its diagnostic command line.                                                                                   |
-| `quoteArgument`             | function | Quotes one command-line token for a `cmd.exe` command line.                                                                             |
-| `buildSpawn`                | function | Builds the resolved spawn form of one command for the current host.                                                                     |
-| `buildPlatformSpawn`        | function | Builds a spawn form from a resolved file and an explicit platform.                                                                      |
-| `buildExecutableCandidates` | function | Builds the executable candidates an explicit platform would search.                                                                     |
-| `resolveExecutable`         | function | Resolves a command file to the executable path the host would launch, or to `undefined` on a POSIX host, which performs its own lookup. |
-| `isFile`                    | function | Checks whether a path names a regular file.                                                                                             |
-| `readVariable`              | function | Reads one environment variable the way the current host resolves it.                                                                    |
-| `readPlatformVariable`      | function | Reads one environment variable under an explicit platform's key rules.                                                                  |
-| `mergeEnvironment`          | function | Merges environment overrides into the environment one child receives on the current host.                                               |
-| `mergePlatformEnvironment`  | function | Merges environment layers under an explicit platform's key rules.                                                                       |
+| Name                        | Kind     | Signature                                                                                                                                                                                                                                    | Summary                                                                                                                                 |
+| --------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `snapshotCommand`           | function | `(command: ProcessCommand) => ProcessCommand`                                                                                                                                                                                                | Takes one owned frozen snapshot of a caller's command.                                                                                  |
+| `formatCommand`             | function | `(command: ProcessCommand) => string`                                                                                                                                                                                                        | Renders one command into its diagnostic command line.                                                                                   |
+| `quoteArgument`             | function | `(value: string) => string`                                                                                                                                                                                                                  | Quotes one command-line token for a `cmd.exe` command line.                                                                             |
+| `buildSpawn`                | function | `(command: ProcessCommand, options?: ExecutableOptions) => SpawnInput`                                                                                                                                                                       | Builds the resolved spawn form of one command for the current host.                                                                     |
+| `buildPlatformSpawn`        | function | `(command: ProcessCommand, file: string, environment: Readonly<Record<string, string \| undefined>>, platform: NodeJS.Platform) => SpawnInput`                                                                                               | Builds a spawn form from a resolved file and an explicit platform.                                                                      |
+| `buildExecutableCandidates` | function | `(file: string, workspace: string, environment: Readonly<Record<string, string \| undefined>>, platform: NodeJS.Platform) => readonly string[]`                                                                                              | Builds the executable candidates an explicit platform would search.                                                                     |
+| `resolveExecutable`         | function | `(file: string, options?: ExecutableOptions) => string \| undefined`                                                                                                                                                                         | Resolves a command file to the executable path the host would launch, or to `undefined` on a POSIX host, which performs its own lookup. |
+| `isFile`                    | function | `(target: string) => boolean`                                                                                                                                                                                                                | Checks whether a path names a regular file.                                                                                             |
+| `readVariable`              | function | `(environment: Readonly<Record<string, string \| undefined>>, name: string) => string \| undefined`                                                                                                                                          | Reads one environment variable the way the current host resolves it.                                                                    |
+| `readPlatformVariable`      | function | `(environment: Readonly<Record<string, string \| undefined>>, name: string, platform: NodeJS.Platform) => string \| undefined`                                                                                                               | Reads one environment variable under an explicit platform's key rules.                                                                  |
+| `mergeEnvironment`          | function | `(isolated: boolean, base?: Readonly<Record<string, string \| undefined>>, override?: Readonly<Record<string, string \| undefined>>) => NodeJS.ProcessEnv`                                                                                   | Merges environment overrides into the environment one child receives on the current host.                                               |
+| `mergePlatformEnvironment`  | function | `(platform: NodeJS.Platform, parent: Readonly<Record<string, string \| undefined>>, isolated: boolean, base?: Readonly<Record<string, string \| undefined>>, override?: Readonly<Record<string, string \| undefined>>) => NodeJS.ProcessEnv` | Merges environment layers under an explicit platform's key rules.                                                                       |
 
 ### Capture helpers
 
 The byte-bounding and result-assembly building blocks, from `@orkestrel/process/server`.
 
-| Name                 | Kind     | Summary                                                                                      |
-| -------------------- | -------- | -------------------------------------------------------------------------------------------- |
-| `trimHead`           | function | Trims a buffer to at most `limit` leading bytes without splitting a UTF-8 sequence.          |
-| `trimTail`           | function | Trims a buffer to at most `limit` trailing bytes without splitting a UTF-8 sequence.         |
-| `captureChunk`       | function | Bounds one delivered stream chunk to the bytes a capture still has room for.                 |
-| `buildExecuteResult` | function | Builds one settled `ExecuteResult` from a completed run's captured bytes and terminal facts. |
+| Name                 | Kind     | Signature                                               | Summary                                                                                      |
+| -------------------- | -------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `trimHead`           | function | `(bytes: Uint8Array, limit: number) => Buffer`          | Trims a buffer to at most `limit` leading bytes without splitting a UTF-8 sequence.          |
+| `trimTail`           | function | `(bytes: Uint8Array, limit: number) => Buffer`          | Trims a buffer to at most `limit` trailing bytes without splitting a UTF-8 sequence.         |
+| `captureChunk`       | function | `(chunk: unknown, room: number) => Buffer \| undefined` | Bounds one delivered stream chunk to the bytes a capture still has room for.                 |
+| `buildExecuteResult` | function | `(input: ExecuteInput) => ExecuteResult`                | Builds one settled `ExecuteResult` from a completed run's captured bytes and terminal facts. |
 
 ### Termination helpers
 
 The signalling and confirmation building blocks a bounded stop composes, from
 `@orkestrel/process/server`.
 
-| Name             | Kind     | Summary                                                                             |
-| ---------------- | -------- | ----------------------------------------------------------------------------------- |
-| `inspectProcess` | function | Reports whether a process or POSIX process group still exists.                      |
-| `isExited`       | function | Checks whether a child process has reached its native exit.                         |
-| `killProcess`    | function | Signals one owned child process, or its detached process group on a POSIX host.     |
-| `killTree`       | function | Kills one Windows process tree through `taskkill`.                                  |
-| `waitForExit`    | function | Waits for one child process's native exit, bounded by a deadline.                   |
-| `waitForClose`   | function | Waits for one child process's streams to close, bounded by a deadline.              |
-| `stopChild`      | function | Terminates one child process tree and reports whether its native exit was observed. |
+| Name             | Kind     | Signature                                                                                                               | Summary                                                                             |
+| ---------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `inspectProcess` | function | `(pid: number) => boolean \| undefined`                                                                                 | Reports whether a process or POSIX process group still exists.                      |
+| `isExited`       | function | `(child: Pick<ProcessChildInterface, 'exitCode' \| 'signalCode'>) => boolean`                                           | Checks whether a child process has reached its native exit.                         |
+| `killProcess`    | function | `(child: Pick<ProcessChildInterface, 'pid' \| 'kill'>, signal: NodeJS.Signals) => void`                                 | Signals one owned child process, or its detached process group on a POSIX host.     |
+| `killTree`       | function | `(pid: number, timeout: number) => Promise<boolean>`                                                                    | Kills one Windows process tree through `taskkill`.                                  |
+| `waitForExit`    | function | `(child: Pick<ProcessChildInterface, 'exitCode' \| 'signalCode' \| 'once' \| 'off'>, timeout: number) => Promise<void>` | Waits for one child process's native exit, bounded by a deadline.                   |
+| `waitForClose`   | function | `(child: Pick<ProcessChildInterface, 'once' \| 'off'>, timeout: number) => Promise<boolean>`                            | Waits for one child process's streams to close, bounded by a deadline.              |
+| `stopChild`      | function | `(child: ProcessChildInterface, grace: number, confirm: number) => Promise<boolean>`                                    | Terminates one child process tree and reports whether its native exit was observed. |
 
 `inspectProcess` returns `true` while the process or POSIX process group exists, including
 when the host refuses the probe with `EPERM`. It returns `false` after the target is gone
@@ -163,14 +163,14 @@ id other than minus one probes the process group identified by its magnitude.
 The input refusals every public entry point runs before it spawns anything, from
 `@orkestrel/process/server`.
 
-| Name                  | Kind     | Summary                                                             |
-| --------------------- | -------- | ------------------------------------------------------------------- |
-| `validateText`        | function | Validates one spawn-bound string.                                   |
-| `validateTimer`       | function | Validates one timer-valued option in milliseconds.                  |
-| `validateBytes`       | function | Validates one byte-valued option.                                   |
-| `validateEnvironment` | function | Validates every spawn-bound string of one environment override map. |
-| `validateCommand`     | function | Validates every spawn-bound string of one command.                  |
-| `validateWorkspace`   | function | Validates the working directory one child starts in.                |
+| Name                  | Kind     | Signature                                                                           | Summary                                                             |
+| --------------------- | -------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `validateText`        | function | `(value: unknown, subject: string, required: boolean) => void`                      | Validates one spawn-bound string.                                   |
+| `validateTimer`       | function | `(value: number \| undefined, subject: string) => void`                             | Validates one timer-valued option in milliseconds.                  |
+| `validateBytes`       | function | `(value: number \| undefined, subject: string, minimum: number) => void`            | Validates one byte-valued option.                                   |
+| `validateEnvironment` | function | `(environment: Readonly<Record<string, string \| undefined>> \| undefined) => void` | Validates every spawn-bound string of one environment override map. |
+| `validateCommand`     | function | `(command: ProcessCommand) => void`                                                 | Validates every spawn-bound string of one command.                  |
+| `validateWorkspace`   | function | `(workspace: string \| undefined) => void`                                          | Validates the working directory one child starts in.                |
 
 ### Constants
 
@@ -178,17 +178,17 @@ The defaults and host bounds, from `@orkestrel/process`.
 
 A `Shape` cell holds the constant's declared type.
 
-| Name                   | Kind  | Shape                         | Summary                                                                                                                                                                                       |
-| ---------------------- | ----- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PROCESS_GRACE`        | const | `number`                      | Names the default cooperative POSIX window, 5000 ms, between `SIGTERM` and `SIGKILL` during termination.                                                                                      |
-| `PROCESS_CONFIRMATION` | const | `number`                      | Names the window, 5000 ms, a termination waits for the child's native exit after the final kill.                                                                                              |
-| `PROCESS_DRAIN`        | const | `number`                      | Names the default window, 1000 ms, the package waits for the child's read ends to close after the child's native exit or after a termination this package initiated, before cutting them off. |
-| `PROCESS_EVIDENCE`     | const | `number`                      | Names the default maximum retained stderr tail, 2048 bytes, for a supervised `ProcessInterface`.                                                                                              |
-| `PROCESS_BACKLOG`      | const | `number`                      | Names the default soft high-water mark, 10485760 bytes, for a supervised `ProcessInterface` line backlog.                                                                                     |
-| `PROCESS_OUTPUT`       | const | `number`                      | Names the default maximum captured bytes, 10485760 each, for a one-shot run's stdout and stderr.                                                                                              |
-| `PROCESS_TIMER`        | const | `number`                      | Names the largest timer delay, 2147483647 ms, the host schedules without truncating it to one.                                                                                                |
-| `PROCESS_PATHEXT`      | const | `string`                      | Lists the executable extensions a Windows lookup applies when the environment declares no `PATHEXT`, `.COM;.EXE;.BAT;.CMD`.                                                                   |
-| `PROCESS_ERROR_CODES`  | const | `readonly ProcessErrorCode[]` | Lists the machine-readable failure categories a `ProcessError` carries, in declaration order: `spawn`, `timeout`, `input`, `duplicate`, `protocol`, and `invalid`.                            |
+| Name                   | Kind  | Signature                                                                    | Summary                                                                                                                                                                                       |
+| ---------------------- | ----- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PROCESS_GRACE`        | const | `5000`                                                                       | Names the default cooperative POSIX window, 5000 ms, between `SIGTERM` and `SIGKILL` during termination.                                                                                      |
+| `PROCESS_CONFIRMATION` | const | `5000`                                                                       | Names the window, 5000 ms, a termination waits for the child's native exit after the final kill.                                                                                              |
+| `PROCESS_DRAIN`        | const | `1000`                                                                       | Names the default window, 1000 ms, the package waits for the child's read ends to close after the child's native exit or after a termination this package initiated, before cutting them off. |
+| `PROCESS_EVIDENCE`     | const | `2048`                                                                       | Names the default maximum retained stderr tail, 2048 bytes, for a supervised `ProcessInterface`.                                                                                              |
+| `PROCESS_BACKLOG`      | const | `10485760`                                                                   | Names the default soft high-water mark, 10485760 bytes, for a supervised `ProcessInterface` line backlog.                                                                                     |
+| `PROCESS_OUTPUT`       | const | `10485760`                                                                   | Names the default maximum captured bytes, 10485760 each, for a one-shot run's stdout and stderr.                                                                                              |
+| `PROCESS_TIMER`        | const | `2147483647`                                                                 | Names the largest timer delay, 2147483647 ms, the host schedules without truncating it to one.                                                                                                |
+| `PROCESS_PATHEXT`      | const | `".COM;.EXE;.BAT;.CMD"`                                                      | Lists the executable extensions a Windows lookup applies when the environment declares no `PATHEXT`, `.COM;.EXE;.BAT;.CMD`.                                                                   |
+| `PROCESS_ERROR_CODES`  | const | `readonly ["spawn", "timeout", "input", "duplicate", "protocol", "invalid"]` | Lists the machine-readable failure categories a `ProcessError` carries, in declaration order: `spawn`, `timeout`, `input`, `duplicate`, `protocol`, and `invalid`.                            |
 
 ### Types
 
@@ -196,29 +196,29 @@ The contracts and options, all from `@orkestrel/process`.
 
 A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
 
-| Name                      | Kind      | Shape                                                                                                            | Summary                                                                                                                                                                      |
-| ------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ProcessCommand`          | interface | `{ file, arguments, environment?, input?, isolated? }`                                                           | Represents one spawnable command: the executable, its argument vector, and optional environment overrides and initial standard input.                                        |
-| `ProcessExit`             | interface | `{ code, signal, drained }`                                                                                      | Represents the observed terminal state of a child process: its exit code or the signal that ended it, and how its observation ended.                                         |
-| `SpawnInput`              | interface | `{ file, arguments, verbatim }`                                                                                  | Represents the resolved spawn form of one command: the executable to launch, the argument vector to pass, and whether the host receives that vector verbatim.                |
-| `ExecutableOptions`       | interface | `{ workspace?, environment? }`                                                                                   | Supplies the lookup inputs for resolving a command file to an executable path.                                                                                               |
-| `ProcessEventMap`         | type      | `{ stderr, error, exit }`                                                                                        | Represents the push observation surface of a `ProcessInterface` — the moments a fire-and-forget observer subscribes to, alongside the `lines` stream and the `exit` promise. |
-| `ProcessOptions`          | interface | `{ on?, error?, command, workspace, grace?, drain?, evidence?, backlog?, delivery?, writable?, signal? }`        | Configures one supervised child process.                                                                                                                                     |
-| `ProcessInterface`        | interface | `{ pid, code, signal, emitter, lines, evidence, truncated, settled, terminated, exit } plus send, stop, destroy` | Represents one supervised child process with framed output, a bounded backlog, and bounded termination.                                                                      |
-| `SessionEventMap`         | type      | `{ stdout, stderr, error, exit }`                                                                                | Represents the push observation surface of a `SessionInterface` — the moments a byte-oriented observer subscribes to, alongside the `ended` and `exit` promises.             |
-| `SessionOptions`          | interface | `{ on?, error?, command, workspace, grace?, drain?, evidence?, delivery?, signal? }`                             | Configures one raw byte session over a supervised child.                                                                                                                     |
-| `SessionInterface`        | interface | `{ pid, code, signal, emitter, evidence, settled, terminated, ended, exit } plus write, end, stop, destroy`      | Represents one supervised child process read as raw bytes, with an open standard-input channel and bounded termination.                                                      |
-| `ExecuteResult`           | interface | `{ command, stdout, stderr, code, signal, failed, expired, aborted, truncated }`                                 | Represents the settled outcome of a one-shot run: the buffered output and the terminal state.                                                                                |
-| `ExecuteInput`            | interface | `{ command, stdout, stderr, code, signal, expired, aborted, truncated, limit, cause? }`                          | Represents the captured bytes and terminal facts one settled `ExecuteResult` is built from.                                                                                  |
-| `ExecuteOptions`          | interface | `{ workspace?, environment?, input?, timeout?, grace?, signal?, strict?, limit? }`                               | Configures a one-shot run.                                                                                                                                                   |
-| `ExecuteSyncOptions`      | interface | `{ workspace?, environment?, input?, timeout?, strict?, limit? }`                                                | Configures a synchronous one-shot run.                                                                                                                                       |
-| `DetachOptions`           | interface | `{ workspace? }`                                                                                                 | Configures a detached fire-and-forget spawn.                                                                                                                                 |
-| `ProcessManagerEventMap`  | type      | `{ launch, exit }`                                                                                               | Represents the push observation surface of a `ProcessManagerInterface` — the fleet-level moments a fire-and-forget observer subscribes to.                                   |
-| `ProcessManagerOptions`   | interface | `{ on?, error? }`                                                                                                | Configures a `ProcessManagerInterface`.                                                                                                                                      |
-| `ProcessManagerInterface` | interface | `{ emitter, count } plus process, processes, launch, stop, destroy`                                              | Represents a keyed registry of live supervised child processes.                                                                                                              |
-| `ProcessErrorCode`        | type      | `(typeof PROCESS_ERROR_CODES)[number]`                                                                           | Names the machine-readable `ProcessError` categories, derived from `PROCESS_ERROR_CODES`: `spawn`, `timeout`, `input`, `duplicate`, `protocol`, and `invalid`.               |
-| `ProcessErrorContext`     | interface | `{ id?, command?, code?, signal?, value? }`                                                                      | Represents structured context carried by a `ProcessError`.                                                                                                                   |
-| `ProcessErrorOptions`     | interface | `{ code, context?, cause?, result? }`                                                                            | Configures a `ProcessError`.                                                                                                                                                 |
+| Name                      | Kind      | Signature                                                                                                                                                                               | Summary                                                                                                                                                                      |
+| ------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ProcessCommand`          | interface | `{ file, arguments, environment?, input?, isolated? }`                                                                                                                                  | Represents one spawnable command: the executable, its argument vector, and optional environment overrides and initial standard input.                                        |
+| `ProcessExit`             | interface | `{ code, signal, drained }`                                                                                                                                                             | Represents the observed terminal state of a child process: its exit code or the signal that ended it, and how its observation ended.                                         |
+| `SpawnInput`              | interface | `{ file, arguments, verbatim }`                                                                                                                                                         | Represents the resolved spawn form of one command: the executable to launch, the argument vector to pass, and whether the host receives that vector verbatim.                |
+| `ExecutableOptions`       | interface | `{ workspace?, environment? }`                                                                                                                                                          | Supplies the lookup inputs for resolving a command file to an executable path.                                                                                               |
+| `ProcessEventMap`         | type      | `{ readonly stderr: readonly [chunk: string]; readonly error: readonly [error: unknown]; readonly exit: readonly [exit: ProcessExit]; }`                                                | Represents the push observation surface of a `ProcessInterface` — the moments a fire-and-forget observer subscribes to, alongside the `lines` stream and the `exit` promise. |
+| `ProcessOptions`          | interface | `{ on?, error?, command, workspace, grace?, drain?, evidence?, backlog?, delivery?, writable?, signal? }`                                                                               | Configures one supervised child process.                                                                                                                                     |
+| `ProcessInterface`        | interface | `{ pid, code, signal, emitter, lines, evidence, truncated, settled, terminated, exit, send(), stop(), destroy() }`                                                                      | Represents one supervised child process with framed output, a bounded backlog, and bounded termination.                                                                      |
+| `SessionEventMap`         | type      | `{ readonly stdout: readonly [chunk: Uint8Array]; readonly stderr: readonly [chunk: string]; readonly error: readonly [error: unknown]; readonly exit: readonly [exit: ProcessExit]; }` | Represents the push observation surface of a `SessionInterface` — the moments a byte-oriented observer subscribes to, alongside the `ended` and `exit` promises.             |
+| `SessionOptions`          | interface | `{ on?, error?, command, workspace, grace?, drain?, evidence?, delivery?, signal? }`                                                                                                    | Configures one raw byte session over a supervised child.                                                                                                                     |
+| `SessionInterface`        | interface | `{ pid, code, signal, emitter, evidence, settled, terminated, ended, exit, write(), end(), stop(), destroy() }`                                                                         | Represents one supervised child process read as raw bytes, with an open standard-input channel and bounded termination.                                                      |
+| `ExecuteResult`           | interface | `{ command, stdout, stderr, code, signal, failed, expired, aborted, truncated }`                                                                                                        | Represents the settled outcome of a one-shot run: the buffered output and the terminal state.                                                                                |
+| `ExecuteInput`            | interface | `{ command, stdout, stderr, code, signal, expired, aborted, truncated, limit, cause? }`                                                                                                 | Represents the captured bytes and terminal facts one settled `ExecuteResult` is built from.                                                                                  |
+| `ExecuteOptions`          | interface | `{ workspace?, environment?, input?, timeout?, grace?, signal?, strict?, limit? }`                                                                                                      | Configures a one-shot run.                                                                                                                                                   |
+| `ExecuteSyncOptions`      | interface | `{ workspace?, environment?, input?, timeout?, strict?, limit? }`                                                                                                                       | Configures a synchronous one-shot run.                                                                                                                                       |
+| `DetachOptions`           | interface | `{ workspace? }`                                                                                                                                                                        | Configures a detached fire-and-forget spawn.                                                                                                                                 |
+| `ProcessManagerEventMap`  | type      | `{ readonly launch: readonly [id: string]; readonly exit: readonly [id: string, exit: ProcessExit]; }`                                                                                  | Represents the push observation surface of a `ProcessManagerInterface` — the fleet-level moments a fire-and-forget observer subscribes to.                                   |
+| `ProcessManagerOptions`   | interface | `{ on?, error? }`                                                                                                                                                                       | Configures a `ProcessManagerInterface`.                                                                                                                                      |
+| `ProcessManagerInterface` | interface | `{ emitter, count, process(), processes(), launch(), stop(), destroy() }`                                                                                                               | Represents a keyed registry of live supervised child processes.                                                                                                              |
+| `ProcessErrorCode`        | type      | `(typeof PROCESS_ERROR_CODES)[number]`                                                                                                                                                  | Names the machine-readable `ProcessError` categories, derived from `PROCESS_ERROR_CODES`: `spawn`, `timeout`, `input`, `duplicate`, `protocol`, and `invalid`.               |
+| `ProcessErrorContext`     | interface | `{ id?, command?, code?, signal?, value? }`                                                                                                                                             | Represents structured context carried by a `ProcessError`.                                                                                                                   |
+| `ProcessErrorOptions`     | interface | `{ code, context?, cause?, result? }`                                                                                                                                                   | Configures a `ProcessError`.                                                                                                                                                 |
 
 ### Server contracts
 
@@ -230,9 +230,9 @@ Node-only `Supervisor` engine, so the contract sits with the face that construct
 
 A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
 
-| Name                    | Kind      | Shape                                                   | Summary                                                                                      |
+| Name                    | Kind      | Signature                                               | Summary                                                                                      |
 | ----------------------- | --------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `ProcessChildInterface` | interface | `{ pid?, exitCode, signalCode } plus kill, once, off`   | Represents the child boundary the termination helpers drive.                                 |
+| `ProcessChildInterface` | interface | `{ pid?, exitCode, signalCode, kill(), once(), off() }` | Represents the child boundary the termination helpers drive.                                 |
 | `SupervisorFace`        | interface | `{ chunk, fault, relieve?, close, terminal, teardown }` | Represents the composing face's callbacks for each lifecycle moment of one supervised child. |
 
 ### Surface notes
