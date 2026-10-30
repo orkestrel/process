@@ -667,7 +667,7 @@ await new GuideCommand({
 		it('names every constant literal in the Summary its Constants table prints', () => {
 			const guide = requireValue(files['guides/process.md'], 'Missing file: guides/process.md')
 			const section = guide.slice(guide.indexOf('### Constants'))
-			const table = section.slice(0, section.indexOf('\n\n', section.indexOf('| API')))
+			const table = section.slice(0, section.indexOf('\n\n', section.indexOf('| Name')))
 			const records = Array.from(
 				table.matchAll(/^\| `(\w+)` +\| const +\| [^|]+ \| (.+?) +\|$/gmu),
 				(match) => ({ name: match[1] ?? '', summary: match[2] ?? '' }),

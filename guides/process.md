@@ -53,7 +53,7 @@ await child.destroy()
 
 The interface-oriented constructors, from `@orkestrel/process/server`.
 
-| API                    | Kind     | Summary                                                                                                                                                                                        |
+| Name                   | Kind     | Summary                                                                                                                                                                                        |
 | ---------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `createProcess`        | function | Creates one supervised child process and returns it as a `ProcessInterface`, so a caller holds the published contract rather than the `Process` class.                                         |
 | `createSession`        | function | Creates one raw byte session over a supervised child process and returns it as a `SessionInterface`, so a caller holds the published contract rather than the `Session` class.                 |
@@ -63,7 +63,7 @@ The interface-oriented constructors, from `@orkestrel/process/server`.
 
 The one-shot and fire-and-forget spawns, from `@orkestrel/process/server`.
 
-| API           | Kind     | Summary                                                                                      |
+| Name          | Kind     | Summary                                                                                      |
 | ------------- | -------- | -------------------------------------------------------------------------------------------- |
 | `execute`     | function | Runs one command to completion, buffering its output, and settles with the outcome.          |
 | `executeSync` | function | Runs one command to completion synchronously, buffering its output, and returns the outcome. |
@@ -76,7 +76,7 @@ The classes a factory constructs and the `Supervisor` engine a consumer construc
 interface, so its readonly data members are named under [Surface notes](#surface-notes) rather than
 in a Surface row.
 
-| API              | Kind  | Summary                                                                                                                                          |
+| Name             | Kind  | Summary                                                                                                                                          |
 | ---------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `Process`        | class | Supervises one child, frames its standard output into lines under a bounded backlog, and keeps every observation channel aligned at termination. |
 | `Session`        | class | Supervises one child and publishes its standard output as raw bytes.                                                                             |
@@ -90,7 +90,7 @@ The total guard, from `@orkestrel/process`.
 
 In a guard table a `Shape` cell holds the type the guard narrows to.
 
-| API              | Kind     | Shape          | Summary                                              |
+| Name             | Kind     | Shape          | Summary                                              |
 | ---------------- | -------- | -------------- | ---------------------------------------------------- |
 | `isProcessError` | function | `ProcessError` | Checks whether an unknown value is a `ProcessError`. |
 
@@ -98,7 +98,7 @@ In a guard table a `Shape` cell holds the type the guard narrows to.
 
 The constructors for each failure category, from `@orkestrel/process`.
 
-| API                    | Kind     | Summary                                                                                                       |
+| Name                   | Kind     | Summary                                                                                                       |
 | ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
 | `createDuplicateError` | function | Creates the `duplicate`-coded failure raised when a manager launch reuses a live id.                          |
 | `createProtocolError`  | function | Creates the `protocol`-coded failure raised when a launch is attempted on a registry that is being destroyed. |
@@ -110,7 +110,7 @@ The constructors for each failure category, from `@orkestrel/process`.
 The resolution and environment building blocks every spawn composes, from
 `@orkestrel/process/server`.
 
-| API                         | Kind     | Summary                                                                                                                                 |
+| Name                        | Kind     | Summary                                                                                                                                 |
 | --------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `snapshotCommand`           | function | Takes one owned frozen snapshot of a caller's command.                                                                                  |
 | `formatCommand`             | function | Renders one command into its diagnostic command line.                                                                                   |
@@ -129,7 +129,7 @@ The resolution and environment building blocks every spawn composes, from
 
 The byte-bounding and result-assembly building blocks, from `@orkestrel/process/server`.
 
-| API                  | Kind     | Summary                                                                                      |
+| Name                 | Kind     | Summary                                                                                      |
 | -------------------- | -------- | -------------------------------------------------------------------------------------------- |
 | `trimHead`           | function | Trims a buffer to at most `limit` leading bytes without splitting a UTF-8 sequence.          |
 | `trimTail`           | function | Trims a buffer to at most `limit` trailing bytes without splitting a UTF-8 sequence.         |
@@ -141,7 +141,7 @@ The byte-bounding and result-assembly building blocks, from `@orkestrel/process/
 The signalling and confirmation building blocks a bounded stop composes, from
 `@orkestrel/process/server`.
 
-| API              | Kind     | Summary                                                                             |
+| Name             | Kind     | Summary                                                                             |
 | ---------------- | -------- | ----------------------------------------------------------------------------------- |
 | `inspectProcess` | function | Reports whether a process or POSIX process group still exists.                      |
 | `isExited`       | function | Checks whether a child process has reached its native exit.                         |
@@ -163,7 +163,7 @@ id other than minus one probes the process group identified by its magnitude.
 The input refusals every public entry point runs before it spawns anything, from
 `@orkestrel/process/server`.
 
-| API                   | Kind     | Summary                                                             |
+| Name                  | Kind     | Summary                                                             |
 | --------------------- | -------- | ------------------------------------------------------------------- |
 | `validateText`        | function | Validates one spawn-bound string.                                   |
 | `validateTimer`       | function | Validates one timer-valued option in milliseconds.                  |
@@ -178,7 +178,7 @@ The defaults and host bounds, from `@orkestrel/process`.
 
 A `Shape` cell holds the constant's declared type.
 
-| API                    | Kind  | Shape                         | Summary                                                                                                                                                                                       |
+| Name                   | Kind  | Shape                         | Summary                                                                                                                                                                                       |
 | ---------------------- | ----- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PROCESS_GRACE`        | const | `number`                      | Names the default cooperative POSIX window, 5000 ms, between `SIGTERM` and `SIGKILL` during termination.                                                                                      |
 | `PROCESS_CONFIRMATION` | const | `number`                      | Names the window, 5000 ms, a termination waits for the child's native exit after the final kill.                                                                                              |
@@ -196,7 +196,7 @@ The contracts and options, all from `@orkestrel/process`.
 
 A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
 
-| API                       | Kind      | Shape                                                                                                            | Summary                                                                                                                                                                      |
+| Name                      | Kind      | Shape                                                                                                            | Summary                                                                                                                                                                      |
 | ------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ProcessCommand`          | interface | `{ file, arguments, environment?, input?, isolated? }`                                                           | Represents one spawnable command: the executable, its argument vector, and optional environment overrides and initial standard input.                                        |
 | `ProcessExit`             | interface | `{ code, signal, drained }`                                                                                      | Represents the observed terminal state of a child process: its exit code or the signal that ended it, and how its observation ended.                                         |
@@ -230,7 +230,7 @@ Node-only `Supervisor` engine, so the contract sits with the face that construct
 
 A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
 
-| API                     | Kind      | Shape                                                   | Summary                                                                                      |
+| Name                    | Kind      | Shape                                                   | Summary                                                                                      |
 | ----------------------- | --------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `ProcessChildInterface` | interface | `{ pid?, exitCode, signalCode } plus kill, once, off`   | Represents the child boundary the termination helpers drive.                                 |
 | `SupervisorFace`        | interface | `{ chunk, fault, relieve?, close, terminal, teardown }` | Represents the composing face's callbacks for each lifecycle moment of one supervised child. |
