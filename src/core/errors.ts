@@ -35,7 +35,7 @@ export class ProcessError extends Error {
 	constructor(message: string, options: ProcessErrorOptions) {
 		const cause = options.cause
 		super(message, cause === undefined ? undefined : { cause })
-		INTRINSICS.define(this, Symbol.for('@orkestrel/process.error'), { value: this })
+		INTRINSICS.define(this, Symbol.for('@orkestrel/process.ProcessError'), { value: this })
 		this.code = options.code
 		if (options.context !== undefined) this.context = options.context
 		if (options.result !== undefined) this.result = options.result
@@ -66,7 +66,7 @@ export function isProcessError(value: unknown): value is ProcessError {
 	return holds(() => {
 		if (!(value instanceof INTRINSICS.error)) return false
 		if (INTRINSICS.prototype(value) === INTRINSICS.error.prototype) return false
-		const descriptor = INTRINSICS.describe(value, Symbol.for('@orkestrel/process.error'))
+		const descriptor = INTRINSICS.describe(value, Symbol.for('@orkestrel/process.ProcessError'))
 		if (descriptor?.value !== value) return false
 		const code: unknown = INTRINSICS.reflect.read(value, 'code')
 		if (!PROCESS_ERROR_CODES.some((declared) => declared === code)) return false

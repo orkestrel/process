@@ -46,7 +46,7 @@ const errors = entries.map((entry) => new entry.ProcessError('fixture', { code: 
 const subclass = new SpecializedError()
 const lookalike = Object.assign(new Error('fixture'), { code: 'invalid' })
 const plain = {}
-Object.defineProperty(plain, Symbol.for('@orkestrel/process.error'), { value: plain })
+Object.defineProperty(plain, Symbol.for('@orkestrel/process.ProcessError'), { value: plain })
 process.stdout.write(JSON.stringify({
 	distinct: new Set(entries.map((entry) => entry.ProcessError)).size,
 	answers: entries.map((entry) => [

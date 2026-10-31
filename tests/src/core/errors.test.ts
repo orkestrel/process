@@ -10,7 +10,9 @@ describe('process error', () => {
 
 	it('uses its own identity brand and accepts renamed subclasses', () => {
 		const error = new ProcessError('fixture', { code: 'invalid' })
-		expect(Object.getOwnPropertyDescriptor(error, Symbol.for('@orkestrel/process.error'))).toEqual({
+		expect(
+			Object.getOwnPropertyDescriptor(error, Symbol.for('@orkestrel/process.ProcessError')),
+		).toEqual({
 			value: error,
 			writable: false,
 			enumerable: false,
@@ -48,7 +50,7 @@ describe('process error', () => {
 		}
 		const undeclared = Object.defineProperty(
 			Object.assign(new Error('undeclared'), { code: 'stalled', name: 'ProcessError' }),
-			Symbol.for('@orkestrel/process.error'),
+			Symbol.for('@orkestrel/process.ProcessError'),
 			{ value: true },
 		)
 		expect(isProcessError(undeclared)).toBe(false)
@@ -85,7 +87,7 @@ describe('process error', () => {
 		])
 		const lookalike = Object.defineProperty(
 			new Error('invalid command'),
-			Symbol.for('@orkestrel/process.error'),
+			Symbol.for('@orkestrel/process.ProcessError'),
 			{ value: true },
 		)
 

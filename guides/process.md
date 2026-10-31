@@ -1151,7 +1151,7 @@ value with `isProcessError`, then branch on `code`.
 `isProcessError` recognizes an error thrown by another installed copy of the package. It reads a
 global own-property brand rather than `instanceof`, so a duplicate installation and an ESM/CommonJS
 module copy both narrow. Recognition holds across copies that stamp their own identity under
-`Symbol.for('@orkestrel/process.error')` as a non-enumerable, non-writable own property. The guard
+`Symbol.for('@orkestrel/process.ProcessError')` as a non-enumerable, non-writable own property. The guard
 requires the native `Error` base, a prototype other than `Error.prototype`, a declared code, and
 correctly shaped optional context and result members. It never reads `name`, so subclass instances
 pass. Older boolean brands, transparent proxies, and branded plain objects fail recognition.
