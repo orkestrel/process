@@ -99,20 +99,20 @@ await new GuideCommand({
 		buildPlatformSpawn,
 		buildSpawn,
 		captureChunk,
+		createDuplex,
 		createProcess,
 		createProcessManager,
-		createSession,
 		detach,
 		execute,
 		executeSync,
 		formatCommand,
 		inspectProcess,
 		isExited,
-		isFile,
 		killProcess,
 		killTree,
 		mergeEnvironment,
 		mergePlatformEnvironment,
+		namesFile,
 		quoteArgument,
 		readPlatformVariable,
 		readVariable,
@@ -181,10 +181,10 @@ await new GuideCommand({
 	> = Object.freeze({
 		'@orkestrel/process': Object.freeze({
 			foreign: Object.freeze([
+				'Duplex',
 				'Process',
 				'ProcessChildInterface',
 				'ProcessManager',
-				'Session',
 				'Supervisor',
 				'SupervisorFace',
 				'buildExecutableCandidates',
@@ -192,20 +192,20 @@ await new GuideCommand({
 				'buildPlatformSpawn',
 				'buildSpawn',
 				'captureChunk',
+				'createDuplex',
 				'createProcess',
 				'createProcessManager',
-				'createSession',
 				'detach',
 				'execute',
 				'executeSync',
 				'formatCommand',
 				'inspectProcess',
 				'isExited',
-				'isFile',
 				'killProcess',
 				'killTree',
 				'mergeEnvironment',
 				'mergePlatformEnvironment',
+				'namesFile',
 				'quoteArgument',
 				'readPlatformVariable',
 				'readVariable',
@@ -228,6 +228,9 @@ await new GuideCommand({
 		'@orkestrel/process/server': Object.freeze({
 			foreign: Object.freeze([
 				'DetachOptions',
+				'DuplexEventMap',
+				'DuplexInterface',
+				'DuplexOptions',
 				'ExecutableOptions',
 				'ExecuteInput',
 				'ExecuteOptions',
@@ -254,9 +257,6 @@ await new GuideCommand({
 				'ProcessManagerInterface',
 				'ProcessManagerOptions',
 				'ProcessOptions',
-				'SessionEventMap',
-				'SessionInterface',
-				'SessionOptions',
 				'SpawnInput',
 				'createDuplicateError',
 				'createExecuteError',
@@ -761,27 +761,27 @@ await new GuideCommand({
 			await child.destroy()
 		})
 
-		// The byte-session fence, whose point is that the exact bytes come back and that `end` is not a
+		// The byte-duplex fence, whose point is that the exact bytes come back and that `end` is not a
 		// termination. Each is read back: the echo against the payload with no terminator added, and
 		// `terminated` against the child ending itself because its input ended.
-		it('echoes the byte-session fence back unaltered and ends its child without terminating it', async () => {
-			const session = createSession({
+		it('echoes the byte-duplex fence back unaltered and ends its child without terminating it', async () => {
+			const duplex = createDuplex({
 				command: { file: 'node', arguments: ['-e', 'process.stdin.pipe(process.stdout)'] },
 				workspace: process.cwd(),
 			})
 
 			const received: Uint8Array[] = []
-			session.emitter.on('stdout', (chunk) => received.push(chunk))
+			duplex.emitter.on('stdout', (chunk) => received.push(chunk))
 
-			expect(await session.write(new TextEncoder().encode('ping'))).toBe(true)
-			await session.end()
-			await session.ended
+			expect(await duplex.write(new TextEncoder().encode('ping'))).toBe(true)
+			await duplex.end()
+			await duplex.ended
 
 			expect(Buffer.concat(received).toString('utf8')).toBe('ping')
-			const exit = await session.exit
+			const exit = await duplex.exit
 			expect(exit.code).toBe(0)
-			expect(session.terminated).toBe(false)
-			await session.destroy()
+			expect(duplex.terminated).toBe(false)
+			await duplex.destroy()
 		})
 
 		// The Vocabulary ruling that the two endings are named apart because a transport acts on each
@@ -797,7 +797,7 @@ await new GuideCommand({
 			expect(guide).toContain('Race a cooperative shutdown window against `ended`')
 
 			const received: Uint8Array[] = []
-			const session = createSession({
+			const duplex = createDuplex({
 				command: {
 					file: process.execPath,
 					arguments: [
@@ -827,18 +827,18 @@ await new GuideCommand({
 			)
 
 			try {
-				await session.ended
+				await duplex.ended
 				const pending = await Promise.race([
-					session.exit.then(() => 'settled'),
+					duplex.exit.then(() => 'settled'),
 					waitForDelay(150).then(() => 'pending'),
 				])
 
-				expect(session.code).toBe(0)
+				expect(duplex.code).toBe(0)
 				expect(pending).toBe('pending')
-				expect((await session.exit).drained).toBe(false)
+				expect((await duplex.exit).drained).toBe(false)
 			} finally {
 				holds(() => process.kill(held, 'SIGKILL'))
-				await session.destroy()
+				await duplex.destroy()
 			}
 		})
 
@@ -1229,7 +1229,7 @@ await new GuideCommand({
 			value: captureChunk(Buffer.from('hello'), 3),
 			claim: Buffer.from('hel'),
 		},
-		{ name: 'isFile', value: isFile(process.execPath), claim: true },
+		{ name: 'namesFile', value: namesFile(process.execPath), claim: true },
 		{ name: 'inspectProcess', value: inspectProcess(process.pid), claim: true },
 		{
 			name: 'mergePlatformEnvironment',

@@ -275,10 +275,10 @@ export function mergeEnvironment(
  *
  * @example
  * ```ts
- * isFile(process.execPath) // true
+ * namesFile(process.execPath) // true
  * ```
  */
-export function isFile(target: string): boolean {
+export function namesFile(target: string): boolean {
 	return holds(() => statSync(target, { throwIfNoEntry: false })?.isFile() === true)
 }
 
@@ -358,7 +358,7 @@ export function resolveExecutable(file: string, options?: ExecutableOptions): st
 	const workspace = options?.workspace ?? process.cwd()
 	const candidates = buildExecutableCandidates(file, workspace, environment, hostPlatform)
 	for (const target of candidates) {
-		if (isFile(target)) return target
+		if (namesFile(target)) return target
 	}
 	return undefined
 }

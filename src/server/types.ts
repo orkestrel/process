@@ -86,7 +86,7 @@ export interface ProcessChildInterface {
  * Represents the composing face's callbacks for each lifecycle moment of one supervised child.
  *
  * @remarks
- * `Process` and `Session` each construct one and hand it to the supervision engine, which captures
+ * `Process` and `Duplex` each construct one and hand it to the supervision engine, which captures
  * every callback before anything is read or spawned, so the first moment the child can produce
  * already has somewhere to go. `chunk` receives each decoded standard-error fragment, `fault` the
  * host error that ended the run, `close` the moment the read channels closed, `terminal` the frozen

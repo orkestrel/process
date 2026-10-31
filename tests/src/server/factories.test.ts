@@ -5,12 +5,12 @@ import { describe, expect, it } from 'vitest'
 import { captureError, createRecorder, waitForCondition } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { isProcessError } from '@src/core'
-import { createProcess, createProcessManager, createSession } from '@src/server'
+import { createDuplex, createProcess, createProcessManager } from '@src/server'
 import {
 	childCommand,
+	DUPLEX_MEMBERS,
 	MANAGER_MEMBERS,
 	PROCESS_MEMBERS,
-	SESSION_MEMBERS,
 } from '../../setupServer.js'
 
 describe('createProcess', () => {
@@ -96,25 +96,25 @@ describe('createProcess', () => {
 	})
 })
 
-describe('createSession', () => {
-	it('returns a session carrying every member its interface declares', async () => {
-		const session = createSession({
+describe('createDuplex', () => {
+	it('returns a duplex carrying every member its interface declares', async () => {
+		const duplex = createDuplex({
 			command: childCommand('exit', '0'),
 			workspace: process.cwd(),
 			grace: 20,
 		})
 
 		try {
-			expect(SESSION_MEMBERS.filter((member) => !(member in session))).toEqual([])
-			expect(await session.exit).toEqual({ code: 0, signal: null, drained: true })
+			expect(DUPLEX_MEMBERS.filter((member) => !(member in duplex))).toEqual([])
+			expect(await duplex.exit).toEqual({ code: 0, signal: null, drained: true })
 		} finally {
-			await session.destroy()
+			await duplex.destroy()
 		}
 	})
 
-	it('threads the construction options through to the session it returns', async () => {
+	it('threads the construction options through to the duplex it returns', async () => {
 		const chunks = createRecorder<readonly [Uint8Array]>()
-		const session = createSession({
+		const duplex = createDuplex({
 			command: childCommand('exit', '0'),
 			workspace: process.cwd(),
 			grace: 20,
@@ -122,12 +122,12 @@ describe('createSession', () => {
 		})
 
 		try {
-			await session.exit
+			await duplex.exit
 			const received = chunks.calls.map((call) => new TextDecoder().decode(call[0])).join('')
 
 			expect(received).toBe('ran:0\n')
 		} finally {
-			await session.destroy()
+			await duplex.destroy()
 		}
 	})
 })

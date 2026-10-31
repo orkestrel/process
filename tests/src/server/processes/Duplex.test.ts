@@ -6,10 +6,10 @@ import { holds } from '@orkestrel/contract'
 import { captureError, createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import { isProcessError, ProcessError } from '@src/core'
-import { createSession } from '@src/server'
+import { createDuplex, Duplex } from '@src/server'
 import { childCommand } from '../../../setupServer.js'
 
-describe('Session bytes', () => {
+describe('Duplex bytes', () => {
 	// The payload is chosen so no text path can carry it: a NUL at each end of the run, an invalid
 	// UTF-8 lead byte, a lone carriage return, an embedded line feed, and no trailing terminator. A
 	// decoding face would replace two of those bytes and a framing face would cut the payload at the
@@ -17,7 +17,7 @@ describe('Session bytes', () => {
 	it('delivers a binary payload byte-identical, framing nothing and splitting on no line feed', async () => {
 		const payload = Uint8Array.from([0, 1, 255, 254, 13, 65, 10, 66, 128, 0])
 		const chunks = createRecorder<readonly [Uint8Array]>()
-		const session = createSession({
+		const duplex = createDuplex({
 			command: {
 				file: process.execPath,
 				arguments: ['-e', `process.stdout.write(Buffer.from([${[...payload].join(',')}]))`],
@@ -27,7 +27,7 @@ describe('Session bytes', () => {
 			on: { stdout: chunks.handler },
 		})
 
-		const exit = await session.exit
+		const exit = await duplex.exit
 		const received = Buffer.concat(chunks.calls.map((call) => call[0]))
 
 		expect(exit).toEqual({ code: 0, signal: null, drained: true })
@@ -35,13 +35,13 @@ describe('Session bytes', () => {
 		// One host write of one small payload is one host read, so the line feed inside it started no
 		// second event. A framer would have reported two.
 		expect(chunks.count).toBe(1)
-		await session.destroy()
+		await duplex.destroy()
 	})
 
 	it('concatenates a multi-chunk stream into the exact bytes the child wrote', async () => {
 		const total = 512 * 1_024
 		const chunks = createRecorder<readonly [Uint8Array]>()
-		const session = createSession({
+		const duplex = createDuplex({
 			command: {
 				file: process.execPath,
 				arguments: [
@@ -52,9 +52,9 @@ describe('Session bytes', () => {
 			workspace: process.cwd(),
 			grace: 20,
 		})
-		session.emitter.on('stdout', chunks.handler)
+		duplex.emitter.on('stdout', chunks.handler)
 
-		await session.exit
+		await duplex.exit
 		const received = Buffer.concat(chunks.calls.map((call) => call[0]))
 		const wrong = Array.from(received.entries()).flatMap(([index, byte]) =>
 			byte === index % 251 ? [] : [index],
@@ -65,7 +65,7 @@ describe('Session bytes', () => {
 		expect(chunks.count).toBeGreaterThan(1)
 		expect(received.length).toBe(total)
 		expect(wrong).toEqual([])
-		await session.destroy()
+		await duplex.destroy()
 	})
 
 	// The ownership contract, read off the arrays themselves. The raw spawn beside it is the control:
@@ -80,7 +80,7 @@ describe('Session bytes', () => {
 		const size = 64
 		const writer = `let n = 0; const t = setInterval(() => { process.stdout.write(Buffer.alloc(${size}, n + 1)); n += 1; if (n === 4) { clearInterval(t); process.exit(0) } }, 20)`
 		const emitted: Uint8Array[] = []
-		const session = createSession({
+		const duplex = createDuplex({
 			command: { file: process.execPath, arguments: ['-e', writer] },
 			workspace: process.cwd(),
 			grace: 20,
@@ -90,7 +90,7 @@ describe('Session bytes', () => {
 				},
 			},
 		})
-		await session.exit
+		await duplex.exit
 
 		const control = spawn(process.execPath, ['-e', writer], { stdio: ['ignore', 'pipe', 'ignore'] })
 		const stream = control.stdout
@@ -102,7 +102,7 @@ describe('Session bytes', () => {
 		await once(control, 'close')
 
 		const first = emitted[0]
-		if (first === undefined) throw new Error('the session emitted no chunk')
+		if (first === undefined) throw new Error('the duplex emitted no chunk')
 		first.fill(0xaa)
 
 		expect(emitted.length).toBeGreaterThan(1)
@@ -117,14 +117,14 @@ describe('Session bytes', () => {
 		).toBe(true)
 		// Mutating an emitted chunk reaches its whole backing buffer and nothing beyond it.
 		expect([...new Uint8Array(first.buffer)]).toEqual(Array.from({ length: size }, () => 0xaa))
-		await session.destroy()
+		await duplex.destroy()
 	})
 
 	// Ordering, not merely quiet: the read ends are released after the terminal state is delivered,
 	// so a consumer that treats the `exit` event as the end of the byte stream is right to.
 	it('emits no stdout event after the exit event', async () => {
 		const order: string[] = []
-		const session = createSession({
+		const duplex = createDuplex({
 			command: childCommand('chatty'),
 			workspace: process.cwd(),
 			grace: 20,
@@ -138,21 +138,21 @@ describe('Session bytes', () => {
 			},
 		})
 
-		await session.exit
+		await duplex.exit
 		await waitForDelay(50)
 
 		expect(order.filter((moment) => moment === 'exit')).toEqual(['exit'])
 		expect(order.indexOf('stdout')).toBe(0)
 		expect(order.indexOf('exit')).toBe(order.length - 1)
-		await session.destroy()
+		await duplex.destroy()
 	})
 })
 
-describe('Session write', () => {
+describe('Duplex write', () => {
 	it('echoes exactly the bytes written, appending no terminator', async () => {
 		const payload = Uint8Array.from([0, 13, 10, 255, 65, 0])
 		const received: Uint8Array[] = []
-		const session = createSession({
+		const duplex = createDuplex({
 			command: childCommand('raw-echo'),
 			workspace: process.cwd(),
 			grace: 20,
@@ -163,35 +163,35 @@ describe('Session write', () => {
 			},
 		})
 
-		const accepted = await session.write(payload)
+		const accepted = await duplex.write(payload)
 		await waitForCondition(
 			'the child echoes every byte back',
 			() => Buffer.concat(received).length >= payload.length,
 			{ budget: 5_000 },
 		)
-		await session.end()
-		await session.exit
+		await duplex.end()
+		await duplex.exit
 
 		expect(accepted).toBe(true)
 		// Byte-for-byte and no longer: a face that framed the write would add a terminator here, and
 		// the length assertion is what catches one.
 		expect([...Buffer.concat(received)]).toEqual([...payload])
-		await session.destroy()
+		await duplex.destroy()
 	})
 
 	it('refuses a write after end, inside a stop, and after the child settles', async () => {
-		const session = createSession({
+		const duplex = createDuplex({
 			command: childCommand('raw-echo'),
 			workspace: process.cwd(),
 			grace: 20,
 		})
-		const open = await session.write(Uint8Array.from([65]))
-		await session.end()
-		const ended = await session.write(Uint8Array.from([66]))
-		await session.exit
-		const settled = await session.write(Uint8Array.from([67]))
+		const open = await duplex.write(Uint8Array.from([65]))
+		await duplex.end()
+		const ended = await duplex.write(Uint8Array.from([66]))
+		await duplex.exit
+		const settled = await duplex.write(Uint8Array.from([67]))
 
-		const terminating = createSession({
+		const terminating = createDuplex({
 			command: childCommand('sleep'),
 			workspace: process.cwd(),
 			grace: 20,
@@ -206,7 +206,7 @@ describe('Session write', () => {
 		expect(ended).toBe(false)
 		expect(settled).toBe(false)
 		expect(stopping).toBe(false)
-		await session.destroy()
+		await duplex.destroy()
 		await terminating.destroy()
 	})
 
@@ -216,14 +216,14 @@ describe('Session write', () => {
 	it('settles an unconfirmed write false at the delivery bound while the child is still live', async () => {
 		const errors = createRecorder<readonly [unknown]>()
 		const payload = new Uint8Array(4 * 1_024 * 1_024)
-		const bounded = createSession({
+		const bounded = createDuplex({
 			command: childCommand('sleep'),
 			workspace: process.cwd(),
 			grace: 20,
 			delivery: 50,
 			on: { error: errors.handler },
 		})
-		const unbounded = createSession({
+		const unbounded = createDuplex({
 			command: childCommand('sleep'),
 			workspace: process.cwd(),
 			grace: 20,
@@ -250,19 +250,19 @@ describe('Session write', () => {
 	it('settles a pending write false inside teardown and emits no error', async () => {
 		const errors = createRecorder<readonly [unknown]>()
 		const order: string[] = []
-		const session = createSession({
+		const duplex = createDuplex({
 			command: childCommand('sleep'),
 			workspace: process.cwd(),
 			grace: 20,
 			on: { error: errors.handler },
 		})
 
-		const pending = session.write(new Uint8Array(4 * 1_024 * 1_024)).then((accepted) => {
+		const pending = duplex.write(new Uint8Array(4 * 1_024 * 1_024)).then((accepted) => {
 			order.push('write')
 			return accepted
 		})
 		const raced = await Promise.race([pending, waitForDelay(150).then(() => 'pending')])
-		await session.destroy()
+		await duplex.destroy()
 		order.push('teardown')
 
 		expect(raced).toBe('pending')
@@ -277,7 +277,7 @@ describe('Session write', () => {
 	it('refuses the write and emits one protocol error when the host reports a stdin fault', async () => {
 		const errors = createRecorder<readonly [unknown]>()
 		const received: Uint8Array[] = []
-		const session = createSession({
+		const duplex = createDuplex({
 			command: {
 				file: process.execPath,
 				arguments: [
@@ -301,10 +301,10 @@ describe('Session write', () => {
 			{ budget: 5_000 },
 		)
 
-		const settled = await session.write(new Uint8Array(4 * 1_024 * 1_024))
-		const refused = await session.write(Uint8Array.from([65]))
-		await session.exit
-		await session.destroy()
+		const settled = await duplex.write(new Uint8Array(4 * 1_024 * 1_024))
+		const refused = await duplex.write(Uint8Array.from([65]))
+		await duplex.exit
+		await duplex.destroy()
 
 		expect(settled).toBe(false)
 		// One failure state per channel: the write callback and the stream error report it once, and
@@ -318,17 +318,17 @@ describe('Session write', () => {
 	})
 })
 
-describe('Session end', () => {
+describe('Duplex end', () => {
 	// `end` closes the channel and nothing else. The control is the same call over a child that reads
 	// its input and exits on end of it, so the live reading below is a fact about this child rather
 	// than about the window being too short to observe anything.
 	it('leaves the child running when the input channel closes', async () => {
-		const live = createSession({
+		const live = createDuplex({
 			command: childCommand('sleep'),
 			workspace: process.cwd(),
 			grace: 20,
 		})
-		const reading = createSession({
+		const reading = createDuplex({
 			command: childCommand('raw-echo'),
 			workspace: process.cwd(),
 			grace: 20,
@@ -357,67 +357,67 @@ describe('Session end', () => {
 	})
 
 	it('shares one barrier across every end call', async () => {
-		const session = createSession({
+		const duplex = createDuplex({
 			command: childCommand('sleep'),
 			workspace: process.cwd(),
 			grace: 20,
 		})
 
-		const first = session.end()
-		const second = session.end()
+		const first = duplex.end()
+		const second = duplex.end()
 		await first
-		const third = session.end()
+		const third = duplex.end()
 
 		expect(second).toBe(first)
 		expect(third).toBe(first)
-		await session.destroy()
+		await duplex.destroy()
 	})
 
 	// The cooperative shutdown a transport runs: close the input, let the child finish on its own,
 	// and never signal it. `stopping` false at the end is what records that no termination happened.
 	it('settles ending and exit when the child exits on its own after end, with no stop', async () => {
 		const exits = createRecorder<readonly [ProcessExit]>()
-		const session = createSession({
+		const duplex = createDuplex({
 			command: childCommand('raw-echo'),
 			workspace: process.cwd(),
 			grace: 20,
 			on: { exit: exits.handler },
 		})
 
-		expect(await session.write(Uint8Array.from([65, 66]))).toBe(true)
-		await session.end()
-		await session.ended
-		const exit = await session.exit
+		expect(await duplex.write(Uint8Array.from([65, 66]))).toBe(true)
+		await duplex.end()
+		await duplex.ended
+		const exit = await duplex.exit
 
 		expect(exit).toEqual({ code: 0, signal: null, drained: true })
-		expect(session.terminated).toBe(false)
-		expect(session.settled).toBe(true)
+		expect(duplex.terminated).toBe(false)
+		expect(duplex.settled).toBe(true)
 		expect(exits.count).toBe(1)
-		await session.destroy()
+		await duplex.destroy()
 	})
 
 	// The escalation the same transport runs when the child ignores end of input: race `ending`
 	// against a window of the caller's own, then terminate on expiry.
 	it('escalates to stop when the child outlives the closed channel', async () => {
-		const session = createSession({
+		const duplex = createDuplex({
 			command: childCommand('sleep'),
 			workspace: process.cwd(),
 			grace: 50,
 		})
 
-		await session.end()
+		await duplex.end()
 		const cooperative = await Promise.race([
-			session.ended.then(() => 'ended'),
+			duplex.ended.then(() => 'ended'),
 			waitForDelay(150).then(() => 'expired'),
 		])
-		const confirmed = await session.stop()
-		const exit = await session.exit
+		const confirmed = await duplex.stop()
+		const exit = await duplex.exit
 
 		expect(cooperative).toBe('expired')
 		expect(confirmed).toBe(true)
-		expect(session.terminated).toBe(true)
+		expect(duplex.terminated).toBe(true)
 		expect(exit.code !== null || exit.signal !== null).toBe(true)
-		await session.destroy()
+		await duplex.destroy()
 	})
 
 	// A channel the consumer ended stays quiet for its remaining life. Its control is the row named
@@ -427,7 +427,7 @@ describe('Session end', () => {
 	it('keeps an ended channel quiet when a pending write later faults', async () => {
 		const errors = createRecorder<readonly [unknown]>()
 		const received: Uint8Array[] = []
-		const session = createSession({
+		const duplex = createDuplex({
 			command: {
 				file: process.execPath,
 				arguments: [
@@ -450,52 +450,52 @@ describe('Session end', () => {
 			{ budget: 5_000 },
 		)
 
-		const pending = session.write(new Uint8Array(4 * 1_024 * 1_024))
-		await session.end()
+		const pending = duplex.write(new Uint8Array(4 * 1_024 * 1_024))
+		await duplex.end()
 		const settled = await pending
-		await session.exit
+		await duplex.exit
 
 		expect(settled).toBe(false)
 		expect(errors.count).toBe(0)
-		await session.destroy()
+		await duplex.destroy()
 	})
 
 	it('resolves end after a stop and changes nothing', async () => {
-		const session = createSession({
+		const duplex = createDuplex({
 			command: childCommand('sleep'),
 			workspace: process.cwd(),
 			grace: 20,
 		})
 
-		await session.stop()
+		await duplex.stop()
 		const before = {
-			settled: session.settled,
-			stopping: session.terminated,
-			evidence: session.evidence,
-			exit: await session.exit,
+			settled: duplex.settled,
+			stopping: duplex.terminated,
+			evidence: duplex.evidence,
+			exit: await duplex.exit,
 		}
-		await session.end()
+		await duplex.end()
 		const after = {
-			settled: session.settled,
-			stopping: session.terminated,
-			evidence: session.evidence,
-			exit: await session.exit,
+			settled: duplex.settled,
+			stopping: duplex.terminated,
+			evidence: duplex.evidence,
+			exit: await duplex.exit,
 		}
 
 		expect(before.settled).toBe(true)
 		expect(after).toEqual(before)
-		await session.destroy()
+		await duplex.destroy()
 	})
 })
 
-describe('Session endings', () => {
+describe('Duplex endings', () => {
 	// The two endings pulled apart by the one case that separates them: the root exits while a
 	// descendant it spawned keeps the inherited read ends open. The control is the same face over a
 	// child with no descendant, where the two settle together, so the pending reading below is a fact
 	// about the descendant rather than about the race being read too early.
 	it('settles ending at the native exit while exit waits on a descendant holding the pipe', async () => {
 		const received: Uint8Array[] = []
-		const session = createSession({
+		const duplex = createDuplex({
 			command: childCommand('orphan'),
 			workspace: process.cwd(),
 			grace: 20,
@@ -518,16 +518,16 @@ describe('Session endings', () => {
 		const held = Number.parseInt(announced.replace('grandchild:', ''), 10)
 
 		try {
-			await session.ended
+			await duplex.ended
 			const holding = isRunning(held)
-			const settledAtEnding = session.settled
+			const settledAtEnding = duplex.settled
 			const pending = await Promise.race([
-				session.exit.then(() => 'settled'),
+				duplex.exit.then(() => 'settled'),
 				waitForDelay(150).then(() => 'pending'),
 			])
-			const exit = await session.exit
+			const exit = await duplex.exit
 
-			const alone = createSession({
+			const alone = createDuplex({
 				command: childCommand('exit', '0'),
 				workspace: process.cwd(),
 				grace: 20,
@@ -543,107 +543,107 @@ describe('Session endings', () => {
 			// so nothing closed them and only the bound can end the observation.
 			expect(holding).toBe(true)
 			expect(settledAtEnding).toBe(false)
-			expect(session.code).toBe(0)
+			expect(duplex.code).toBe(0)
 			expect(pending).toBe('pending')
 			expect(exit).toEqual({ code: 0, signal: null, drained: false })
-			expect(session.terminated).toBe(false)
+			expect(duplex.terminated).toBe(false)
 			// The control settles both at once, which is what makes the pending reading discriminate.
 			expect(together).toBe('settled')
 			await alone.destroy()
 		} finally {
 			holds(() => process.kill(held, 'SIGKILL'))
-			await session.destroy()
+			await duplex.destroy()
 		}
 	})
 
 	it('delivers the terminal state on the exit event and the exit promise alike', async () => {
 		const exits = createRecorder<readonly [ProcessExit]>()
-		const session = createSession({
+		const duplex = createDuplex({
 			command: childCommand('exit', '7'),
 			workspace: process.cwd(),
 			grace: 20,
 			on: { exit: exits.handler },
 		})
 
-		const promised = await session.exit
-		const again = await session.exit
+		const promised = await duplex.exit
+		const again = await duplex.exit
 
 		expect(promised).toEqual({ code: 7, signal: null, drained: true })
 		expect(again).toEqual(promised)
 		expect(exits.count).toBe(1)
 		expect(exits.calls[0]?.[0]).toEqual(promised)
-		expect(session.code).toBe(7)
-		expect(session.signal).toBeNull()
-		await session.destroy()
+		expect(duplex.code).toBe(7)
+		expect(duplex.signal).toBeNull()
+		await duplex.destroy()
 	})
 
 	it('reports a host process id, the live stderr chunks, and the byte-bounded frozen tail', async () => {
 		const chunks = createRecorder<readonly [string]>()
-		const session = createSession({
+		const duplex = createDuplex({
 			command: childCommand('evidence'),
 			workspace: process.cwd(),
 			grace: 20,
 			evidence: 16,
 			on: { stderr: chunks.handler },
 		})
-		const spawned = session.pid
+		const spawned = duplex.pid
 
-		const exit = await session.exit
+		const exit = await duplex.exit
 		const live = chunks.calls.map((call) => call[0]).join('')
-		const frozen = session.evidence
+		const frozen = duplex.evidence
 
 		if (spawned === undefined) throw new Error('the spawn reported no process id')
 		expect(spawned).toBeGreaterThan(0)
-		expect(session.pid).toBe(spawned)
+		expect(duplex.pid).toBe(spawned)
 		expect(exit.code).toBe(7)
 		expect(live).toContain('x'.repeat(4_096))
 		expect(live).toContain('token=evidence-secret-tail')
 		expect(Buffer.byteLength(frozen)).toBeLessThanOrEqual(16)
 		expect(frozen.endsWith('tail')).toBe(true)
-		expect(session.evidence).toBe(frozen)
-		await session.destroy()
+		expect(duplex.evidence).toBe(frozen)
+		await duplex.destroy()
 	})
 
 	it('emits the error cause on a spawn fault while still settling both endings', async () => {
 		const errors = createRecorder<readonly [unknown]>()
-		const session = createSession({
+		const duplex = createDuplex({
 			command: { file: 'orkestrel-nonexistent-binary', arguments: [] },
 			workspace: process.cwd(),
 			grace: 20,
 			on: { error: errors.handler },
 		})
 
-		await session.ended
-		const exit = await session.exit
+		await duplex.ended
+		const exit = await duplex.exit
 
-		expect(session.pid).toBeUndefined()
+		expect(duplex.pid).toBeUndefined()
 		expect(errors.count).toBe(1)
 		expect(errors.calls[0]?.[0]).toBeInstanceOf(Error)
-		expect(session.settled).toBe(true)
+		expect(duplex.settled).toBe(true)
 		const code = exit.code
 		if (code === null) throw new Error('the spawn fault reported no code')
 		expect(code).toBeLessThan(0)
-		await session.destroy()
+		await duplex.destroy()
 	})
 })
 
-describe('Session validation', () => {
+describe('Duplex validation', () => {
 	it('refuses a timer option and an empty workspace before anything is spawned', () => {
 		expect(() =>
-			createSession({
+			createDuplex({
 				command: childCommand('exit', '0'),
 				workspace: process.cwd(),
 				grace: 2 ** 31,
 			}),
 		).toThrow(ProcessError)
-		expect(() => createSession({ command: childCommand('exit', '0'), workspace: '' })).toThrow(
+		expect(() => createDuplex({ command: childCommand('exit', '0'), workspace: '' })).toThrow(
 			ProcessError,
 		)
 	})
 
 	it('codes a refused input as invalid and carries the rejected value', () => {
 		const thrown = captureError(() => {
-			createSession({
+			createDuplex({
 				command: childCommand('exit', '0'),
 				workspace: process.cwd(),
 				evidence: -1,
@@ -657,7 +657,7 @@ describe('Session validation', () => {
 
 	it('reads each option once, so a getter runs while nothing has started', async () => {
 		const reads = createRecorder<readonly [string]>()
-		const session = createSession({
+		const duplex = createDuplex({
 			command: childCommand('exit', '0'),
 			workspace: process.cwd(),
 			get grace() {
@@ -666,10 +666,42 @@ describe('Session validation', () => {
 			},
 		})
 
-		const exit = await session.exit
+		const exit = await duplex.exit
 
 		expect(reads.calls).toEqual([['grace']])
 		expect(exit.code).toBe(0)
-		await session.destroy()
+		await duplex.destroy()
+	})
+})
+
+describe('Duplex construction', () => {
+	it('echoes bytes through the class the server barrel publishes, constructed directly', async () => {
+		const chunks = createRecorder<readonly [Uint8Array]>()
+		const duplex = new Duplex({
+			command: childCommand('raw-echo'),
+			workspace: process.cwd(),
+			grace: 20,
+			on: { stdout: chunks.handler },
+		})
+
+		expect(await duplex.write(Uint8Array.from([0, 65, 255]))).toBe(true)
+		await duplex.end()
+		const exit = await duplex.exit
+
+		expect(exit).toEqual({ code: 0, signal: null, drained: true })
+		expect([...Buffer.concat(chunks.calls.map((call) => call[0]))]).toEqual([0, 65, 255])
+		await duplex.destroy()
+	})
+
+	it('returns a Duplex instance from createDuplex', async () => {
+		const duplex = createDuplex({
+			command: childCommand('exit', '0'),
+			workspace: process.cwd(),
+			grace: 20,
+		})
+
+		expect(duplex).toBeInstanceOf(Duplex)
+		await duplex.exit
+		await duplex.destroy()
 	})
 })

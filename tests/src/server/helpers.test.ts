@@ -18,11 +18,11 @@ import {
 	formatCommand,
 	inspectProcess,
 	isExited,
-	isFile,
 	killProcess,
 	killTree,
 	mergeEnvironment,
 	mergePlatformEnvironment,
+	namesFile,
 	quoteArgument,
 	readPlatformVariable,
 	readVariable,
@@ -217,11 +217,11 @@ describe('readVariable', () => {
 	})
 })
 
-describe('isFile', () => {
+describe('namesFile', () => {
 	it('accepts a regular file and refuses a directory or a missing path', () => {
-		expect(isFile(process.execPath)).toBe(true)
-		expect(isFile(process.cwd())).toBe(false)
-		expect(isFile(join(process.cwd(), 'orkestrel-nonexistent-path'))).toBe(false)
+		expect(namesFile(process.execPath)).toBe(true)
+		expect(namesFile(process.cwd())).toBe(false)
+		expect(namesFile(join(process.cwd(), 'orkestrel-nonexistent-path'))).toBe(false)
 	})
 })
 

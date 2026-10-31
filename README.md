@@ -1,7 +1,7 @@
 # @orkestrel/process
 
 > A typed child-process toolkit in tiers: the supervised `Process` with framed stdout lines and a
-> writable stdin channel, the byte-oriented `Session`, the buffered `execute` and `executeSync`
+> writable stdin channel, the byte-oriented `Duplex`, the buffered `execute` and `executeSync`
 > runs, the fire-and-forget `detach`, and the keyed `ProcessManager` registry, none of them spawning
 > through a shell.
 
@@ -50,7 +50,7 @@ await child.destroy()
 
 ## Guide
 
-For the full surface — the supervised `Process`, the byte-oriented `Session`,
+For the full surface — the supervised `Process`, the byte-oriented `Duplex`,
 the `Supervisor` engine a consumer composes its own face over, the
 `execute` / `executeSync` / `detach` spawns, the keyed `ProcessManager`, the
 observable `emitter`, the `ProcessError` failure type, and the lower-level
@@ -61,8 +61,8 @@ helpers — see
 
 Typed entry points per the `exports` field in `package.json`: the
 host-independent contracts, constants, errors, and `isProcessError` guard from
-`@orkestrel/process`, and the Node engine — `Process`, `Session`, `Supervisor`,
-`execute`, `executeSync`, `detach`, `ProcessManager`, `createSession`, and their
+`@orkestrel/process`, and the Node engine — `Process`, `Duplex`, `Supervisor`,
+`execute`, `executeSync`, `detach`, `ProcessManager`, `createDuplex`, and their
 sibling factories and helpers — from `@orkestrel/process/server`.
 
 ## License

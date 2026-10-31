@@ -11,9 +11,9 @@ import type { PROCESS_ERROR_CODES } from './constants.js'
  *   backlog, a byte-bounded stderr tail, a live stderr event, a writable stdin channel, a typed
  *   lifecycle {@link ProcessEventMap} emitter, and bounded termination. The low-level streaming
  *   primitive.
- * - **{@link SessionInterface}** — the same supervised child observed as raw bytes: an owned
+ * - **{@link DuplexInterface}** — the same supervised child observed as raw bytes: an owned
  *   `Uint8Array` per stdout chunk, an open stdin channel closed by `end` rather than by a switch,
- *   the child's own `ended` beside the terminal `exit`, and a typed {@link SessionEventMap}
+ *   the child's own `ended` beside the terminal `exit`, and a typed {@link DuplexEventMap}
  *   emitter. The transport primitive, for a child speaking a framed protocol.
  * - **{@link ExecuteResult} / execute** — a one-shot spawn that buffers a child to completion and settles
  *   with its output and exit, the ergonomic layer for fire-and-collect commands.
@@ -332,14 +332,14 @@ export interface ProcessInterface {
 }
 
 /**
- * Represents the push observation surface of a {@link SessionInterface} — the moments a byte-oriented observer
+ * Represents the push observation surface of a {@link DuplexInterface} — the moments a byte-oriented observer
  * subscribes to, alongside the `ended` and `exit` promises.
  *
  * @remarks
  * Declared as a `type` alias so it satisfies the emitter's `EventMap` constraint structurally.
  *
  * `stdout` carries one owned `Uint8Array` per chunk the host delivered, in arrival order, framed by
- * nothing and decoded by nothing. The array is the session's own copy and a plain `Uint8Array`
+ * nothing and decoded by nothing. The array is the duplex's own copy and a plain `Uint8Array`
  * rather than the host buffer the read produced, so a consumer keeps it, mutates it, concatenates
  * it, and reads its whole backing buffer without reaching memory the host still manages and without
  * depending on a host type. A chunk boundary is the host's, so one event is not one message and a
@@ -347,14 +347,14 @@ export interface ProcessInterface {
  * concatenated bytes itself.
  *
  * `stderr` carries decoded text instead, because a diagnostic stream is read rather than parsed, and
- * {@link SessionInterface.evidence} bounds those same bytes. The `error` event carries a child fault
+ * {@link DuplexInterface.evidence} bounds those same bytes. The `error` event carries a child fault
  * — a failure to spawn, a process-level error, or a host-reported standard-input channel fault. A
  * surfaced standard-input fault is wrapped in a {@link ProcessError} coded `protocol` with the host
- * fault as its cause. The event is distinct from the `error` handler in {@link SessionOptions}: a
+ * fault as its cause. The event is distinct from the `error` handler in {@link DuplexOptions}: a
  * listener throw is isolated by the emitter and routed to that handler, never emitted as this
  * `error` event.
  */
-export type SessionEventMap = {
+export type DuplexEventMap = {
 	/** Reports a standard-output chunk arrived, as an owned `Uint8Array` the consumer may keep and mutate. */
 	readonly stdout: readonly [chunk: Uint8Array]
 	/** Reports a decoded standard-error chunk arrived. */
@@ -366,15 +366,15 @@ export type SessionEventMap = {
 }
 
 /**
- * Configures one raw byte session over a supervised child.
+ * Configures one raw byte duplex over a supervised child.
  *
  * @remarks
- * This is {@link ProcessOptions} without `backlog` and without `writable`. A session frames nothing
+ * This is {@link ProcessOptions} without `backlog` and without `writable`. A duplex frames nothing
  * and retains no lines, so no backlog bound applies to it; its standard-input channel is open from
- * the spawn until {@link SessionInterface.end}, so no switch selects whether one exists. `grace`,
+ * the spawn until {@link DuplexInterface.end}, so no switch selects whether one exists. `grace`,
  * `drain`, `evidence`, `delivery`, and `signal` carry the meanings {@link ProcessOptions} documents
  * for them, and `command.input` is still written immediately after the spawn. `on` installs initial
- * {@link SessionEventMap} listeners and `error` receives isolated listener failures.
+ * {@link DuplexEventMap} listeners and `error` receives isolated listener failures.
  *
  * Every option and command property is read once, before the child is spawned, so a caller's own
  * getter runs while nothing has started and a getter that throws strands no process. Every numeric
@@ -382,8 +382,8 @@ export type SessionEventMap = {
  * or fractional byte value, throws a {@link ProcessError} coded `invalid` before anything is
  * spawned.
  */
-export interface SessionOptions {
-	readonly on?: EmitterHooks<SessionEventMap>
+export interface DuplexOptions {
+	readonly on?: EmitterHooks<DuplexEventMap>
 	readonly error?: EmitterErrorHandler
 	readonly command: ProcessCommand
 	/** Names the working directory the child runs in. */
@@ -394,7 +394,7 @@ export interface SessionOptions {
 	readonly drain?: number
 	/** Sets the maximum retained stderr tail in bytes. Default: {@link PROCESS_EVIDENCE}. */
 	readonly evidence?: number
-	/** Sets the milliseconds an unconfirmed {@link SessionInterface.write} waits before resolving `false`. `0` or omitted disables the bound. */
+	/** Sets the milliseconds an unconfirmed {@link DuplexInterface.write} waits before resolving `false`. `0` or omitted disables the bound. */
 	readonly delivery?: number
 	/** Terminates the child through the same bounded `stop` when this signal aborts. */
 	readonly signal?: AbortSignal
@@ -405,10 +405,10 @@ export interface SessionOptions {
  * termination.
  *
  * @remarks
- * A session is the transport face of the same supervision {@link ProcessInterface} exposes. It
+ * A duplex is the transport face of the same supervision {@link ProcessInterface} exposes. It
  * publishes the child's standard output as `stdout` events carrying owned bytes rather than framed
  * lines, so a consumer speaking a length-prefixed or delimiter-framed protocol reads the bytes the
- * child wrote and frames them itself. Nothing here retains output: a session holds no backlog and
+ * child wrote and frames them itself. Nothing here retains output: a duplex holds no backlog and
  * pauses nothing, so it omits `lines`, `truncated`, `backlog`, and `send` rather than reporting them
  * as facts that do not apply. `evidence` is the decoded, byte-bounded stderr tail — the diagnostic to
  * attach to a failed exit — and the typed `emitter` carries the live `stdout` and `stderr` payloads,
@@ -432,7 +432,7 @@ export interface SessionOptions {
  * `pid !== undefined && code === null && signal === null`, and derive it again before every use of
  * the id.
  */
-export interface SessionInterface {
+export interface DuplexInterface {
 	/** Holds the host process id, fixed when construction returns, or `undefined` when the spawn produced none. */
 	readonly pid: number | undefined
 	/** Holds the exit code the host recorded, or `null` while the child has not exited and when a signal ended it. A spawn fault reports the host's negative errno. */
@@ -440,7 +440,7 @@ export interface SessionInterface {
 	/** Holds the terminating signal name the host recorded, or `null` while the child has not exited and when it exited on its own. */
 	readonly signal: string | null
 	/** Holds the typed lifecycle observation surface. */
-	readonly emitter: EmitterInterface<SessionEventMap>
+	readonly emitter: EmitterInterface<DuplexEventMap>
 	/**
 	 * Holds the decoded byte-bounded stderr tail.
 	 *

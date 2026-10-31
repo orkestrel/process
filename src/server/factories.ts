@@ -1,14 +1,14 @@
 import type {
+	DuplexInterface,
+	DuplexOptions,
 	ProcessInterface,
 	ProcessManagerInterface,
 	ProcessManagerOptions,
 	ProcessOptions,
-	SessionInterface,
-	SessionOptions,
 } from '@src/core'
+import { Duplex } from './processes/Duplex.js'
 import { Process } from './processes/Process.js'
 import { ProcessManager } from './processes/ProcessManager.js'
-import { Session } from './processes/Session.js'
 
 /**
  * Creates one supervised child process and returns it as a {@link ProcessInterface}, so a caller
@@ -41,25 +41,25 @@ export function createProcess(options: ProcessOptions): ProcessInterface {
 }
 
 /**
- * Creates one raw byte session over a supervised child process and returns it as a
- * {@link SessionInterface}, so a caller holds the published contract rather than the `Session` class.
+ * Creates one raw byte duplex over a supervised child process and returns it as a
+ * {@link DuplexInterface}, so a caller holds the published contract rather than the `Duplex` class.
  *
  * @param options - Command, workspace, termination, evidence, stdin, and observation settings
- * @returns The launched {@link SessionInterface}
+ * @returns The launched {@link DuplexInterface}
  *
  * @example
  * ```ts
- * import { createSession } from '@orkestrel/process/server'
+ * import { createDuplex } from '@orkestrel/process/server'
  *
- * const session = createSession({
+ * const duplex = createDuplex({
  * 	command: { file: 'node', arguments: ['server.js', '--stdio'] },
  * 	workspace: process.cwd(),
  * 	grace: 5000,
  * })
  * ```
  */
-export function createSession(options: SessionOptions): SessionInterface {
-	return new Session(options)
+export function createDuplex(options: DuplexOptions): DuplexInterface {
+	return new Duplex(options)
 }
 
 /**

@@ -1,5 +1,5 @@
 import type { EmitterInterface } from '@orkestrel/emitter'
-import type { ProcessExit, SessionEventMap, SessionInterface, SessionOptions } from '@src/core'
+import type { DuplexInterface, DuplexOptions, ProcessExit, DuplexEventMap } from '@src/core'
 import { Buffer } from 'node:buffer'
 import { Emitter } from '@orkestrel/emitter'
 import { Supervisor } from './Supervisor.js'
@@ -15,7 +15,7 @@ import { Supervisor } from './Supervisor.js'
  * itself. Standard error is decoded and forwarded as `stderr`, with the same byte-bounded `evidence`
  * tail a `Process` retains, because a diagnostic stream is read rather than parsed.
  *
- * Each emitted chunk is this session's own copy, and a plain `Uint8Array` rather than the host buffer
+ * Each emitted chunk is this duplex's own copy, and a plain `Uint8Array` rather than the host buffer
  * the read produced, so a consumer keeps it, mutates it, concatenates it, and reads its whole backing
  * buffer without reaching memory the host still manages and without depending on a host type.
  *
@@ -27,16 +27,16 @@ import { Supervisor } from './Supervisor.js'
  *
  * @example
  * ```ts
- * import { Session } from '@orkestrel/process/server'
+ * import { Duplex } from '@orkestrel/process/server'
  *
- * const session = new Session({
+ * const duplex = new Duplex({
  * 	command: { file: 'node', arguments: ['-e', 'process.stdin.pipe(process.stdout)'] },
  * 	workspace: process.cwd(),
  * })
  * ```
  */
-export class Session implements SessionInterface {
-	readonly #emitter: Emitter<SessionEventMap>
+export class Duplex implements DuplexInterface {
+	readonly #emitter: Emitter<DuplexEventMap>
 	readonly #engine: Supervisor
 	readonly #output: (chunk: unknown) => void
 
@@ -46,7 +46,7 @@ export class Session implements SessionInterface {
 	 * @param options - Command, workspace, termination, evidence, stdin, and observation settings
 	 * @throws A {@link ProcessError} coded `invalid` when an option or command string is malformed
 	 */
-	constructor(options: SessionOptions) {
+	constructor(options: DuplexOptions) {
 		// Every option is read once, here, before the engine reads the command and spawns anything.
 		// Reading a property runs the caller's own getter, so a read after the spawn would let that
 		// getter throw while a live child exists and nobody holds a reference to it. The engine
@@ -62,7 +62,7 @@ export class Session implements SessionInterface {
 		const signal = options.signal
 		const on = options.on
 		const error = options.error
-		this.#emitter = new Emitter<SessionEventMap>({
+		this.#emitter = new Emitter<DuplexEventMap>({
 			...(on === undefined ? {} : { on }),
 			...(error === undefined ? {} : { error }),
 		})
@@ -71,7 +71,7 @@ export class Session implements SessionInterface {
 			{
 				command,
 				workspace,
-				// The channel stays open from the spawn until `end` closes it, so a session selects
+				// The channel stays open from the spawn until `end` closes it, so a duplex selects
 				// nothing here and declares no `writable` option of its own.
 				writable: true,
 				...(grace === undefined ? {} : { grace }),
@@ -90,7 +90,7 @@ export class Session implements SessionInterface {
 		)
 		// The host delivers no output before this synchronous constructor returns, so the consumer
 		// attaches here without losing a byte the engine already spawned for. Attaching is also what
-		// puts stdout in flowing mode, which is what a session wants: it retains nothing, and a paused
+		// puts stdout in flowing mode, which is what a duplex wants: it retains nothing, and a paused
 		// stream would hold the child's own write and therefore its exit.
 		this.#engine.stdout.on('data', this.#output)
 	}
@@ -111,7 +111,7 @@ export class Session implements SessionInterface {
 	}
 
 	/** Holds the typed lifecycle observation surface. */
-	get emitter(): EmitterInterface<SessionEventMap> {
+	get emitter(): EmitterInterface<DuplexEventMap> {
 		return this.#emitter
 	}
 

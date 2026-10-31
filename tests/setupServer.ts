@@ -41,7 +41,7 @@ export const PROCESS_MEMBERS: readonly string[] = Object.freeze([
 	'stop',
 	'destroy',
 ])
-export const SESSION_MEMBERS: readonly string[] = Object.freeze([
+export const DUPLEX_MEMBERS: readonly string[] = Object.freeze([
 	'pid',
 	'code',
 	'signal',
