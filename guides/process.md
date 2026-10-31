@@ -88,8 +88,6 @@ in a Surface row.
 
 The total guard, from `@orkestrel/process`.
 
-In a guard table a `Shape` cell holds the type the guard narrows to.
-
 | Name             | Kind     | Signature                                   | Summary                                              |
 | ---------------- | -------- | ------------------------------------------- | ---------------------------------------------------- |
 | `isProcessError` | function | `(value: unknown) => value is ProcessError` | Checks whether an unknown value is a `ProcessError`. |
@@ -176,8 +174,6 @@ The input refusals every public entry point runs before it spawns anything, from
 
 The defaults and host bounds, from `@orkestrel/process`.
 
-A `Shape` cell holds the constant's declared type.
-
 | Name                   | Kind  | Signature                                                                    | Summary                                                                                                                                                                                       |
 | ---------------------- | ----- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PROCESS_GRACE`        | const | `5000`                                                                       | Names the default cooperative POSIX window, 5000 ms, between `SIGTERM` and `SIGKILL` during termination.                                                                                      |
@@ -193,8 +189,6 @@ A `Shape` cell holds the constant's declared type.
 ### Types
 
 The contracts and options, all from `@orkestrel/process`.
-
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
 
 | Name                      | Kind      | Signature                                                                                                                                                                               | Summary                                                                                                                                                                      |
 | ------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -228,8 +222,6 @@ a host-independent contract cannot, and `SupervisorFace` names no Node type but 
 Node-only `Supervisor` engine, so the contract sits with the face that constructs one. See
 [Vocabulary](#vocabulary) for the `Face` suffix.
 
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
-
 | Name                    | Kind      | Signature                                               | Summary                                                                                      |
 | ----------------------- | --------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `ProcessChildInterface` | interface | `{ pid?, exitCode, signalCode, kill(), once(), off() }` | Represents the child boundary the termination helpers drive.                                 |
@@ -237,10 +229,10 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 
 ### Surface notes
 
-Every member a `Shape` cell names before `plus` is a readonly data property, so it stays a Surface
+Every member a `Signature` cell names without parentheses is a readonly data property, so it stays a Surface
 row. `ended` and `exit` are among them: a promise you await is a value the entity holds, not a call
 you make. A `SupervisorFace` member is among them too: it holds a function the caller supplies
-rather than declaring one the contract implements. The call-signature members after `plus` are
+rather than declaring one the contract implements. The members it names with parentheses are
 documented under [Methods](#methods).
 
 The `Supervisor` class publishes readonly data members of its own: `stdout`, `pid`, `code`, `signal`,
