@@ -148,7 +148,7 @@ The signalling and confirmation building blocks a bounded stop composes, from
 | `waitForExit`    | function | `(child: Pick<ProcessChildInterface, 'exitCode' \| 'signalCode' \| 'once' \| 'off'>, timeout: number) => Promise<void>` | Waits for one child process's native exit, bounded by a deadline.                           |
 | `waitForClose`   | function | `(child: Pick<ProcessChildInterface, 'once' \| 'off'>, timeout: number) => Promise<boolean>`                            | Waits for one child process's streams to close, bounded by a deadline.                      |
 | `stopChild`      | function | `(child: ProcessChildInterface, grace: number, confirm: number) => Promise<boolean>`                                    | Terminates one child process tree and reports whether its native exit was observed.         |
-| `stopGroup`      | function | `(child: ProcessChildInterface, grace: number) => Promise<void>`                                                        | Terminates the POSIX process group an exited child led, while the group still has a member. |
+| `stopGroup`      | function | `(child: ProcessChildInterface, grace: number, members: readonly ProcessMember[]) => Promise<void>`                     | Terminates the POSIX process group an exited child led, while the group still has a member. |
 
 `inspectProcess` returns `true` while the process or POSIX process group exists, including
 when the host refuses the probe with `EPERM`. It returns `false` after the target is gone
@@ -158,22 +158,29 @@ positive process ids and refuses every negative id before the host call. On POSI
 id other than minus one probes the process group identified by its magnitude. A zombie still
 answers the probe signal, so where the host publishes a `/proc` process table, `inspectProcess`
 returns `false` for an id whose every thread, or every group member's every thread, reads `Z` or
-`X` in two readings taken one after the other. A reading it cannot take reads as live, and a host
-without the table keeps the signal's answer.
+`X` in two readings taken one after the other. A reading it cannot take reads as live, and so does
+every group while the table's mount carries a `hidepid` option other than `0` or `off`, because
+that mount hides other users' processes and a hidden member can be live. A host without the table
+keeps the signal's answer.
 
 ### Process-table readers
 
-The Linux `/proc` reading `inspectProcess` and `stopGroup` read a zombie through, from
-`@orkestrel/process/server`. Each reader takes the table's root as its last argument, which
-defaults to `PROCESS_TABLE`.
+The Linux `/proc` reading `inspectProcess` reads a zombie through and `stopGroup` confirms a
+group's identity through, from `@orkestrel/process/server`. Each reader takes the table's root as
+an argument that defaults to `PROCESS_TABLE`, so a proof can point it at an inert table, and
+`matchesProcessEnded` also takes the scan it repeats.
 
-| Name                 | Kind     | Signature                                                                    | Summary                                                                                             |
-| -------------------- | -------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `parseProcessStat`   | function | `(text: string) => ProcessStat \| undefined`                                 | Parses one process-table `stat` line into the state and the process group a liveness reading needs. |
-| `readProcessThreads` | function | `(pid: string, table?: string) => readonly ProcessTask[] \| undefined`       | Reads the state of every thread of one process from a process table.                                |
-| `readProcessTasks`   | function | `(pid: number, table?: string) => readonly ProcessTask[] \| undefined`       | Reads every thread of one process, or of every member of one process group, from a process table.   |
-| `matchesEndedTasks`  | function | `(first: readonly ProcessTask[], second: readonly ProcessTask[]) => boolean` | Checks whether two process-table readings show the same threads, every one of them exited.          |
-| `readProcessEnded`   | function | `(pid: number, table?: string) => boolean`                                   | Reads whether a process or a process group has ended while the host still answers its id.           |
+| Name                  | Kind     | Signature                                                                                                              | Summary                                                                                                              |
+| --------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `parseProcessStat`    | function | `(text: string) => ProcessStat \| undefined`                                                                           | Parses one process-table `stat` line into the state, the process group, and the start time a liveness reading needs. |
+| `scanProcessThreads`  | function | `(pid: string, table?: string) => readonly ProcessTask[] \| undefined`                                                 | Scans the state of every thread of one process from a process table.                                                 |
+| `scanGroupMembers`    | function | `(group: number, table?: string) => readonly ProcessMember[] \| undefined`                                             | Scans the members of one process group from a process table, each with its start time.                               |
+| `scanProcessTasks`    | function | `(pid: number, table?: string) => readonly ProcessTask[] \| undefined`                                                 | Scans every thread of one process, or of every member of one process group, from a process table.                    |
+| `matchesEndedTasks`   | function | `(first: readonly ProcessTask[], second: readonly ProcessTask[]) => boolean`                                           | Checks whether two process-table readings show the same threads, every one of them exited.                           |
+| `matchesTableHidden`  | function | `(table?: string) => boolean`                                                                                          | Checks whether the mount of a process table hides other users' processes from this reader.                           |
+| `matchesProcessEnded` | function | `(pid: number, table?: string, scan?: (pid: number, table: string) => readonly ProcessTask[] \| undefined) => boolean` | Checks whether a process or a process group has ended while the host still answers its id.                           |
+| `matchesGroupMembers` | function | `(group: number, members: readonly ProcessMember[], table?: string) => boolean`                                        | Checks whether a process group still holds a member a snapshot of that group named.                                  |
+| `collectGroupMembers` | function | `(child: Pick<ProcessChildInterface, 'pid'>, table?: string) => readonly ProcessMember[]`                              | Collects the members of the POSIX process group an exited child led, as of the call.                                 |
 
 ### Validators
 
@@ -241,14 +248,16 @@ The Node-side contracts, from `@orkestrel/process/server`. Each sits in this fac
 the host-independent one for its own reason: `ProcessChildInterface` names `NodeJS.Signals`, which
 a host-independent contract cannot, and `SupervisorFace` names no Node type but its consumer is the
 Node-only `Supervisor` engine, so the contract sits with the face that constructs one.
-`ProcessStat` and `ProcessTask` describe what the Node-side process-table readers parse. See
+`ProcessStat`, `ProcessTask`, and `ProcessMember` describe what the Node-side process-table readers
+parse. See
 [Vocabulary](#vocabulary) for the `Face` suffix.
 
 | Name                    | Kind      | Signature                                               | Summary                                                                                      |
 | ----------------------- | --------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `ProcessChildInterface` | interface | `{ pid?, exitCode, signalCode, kill(), once(), off() }` | Represents the child boundary the termination helpers drive.                                 |
 | `SupervisorFace`        | interface | `{ chunk, fault, relieve?, close, terminal, teardown }` | Represents the composing face's callbacks for each lifecycle moment of one supervised child. |
-| `ProcessStat`           | interface | `{ state, group }`                                      | Represents the fields of one process-table `stat` entry a liveness reading needs.            |
+| `ProcessStat`           | interface | `{ state, group, start }`                               | Represents the fields of one process-table `stat` entry a liveness reading needs.            |
+| `ProcessMember`         | interface | `{ pid, start }`                                        | Represents one process-group member as a group snapshot names it: its id and its start time. |
 | `ProcessTask`           | interface | `{ id, state }`                                         | Represents one thread a process-table reading found: its `<pid>/<tid>` key and its state.    |
 
 ### Surface notes
@@ -712,10 +721,10 @@ timeout must terminate the child tree.
 
 POSIX and Windows terminate differently, and only POSIX has a cooperative phase.
 
-| Host    | Sequence                                                                                                                                                                                                                                                                                       | `grace`  |
-| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| POSIX   | `SIGTERM` to the process group, wait `grace`, then `SIGKILL` to the group — each signal reaching the child directly when no group owns its pid. After the child's exit, the same pair reaches the group while a member has not exited, the `grace` wait ending early when the read ends close. | used     |
-| Windows | `taskkill /F /T` on the whole tree at once, with a direct kill after the utility reports failure.                                                                                                                                                                                              | not used |
+| Host    | Sequence                                                                                                                                                                                                                                                                                                                                  | `grace`  |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| POSIX   | `SIGTERM` to the process group, wait `grace`, then `SIGKILL` to the group — each signal reaching the child directly when no group owns its pid. After the child's exit, the same pair reaches the group while a member recorded at that exit remains and a member has not exited, the `grace` wait ending early when the read ends close. | used     |
+| Windows | `taskkill /F /T` on the whole tree at once, with a direct kill after the utility reports failure.                                                                                                                                                                                                                                         | not used |
 
 Windows has no signal a process group can receive, so `killTree` ends the tree through the
 `taskkill.exe` utility addressed by its absolute `System32` path, which stops a `PATH` override
@@ -733,14 +742,18 @@ process as not found while the descendant kept the pipe open and delivered for a
 Windows a descendant whose root has exited is beyond every mechanism here, and the `drain` bound is
 what ends the wait for it.
 
-A POSIX process group is not reused that way. The host reserves a group's id while the group has a
-member, so after the child's own exit the negated pid still names the group the child led, and its
-descendants are still in it. `Process`, `Duplex`, and `execute` spawn every POSIX child as the
-leader of its own group, apart from the caller's, so after `stopChild` returns they call `stopGroup`.
-It signals that group only while `inspectProcess` reads a member that has not exited, which
-excludes a zombie on a host that publishes `/proc`, so an exited child that left no descendant costs
-no wait. A descendant that left the group, by starting a session of its own, is beyond this route,
-and the `drain` bound is what ends the wait for it.
+A POSIX process group outlives its leader's exit while it has a member, but its id alone does not
+prove that: after every member has left, the host can hand the id to an unrelated group. `Process`,
+`Duplex`, and `execute` spawn every POSIX child as the leader of its own group, apart from the
+caller's. When they observe the child's exit, `collectGroupMembers` records the members the group
+still holds, each as its id and its start time. After `stopChild` returns they call `stopGroup`,
+which signals the group only while it still holds a member with an identical id and start time
+from that record, and only while `inspectProcess` reads a member that has not exited. An exited
+child that left no descendant therefore costs no wait. An empty or unreadable record signals
+nothing, and so does a host that publishes no `/proc` process table, where only the drain bound
+ends the wait. A descendant that left the group, by starting a session of its own, is beyond this
+route. So is a descendant forked after the child's exit, from the moment every recorded member that
+is its ancestor has ended; the drain bound is what ends the wait for either.
 
 After an undrained cutoff, no mechanism here can report whether further diagnostics existed, and that
 is a limit rather than an omission. Node exposes no count of the writers still holding a pipe, and a
@@ -1183,7 +1196,7 @@ value with `isProcessError`, then branch on `code`.
 | ----------- | --------------------------------------------------------------------------------------------------------- |
 | `spawn`     | A rejecting run failed outside its own timeout or input write.                                            |
 | `timeout`   | A rejecting run's own `timeout` elapsed before completion.                                                |
-| `input`     | `execute` alone: a rejecting run's standard-input write reported a host fault.                            |
+| `input`     | `execute` alone: a rejecting run's standard-input write reported a host fault before any termination.     |
 | `duplicate` | `ProcessManager.launch` reused an id that is already live.                                                |
 | `protocol`  | `ProcessManager.launch` ran after `destroy` began, or a supervised channel's open stdin reported a fault. |
 | `invalid`   | A public input was refused before anything was spawned.                                                   |
@@ -1200,9 +1213,11 @@ A run failure carries its `ExecuteResult` on `error.result`, and its command lin
 `signal` on `error.context`. A duplicate-id and a protocol failure carry the offending `id` on
 `error.context`. A validation failure carries the rejected input on `error.context.value`. The
 underlying cause, when one exists, is retained on `error.cause`; an aborted run carries the
-`reason` of the caller's signal there. A signal that already aborted refuses the run before the
-spawn, and the rejection matches an abort during the run: a `spawn`-coded error whose `result`
-reports `aborted`, with `code` and `signal` both `null`.
+`reason` of the caller's signal there. A standard-input fault that arrives after a timeout or an abort
+began is that termination's consequence, so the run still rejects as `timeout` or `spawn`. A signal
+that already aborted refuses the run before the spawn and rejects the way an abort during the run
+does, as a `spawn`-coded error whose `result` reports `aborted`; its `code` and `signal` are both
+`null`, because no child ran.
 
 ```ts
 import { createDuplicateError, createInvalidError, createProtocolError } from '@orkestrel/process'
@@ -1641,9 +1656,12 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   [`tests/src/server/helpers.bench.ts`](../tests/src/server/helpers.bench.ts) reads its cost at a
   64 KiB bound against the array walk it replaced. `inspectProcess` reads a real unreaped zombie and
   its group as ended, the process-table readers run over inert tables, each reading they cannot take
-  included, and `stopGroup` ends the descendant an exited group leader left behind while it leaves a
-  live root's group alone. The fire-and-forget spawn covers owned inputs, detached process-group
-  behavior, invalid-input refusal, and the validated working directory.
+  included, a group reads as live under a `hidepid` mount, and a second scan that gains a task reads
+  as live through an injected scan. `stopGroup` ends the descendant an exited group leader left
+  behind while it leaves a live root's group alone, and it signals nothing for a group id an
+  unrelated process leads, against a control that carries that process's own id and start
+  time. The fire-and-forget spawn covers owned inputs, detached process-group behavior,
+  invalid-input refusal, and the validated working directory.
 - [`tests/src/server/execution/execute.test.ts`](../tests/src/server/execution/execute.test.ts)
   — the asynchronous one-shot run: owned inputs, buffered outcomes, failure delivery,
   cancellation, timeout, capture bounds, spawn faults, and pre-spawn refusal. A signal that already
@@ -1651,8 +1669,9 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   `cause`, and a timeout ends a POSIX descendant that holds the pipe after the root exited, settling
   near the timeout.
 - [`tests/src/server/parsers.test.ts`](../tests/src/server/parsers.test.ts) — the process-table
-  `stat` parser: the state and the group read after the last parenthesis of a command name that
-  holds spaces and parentheses, and the refusal of text that carries no state or no numeric group.
+  `stat` parser: the state, the group, and the start time read after the last parenthesis of a
+  command name that holds spaces and parentheses, and the refusal of text that carries no state, no
+  numeric group, or no numeric start time.
 - [`tests/src/server/execution/executeSync.test.ts`](../tests/src/server/execution/executeSync.test.ts)
   — the blocking run: root-only timeout and argument integrity beside owned inputs, buffered
   outcomes, failure delivery, capture bounds, spawn faults, and pre-spawn refusal.

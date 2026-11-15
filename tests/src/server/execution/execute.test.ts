@@ -367,6 +367,36 @@ describe('execute', () => {
 		expect(control.code).toBe(0)
 	})
 
+	// The child never reads its input, so the 4 MiB write is still pending when the termination
+	// kills the child, and the host then reports the broken pipe. That fault is the termination's
+	// consequence, so the rejection names the termination rather than the input channel.
+	it('rejects an aborted or expired run by its termination while an input write is pending', async () => {
+		const input = 'x'.repeat(4 * 1_024 * 1_024)
+		const idle = {
+			file: process.execPath,
+			arguments: ['-e', 'setInterval(() => undefined, 1_000)'],
+		}
+		const controller = new AbortController()
+		const reason = new Error('the caller withdrew the run')
+		const aborting = execute(idle, {
+			input,
+			grace: 20,
+			signal: controller.signal,
+		}).catch((caught: unknown) => caught)
+		controller.abort(reason)
+		const aborted = await aborting
+		const expired = await execute(idle, { input, grace: 20, timeout: 100 }).catch(
+			(caught: unknown) => caught,
+		)
+
+		expect(isProcessError(aborted)).toBe(true)
+		expect(aborted).toMatchObject({ code: 'spawn', cause: reason })
+		expect(isProcessError(aborted) ? aborted.result?.aborted : undefined).toBe(true)
+		expect(isProcessError(expired)).toBe(true)
+		expect(isProcessError(expired) ? expired.code : undefined).toBe('timeout')
+		expect(isProcessError(expired) ? expired.result?.expired : undefined).toBe(true)
+	})
+
 	it('refuses a NUL in a per-run environment override before spawning', async () => {
 		const nul = String.fromCodePoint(0)
 		const thrown: unknown = await execute(childCommand('exit', '0'), {

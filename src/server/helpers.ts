@@ -6,7 +6,7 @@ import type {
 	ProcessCommand,
 	SpawnInput,
 } from '@src/core'
-import type { ProcessChildInterface, ProcessTask } from './types.js'
+import type { ProcessChildInterface, ProcessMember, ProcessTask } from './types.js'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
@@ -625,7 +625,7 @@ export function isExited(child: Pick<ProcessChildInterface, 'exitCode' | 'signal
 }
 
 /**
- * Reads the state of every thread of one process from a process table.
+ * Scans the state of every thread of one process from a process table.
  *
  * @param pid - The process id, as the table's entry names it
  * @param table - The process table's root. Default: {@link PROCESS_TABLE}
@@ -634,10 +634,10 @@ export function isExited(child: Pick<ProcessChildInterface, 'exitCode' | 'signal
  *
  * @example
  * ```ts
- * readProcessThreads(String(process.pid)) // [{ id: '<pid>/<pid>', state: 'R' }, ...] on Linux
+ * scanProcessThreads(String(process.pid)) // [{ id: '<pid>/<pid>', state: 'R' }, ...] on Linux
  * ```
  */
-export function readProcessThreads(
+export function scanProcessThreads(
 	pid: string,
 	table: string = PROCESS_TABLE,
 ): readonly ProcessTask[] | undefined {
@@ -654,30 +654,29 @@ export function readProcessThreads(
 }
 
 /**
- * Reads every thread of one process, or of every member of one process group, from a process table.
+ * Scans the members of one process group from a process table, each with its start time.
  *
  * @remarks
  * A group's members are the entries whose `stat` names the group. An entry whose `stat` is gone
  * (`ENOENT`) is a process that ended after the listing, and it is skipped; any other entry that
- * cannot be read leaves the whole reading unread, because it might be a member.
+ * cannot be read leaves the whole scan unread, because it might be a member.
  *
- * @param pid - A positive process id, or a negative process-group id
+ * @param group - The positive process-group id
  * @param table - The process table's root. Default: {@link PROCESS_TABLE}
- * @returns The threads read, or `undefined` when the table, an entry, or a member's threads cannot be read
+ * @returns The members found, or `undefined` when the table or an entry cannot be read
  *
  * @example
  * ```ts
- * readProcessTasks(-process.pid) // the threads of the group this process leads, on Linux
+ * scanGroupMembers(process.pid) // the members of the group this process leads, on Linux
  * ```
  */
-export function readProcessTasks(
-	pid: number,
+export function scanGroupMembers(
+	group: number,
 	table: string = PROCESS_TABLE,
-): readonly ProcessTask[] | undefined {
-	if (pid > 0) return readProcessThreads(String(pid), table)
+): readonly ProcessMember[] | undefined {
 	const listing = attempt(() => readdirSync(table))
 	if (!listing.success) return undefined
-	const members = listing.value
+	const entries = listing.value
 		.filter((name) => /^\d+$/u.test(name))
 		.map((name) => {
 			const text = attempt(() => readFileSync(join(table, name, 'stat'), 'utf8'))
@@ -687,9 +686,77 @@ export function readProcessTasks(
 			}
 			const stat = parseProcessStat(text.value)
 			if (stat === undefined) return undefined
-			return stat.group === -pid ? readProcessThreads(name, table) : []
+			return stat.group === group ? [Object.freeze({ pid: Number(name), start: stat.start })] : []
 		})
-	return members.every((member) => member !== undefined) ? Object.freeze(members.flat()) : undefined
+	return entries.every((entry) => entry !== undefined) ? Object.freeze(entries.flat()) : undefined
+}
+
+/**
+ * Scans every thread of one process, or of every member of one process group, from a process table.
+ *
+ * @remarks
+ * {@link scanGroupMembers} finds a group's members; any member whose threads cannot be read leaves
+ * the whole scan unread.
+ *
+ * @param pid - A positive process id, or a negative process-group id
+ * @param table - The process table's root. Default: {@link PROCESS_TABLE}
+ * @returns The threads found, or `undefined` when the table, an entry, or a member's threads cannot be read
+ *
+ * @example
+ * ```ts
+ * scanProcessTasks(-process.pid) // the threads of the group this process leads, on Linux
+ * ```
+ */
+export function scanProcessTasks(
+	pid: number,
+	table: string = PROCESS_TABLE,
+): readonly ProcessTask[] | undefined {
+	if (pid > 0) return scanProcessThreads(String(pid), table)
+	const members = scanGroupMembers(-pid, table)
+	if (members === undefined) return undefined
+	const threads = members.map((member) => scanProcessThreads(String(member.pid), table))
+	return threads.every((thread) => thread !== undefined) ? Object.freeze(threads.flat()) : undefined
+}
+
+/**
+ * Checks whether the mount of a process table hides other users' processes from this reader.
+ *
+ * @remarks
+ * A `proc` mount with `hidepid` set to anything but `0` or `off` lists only this user's
+ * processes, so a live member of a group can be missing from a reading of that group. The option
+ * is read from the last `<table>/self/mountinfo` line whose mount point is `table`, in its
+ * per-mount or its file-system options; a mount point's octal escapes are decoded first. A
+ * `mountinfo` that cannot be read, or that lists no mount at `table`, reads as hiding.
+ *
+ * @param table - The process table's root. Default: {@link PROCESS_TABLE}
+ * @returns True if the mount hides processes or cannot be read; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesTableHidden() // false on a /proc mounted without hidepid
+ * ```
+ */
+export function matchesTableHidden(table: string = PROCESS_TABLE): boolean {
+	const text = attempt(() => readFileSync(join(table, 'self', 'mountinfo'), 'utf8'))
+	if (!text.success) return true
+	const mount = text.value
+		.split(/\r\n|\n/u)
+		.map((line) => line.split(' '))
+		.filter(
+			(fields) =>
+				fields[4]?.replaceAll(/\\([0-7]{3})/gu, (_, code: string) =>
+					String.fromCodePoint(Number.parseInt(code, 8)),
+				) === table,
+		)
+		.at(-1)
+	if (mount === undefined) return true
+	const options = [
+		...(mount[5] ?? '').split(','),
+		...(mount[mount.indexOf('-') + 3] ?? '').split(','),
+	]
+	return options.some(
+		(option) => option.startsWith('hidepid=') && !['0', 'off'].includes(option.slice(8)),
+	)
 }
 
 /**
@@ -729,40 +796,109 @@ export function matchesEndedTasks(
 }
 
 /**
- * Reads whether a process or a process group has ended while the host still answers its id.
+ * Checks whether a process or a process group has ended while the host still answers its id.
  *
  * @remarks
  * A signal reaches a zombie, so a process or group whose every thread has exited still answers the
  * probe signal until its parent reaps it, and an init that never reaps leaves it that way. Where
- * the host publishes a process table, two readings taken one after the other decide, per
+ * the host publishes a process table, two scans taken one after the other decide, per
  * {@link matchesEndedTasks}. A process whose main thread exited while another thread runs reads as
- * live through that thread. A host without the table, and a reading that cannot read part of it,
- * read nothing as ended.
+ * live through that thread. A group reads as live while {@link matchesTableHidden} reports that the
+ * table hides processes, because a hidden member can be live. A host without the table, and a scan
+ * that cannot read part of it, read nothing as ended.
  *
  * @param pid - A positive process id, or a negative process-group id
  * @param table - The process table's root. Default: {@link PROCESS_TABLE}
+ * @param scan - Takes one scan of the threads; `undefined` means it could not read the table. Default: {@link scanProcessTasks}
  * @returns True if the table shows every thread exited; false otherwise, including when it cannot tell
  *
  * @example
  * ```ts
- * readProcessEnded(process.pid) // false
+ * matchesProcessEnded(process.pid) // false
  * ```
  */
-export function readProcessEnded(pid: number, table: string = PROCESS_TABLE): boolean {
+export function matchesProcessEnded(
+	pid: number,
+	table: string = PROCESS_TABLE,
+	scan: (pid: number, table: string) => readonly ProcessTask[] | undefined = scanProcessTasks,
+): boolean {
 	if (!existsSync(join(table, 'self', 'stat'))) return false
-	const first = readProcessTasks(pid, table)
+	if (pid < 0 && matchesTableHidden(table)) return false
+	const first = scan(pid, table)
 	if (first === undefined) return false
-	const second = readProcessTasks(pid, table)
+	const second = scan(pid, table)
 	return second !== undefined && matchesEndedTasks(first, second)
+}
+
+/**
+ * Checks whether a process group still holds a member a snapshot of that group named.
+ *
+ * @remarks
+ * A process id and its start time together name one process for the host's whole uptime, so a
+ * group that holds a member with both values identical to a snapshot entry is the group the
+ * snapshot was taken of, even after its leader's id was freed. An empty snapshot and a scan that
+ * cannot read the table match nothing.
+ *
+ * @param group - The positive process-group id
+ * @param members - The snapshot, as {@link collectGroupMembers} took it
+ * @param table - The process table's root. Default: {@link PROCESS_TABLE}
+ * @returns True if a member with an identical id and start time remains in the group; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesGroupMembers(4242, []) // false
+ * ```
+ */
+export function matchesGroupMembers(
+	group: number,
+	members: readonly ProcessMember[],
+	table: string = PROCESS_TABLE,
+): boolean {
+	if (members.length === 0) return false
+	const current = scanGroupMembers(group, table)
+	return (
+		current !== undefined &&
+		current.some((member) =>
+			members.some((known) => known.pid === member.pid && known.start === member.start),
+		)
+	)
+}
+
+/**
+ * Collects the members of the POSIX process group an exited child led, as of the call.
+ *
+ * @remarks
+ * Call it when the child's exit is observed, while the host still reserves the group's id for the
+ * members that remain. It returns no member on Windows, for a child without a pid, when the group
+ * no longer answers the probe signal, and when the table cannot be read, so a later
+ * {@link stopGroup} signals nothing then.
+ *
+ * @param child - The child boundary, which led its own process group
+ * @param table - The process table's root. Default: {@link PROCESS_TABLE}
+ * @returns The group's members with their start times, or none
+ *
+ * @example
+ * ```ts
+ * child.once('exit', () => collectGroupMembers(child))
+ * ```
+ */
+export function collectGroupMembers(
+	child: Pick<ProcessChildInterface, 'pid'>,
+	table: string = PROCESS_TABLE,
+): readonly ProcessMember[] {
+	const group = child.pid
+	if (process.platform === 'win32' || group === undefined) return Object.freeze([])
+	if (!holds(() => process.kill(-group, 0))) return Object.freeze([])
+	return scanGroupMembers(group, table) ?? Object.freeze([])
 }
 
 /**
  * Reports whether a process or POSIX process group still exists.
  *
  * @param pid - A positive process id, or a negative POSIX process-group id
- * @returns True when the host confirms existence or refuses permission and {@link readProcessEnded} reads no exit; false for ESRCH or an exited zombie; undefined for another host failure
+ * @returns True when the host confirms existence or refuses permission and {@link matchesProcessEnded} reads no exit; false for ESRCH or an exited zombie; undefined for another host failure
  * @throws A {@link ProcessError} coded `invalid` for an unsafe integer, zero, minus one, or a negative id on Windows
- * @remarks Negative ids probe POSIX process groups. The `process.platform` branch refuses negative ids on Windows, where the host supports positive process ids only. A zombie answers the probe signal, so an id the host answers reads as ended when the host's process table shows every thread of the process, or of every group member, exited; a host without that table keeps the signal's answer.
+ * @remarks Negative ids probe POSIX process groups. The `process.platform` branch refuses negative ids on Windows, where the host supports positive process ids only. A zombie answers the probe signal, so an id the host answers reads as ended when the host's process table shows every thread of the process, or of every group member, exited, per {@link matchesProcessEnded}; a group read through a mount that hides processes, and a host without that table, keep the signal's answer.
  * @example
  * ```ts
  * inspectProcess(process.pid) // true
@@ -783,7 +919,7 @@ export function inspectProcess(pid: number): boolean | undefined {
 		const code = isError(error) && 'code' in error ? error.code : undefined
 		if (code !== 'EPERM') return code === 'ESRCH' ? false : undefined
 	}
-	return !readProcessEnded(pid)
+	return !matchesProcessEnded(pid)
 }
 
 /**
@@ -958,31 +1094,44 @@ export async function stopChild(
  *
  * @remarks
  * Prerequisite: the child was spawned `detached` on a POSIX host, so it led its own process group
- * and that group is not the caller's. After the child's own exit its descendants keep the group, and
- * the host reserves the group's id while the group has a member, so the negated pid still names
- * that group alone. The group receives `SIGTERM` only while {@link inspectProcess} reports a member
- * that has not exited, and `SIGKILL` when one remains after `grace` or after the child's read ends
- * close, whichever comes first. Windows has no process group, and `taskkill` walks only a live
- * root's tree, so this returns immediately there; it also returns immediately while the child has
- * not exited, because {@link stopChild} owns that termination. Never rejects.
+ * and that group is not the caller's, and `members` is the snapshot {@link collectGroupMembers} took
+ * when the child's exit was observed. After every member has left a group, the host can hand its id
+ * to an unrelated group, so the id alone names nothing after the child's exit. Before each signal
+ * this reads the group again and signals it only while {@link matchesGroupMembers} finds a member
+ * of the snapshot, with an identical id and start time, still in it, and {@link inspectProcess}
+ * reports a member that has not exited. The group receives `SIGTERM`, then `SIGKILL` when both
+ * still hold after `grace` or after the child's read ends close, whichever comes first. An empty or
+ * unreadable snapshot signals nothing, and so does a host without a process table. A descendant
+ * forked after the child's exit is reached only while a snapshot member that is its ancestor
+ * remains in the group; after every such ancestor has ended, it is not reached. Windows has no
+ * process group, and `taskkill` walks only a live root's tree, so this returns immediately there;
+ * it also returns immediately while the child has not exited, because {@link stopChild} owns that
+ * termination. Never rejects.
  *
  * @param child - The child boundary, which led its own process group
  * @param grace - The cooperative window in milliseconds between `SIGTERM` and `SIGKILL`
+ * @param members - The group snapshot taken when the child's exit was observed
  * @returns Nothing
  *
  * @example
  * ```ts
- * await stopChild(child, 5_000, 5_000)
- * await stopGroup(child, 5_000)
+ * const members = collectGroupMembers(child) // when the child's exit is observed
+ * await stopGroup(child, 5_000, members)
  * ```
  */
-export async function stopGroup(child: ProcessChildInterface, grace: number): Promise<void> {
+export async function stopGroup(
+	child: ProcessChildInterface,
+	grace: number,
+	members: readonly ProcessMember[],
+): Promise<void> {
 	const group = child.pid
 	if (process.platform === 'win32' || group === undefined || !isExited(child)) return
-	if (inspectProcess(-group) !== true) return
+	if (!matchesGroupMembers(group, members) || inspectProcess(-group) !== true) return
 	killProcess(child, 'SIGTERM')
 	await waitForClose(child, grace)
-	if (inspectProcess(-group) === true) killProcess(child, 'SIGKILL')
+	if (matchesGroupMembers(group, members) && inspectProcess(-group) === true) {
+		killProcess(child, 'SIGKILL')
+	}
 }
 
 /**

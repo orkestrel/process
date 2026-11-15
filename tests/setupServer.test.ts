@@ -1,7 +1,14 @@
 import { spawnSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { createRecorder } from '@orkestrel/test'
-import { childCommand, ExitBoundary, resolveChildFixture } from './setupServer.js'
+import {
+	buildProcessMount,
+	buildProcessStat,
+	childCommand,
+	ExitBoundary,
+	resolveChildFixture,
+} from './setupServer.js'
 
 // This proof drives the command `childCommand` builds through a real child process, so the
 // asserted values come from the fixture's own independent parsing of `process.argv` rather than
@@ -52,6 +59,37 @@ describe('childCommand spawned for real', () => {
 		// character proves the argument vector reached it as one element rather than through a shell
 		// that could have split or interpreted it.
 		expect(result.stdout.toString()).toBe('args:left|right\n')
+	})
+})
+
+// proc(5) fixes the layouts: `stat` carries the state, the parent, and the group as the first three
+// fields after the last `)` and the start time as field 22; a `mountinfo` line carries its mount point
+// fifth and three fields after its `-` separator. The host's own lines are the second mechanism.
+describe.skipIf(!existsSync('/proc/self/mountinfo'))('process-table fixture builders', () => {
+	it('builds a stat line whose fields sit where the host puts its own', () => {
+		const built = buildProcessStat(40, 'a b) c', 'Z', 41, 900)
+		const host = readFileSync('/proc/self/stat', 'utf8')
+		const fields = built.slice(built.lastIndexOf(')') + 2).split(' ')
+		const hostFields = host.slice(host.lastIndexOf(')') + 2).split(' ')
+
+		expect([fields[0], fields[2], fields[19]]).toEqual(['Z', '41', '900'])
+		expect(hostFields[2]).toMatch(/^\d+$/u)
+		expect(hostFields[19]).toMatch(/^\d+$/u)
+		expect(fields.length).toBeLessThanOrEqual(hostFields.length)
+	})
+
+	it('builds a mountinfo line in the shape of the host proc line', () => {
+		const built = buildProcessMount('/scratch/table', 'rw,hidepid=2').trimEnd().split(' ')
+		const host = readFileSync('/proc/self/mountinfo', 'utf8')
+			.split(/\r\n|\n/u)
+			.map((line) => line.split(' '))
+			.find((fields) => fields[4] === '/proc')
+
+		expect(built[4]).toBe('/scratch/table')
+		expect(built[built.indexOf('-') + 1]).toBe('proc')
+		expect(built[built.indexOf('-') + 3]).toBe('rw,hidepid=2')
+		expect(host?.[(host?.indexOf('-') ?? 0) + 1]).toBe('proc')
+		expect(built.length - built.indexOf('-')).toBe((host?.length ?? 0) - (host?.indexOf('-') ?? 0))
 	})
 })
 

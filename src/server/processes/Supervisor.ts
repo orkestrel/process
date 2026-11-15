@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { ProcessExit, ProcessOptions } from '@src/core'
-import type { SupervisorFace } from '../types.js'
+import type { ProcessMember, SupervisorFace } from '../types.js'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import { Readable } from 'node:stream'
@@ -15,6 +15,7 @@ import {
 import { snapshotCommand } from '../cloners.js'
 import {
 	buildSpawn,
+	collectGroupMembers,
 	mergeEnvironment,
 	stopChild,
 	stopGroup,
@@ -109,6 +110,7 @@ export class Supervisor {
 	#closure: Promise<void> | undefined
 	#termination: Promise<boolean> | undefined
 	#destruction: Promise<void> | undefined
+	#members: readonly ProcessMember[] = Object.freeze([])
 
 	/**
 	 * Spawns one child process and begins standard-error capture.
@@ -387,6 +389,9 @@ export class Supervisor {
 	// moment. `ended` settles here rather than at that moment, because it reports the child's own
 	// exit and not the release of the channels a descendant may still hold.
 	#expire(): void {
+		// The group's id names the child's group only while a member the exit left behind remains, so
+		// the members are read here, while the host still reserves the id for them.
+		if (this.#child !== undefined) this.#members = collectGroupMembers(this.#child)
 		this.#ended.resolve()
 		if (this.#settled) return
 		void this.#wait()
@@ -511,19 +516,19 @@ export class Supervisor {
 		// backpressure before anything is signalled; later output drops at the face's teardown bound
 		// instead of pausing the stream again.
 		this.#terminated = true
-		this.#relieve?.()
 		const child = this.#child
 		if (child === undefined) {
-			// A refused spawn left nothing to end. The face builds its own surface after the constructor
-			// that started this call returns, so the terminal moment waits one microtask for it.
+			// A refused spawn left nothing to end and holds no backpressure, and its face is still
+			// constructing, so the terminal moment waits one microtask for that face.
 			await Promise.resolve()
 			this.#settle(true)
 			return true
 		}
+		this.#relieve?.()
 		const confirmed = await stopChild(child, this.#grace, PROCESS_CONFIRMATION)
 		this.#settleWrites()
 		child.stdin.destroy()
-		await stopGroup(child, this.#grace)
+		await stopGroup(child, this.#grace, this.#members)
 		if (!this.#settled) await this.#wait()
 		if (!this.#settled) this.#settle(false)
 		return confirmed

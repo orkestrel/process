@@ -49,6 +49,32 @@ describe('Supervisor moments', () => {
 		}
 	})
 
+	// A refused spawn holds no output, so it has no backpressure to release; the face's `relieve`
+	// would run while the face's own binding is still being assigned, where reading it throws.
+	it('settles a refused spawn without calling relieve while the face is still constructing', async () => {
+		const moments = createRecorder<readonly [string]>()
+		const engine: Supervisor = new Supervisor(
+			{ command: childCommand('sleep'), workspace: process.cwd(), signal: AbortSignal.abort() },
+			{
+				chunk: () => moments.handler('chunk'),
+				fault: () => moments.handler('fault'),
+				relieve: () => moments.handler(String(engine.terminated)),
+				close: () => moments.handler('close'),
+				terminal: () => moments.handler('terminal'),
+				teardown: () => moments.handler('teardown'),
+			},
+		)
+
+		const exit = await engine.exit
+		const stopped = await engine.stop()
+		await engine.destroy()
+
+		expect(engine.pid).toBeUndefined()
+		expect(exit).toEqual({ code: null, signal: null, drained: true })
+		expect(stopped).toBe(true)
+		expect(moments.calls.map((call) => call[0])).toEqual(['close', 'terminal', 'teardown'])
+	})
+
 	// A paused stdout holds the child's own write, and therefore its exit. `relieve` is the moment
 	// the face is told to let go, and it is worth nothing after the termination sequence: by then the
 	// signal has already been sent to a child that cannot write.

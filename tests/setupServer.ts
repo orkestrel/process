@@ -66,6 +66,37 @@ export const MANAGER_MEMBERS: readonly string[] = Object.freeze([
 	'destroy',
 ])
 
+/**
+ * Builds one process-table `stat` line in the layout Linux publishes, for an inert table fixture.
+ *
+ * @param pid - The process id the line opens with
+ * @param command - The command name, written inside parentheses
+ * @param state - The one-letter scheduler state
+ * @param group - The process-group id
+ * @param start - The start time in clock ticks, `stat` field 22
+ * @returns The line, with the parent id `1` and every other field zero or its idle value
+ */
+export function buildProcessStat(
+	pid: number,
+	command: string,
+	state: string,
+	group: number,
+	start: number,
+): string {
+	return `${String(pid)} (${command}) ${state} 1 ${String(group)} ${String(group)} 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 ${String(start)} 0 0`
+}
+
+/**
+ * Builds the `self/mountinfo` line of a `proc` mount at a table root, for an inert table fixture.
+ *
+ * @param table - The mount point, which a process-table reader compares with its table root
+ * @param options - The file-system options, such as `rw,hidepid=2`
+ * @returns The line, ending in a line feed
+ */
+export function buildProcessMount(table: string, options: string): string {
+	return `22 27 0:21 / ${table} rw,relatime - proc proc ${options}\n`
+}
+
 // The stderr tail bench reads one trim of a retained tail plus one delivered chunk at the evidence
 // bound the audit read (64 KiB), with the cut on a continuation byte so the walk steps past it. The
 // shipped walk must cost at most `TRIM_SHARE` of the per-call array walk it replaced, the audit's

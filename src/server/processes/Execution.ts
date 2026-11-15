@@ -1,4 +1,5 @@
 import type { ExecuteOptions, ExecuteResult, ProcessCommand } from '@src/core'
+import type { ProcessMember } from '../types.js'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import {
@@ -13,6 +14,7 @@ import {
 	buildExecuteResult,
 	buildSpawn,
 	captureChunk,
+	collectGroupMembers,
 	formatCommand,
 	mergeEnvironment,
 	stopChild,
@@ -43,6 +45,7 @@ export class Execution {
 	#cause: unknown
 	#timeoutTimer: ReturnType<typeof setTimeout> | undefined
 	#confirmTimer: ReturnType<typeof setTimeout> | undefined
+	#members: readonly ProcessMember[] = Object.freeze([])
 
 	constructor(command: ProcessCommand, options?: ExecuteOptions) {
 		const snapshot = snapshotCommand(command)
@@ -106,6 +109,11 @@ export class Execution {
 			windowsHide: true,
 			windowsVerbatimArguments: plan.verbatim,
 		})
+		// Registered before any termination waits on the exit, so the group's members are read while
+		// the host still reserves its id for them.
+		child.once('exit', () => {
+			this.#members = collectGroupMembers(child)
+		})
 
 		this.#finish.signal.addEventListener(
 			'abort',
@@ -138,7 +146,7 @@ export class Execution {
 				clearTimeout(this.#timeoutTimer)
 				this.#cleanup.abort()
 				void stopChild(child, grace, PROCESS_CONFIRMATION)
-					.then(() => stopGroup(child, grace))
+					.then(() => stopGroup(child, grace, this.#members))
 					.then(() => {
 						if (this.#finish.signal.aborted) return
 						this.#confirmTimer = setTimeout(() => this.#finish.abort(), PROCESS_CONFIRMATION)
@@ -150,7 +158,8 @@ export class Execution {
 		this.#inputFailure.signal.addEventListener(
 			'abort',
 			() => {
-				if (this.#finish.signal.aborted) return
+				// A fault after a termination began is that termination's consequence, not its cause.
+				if (this.#finish.signal.aborted || this.#terminate.signal.aborted) return
 				this.#cause = this.#inputFailure.signal.reason
 				this.#terminate.abort()
 			},

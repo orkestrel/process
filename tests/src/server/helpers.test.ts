@@ -15,6 +15,7 @@ import {
 	buildExecuteResult,
 	buildSpawn,
 	captureChunk,
+	collectGroupMembers,
 	createProcess,
 	formatCommand,
 	inspectProcess,
@@ -25,12 +26,16 @@ import {
 	mergeEnvironment,
 	mergePlatformEnvironment,
 	namesFile,
+	parseProcessStat,
 	quoteArgument,
+	matchesGroupMembers,
+	matchesProcessEnded,
+	matchesTableHidden,
 	readPlatformVariable,
-	readProcessEnded,
-	readProcessTasks,
-	readProcessThreads,
 	readVariable,
+	scanGroupMembers,
+	scanProcessTasks,
+	scanProcessThreads,
 	resolveExecutable,
 	detach,
 	execute,
@@ -48,7 +53,13 @@ import {
 	waitForClose,
 	waitForExit,
 } from '@src/server'
-import { childCommand, ExitBoundary, resolveChildFixture } from '../../setupServer.js'
+import {
+	buildProcessMount,
+	buildProcessStat,
+	childCommand,
+	ExitBoundary,
+	resolveChildFixture,
+} from '../../setupServer.js'
 
 describe('trimTail', () => {
 	it('returns the whole buffer when it fits the limit', () => {
@@ -173,35 +184,37 @@ describe('inspectProcess', () => {
 	)
 })
 
-describe('readProcessEnded', () => {
+describe('matchesProcessEnded', () => {
 	// Each table is inert process-table text in the layout `/proc` publishes: `<pid>/stat` and
-	// `<pid>/task/<tid>/stat`, whose fields after the last `)` are the state, the parent, and the group.
-	it('reads a process or a group as ended only when two readings show every thread exited', () => {
+	// `<pid>/task/<tid>/stat`, built by `buildProcessStat`, and a `self/mountinfo` that lists the
+	// table's own `proc` mount, built by `buildProcessMount`.
+	it('reads a process or a group as ended only when two scans show every thread exited', () => {
 		const scratch = createScratch({
 			prefix: 'process-table-',
 			files: {
-				'self/stat': '1 (self) S 0 1 1',
-				'40/stat': '40 (zombie) Z 1 40 40',
-				'40/task/40/stat': '40 (zombie) Z 1 40 40',
-				'41/stat': '41 (a b) c) X 40 40 40',
-				'41/task/41/stat': '41 (a b) c) X 40 40 40',
-				'50/stat': '50 (main) Z 1 50 50',
-				'50/task/50/stat': '50 (main) Z 1 50 50',
-				'50/task/51/stat': '51 (worker) S 1 50 50',
-				'60/stat': '60 (other) S 1 60 60',
-				'60/task/60/stat': '60 (other) S 1 60 60',
+				'self/stat': buildProcessStat(1, 'self', 'S', 1, 1),
+				'40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
+				'40/task/40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
+				'41/stat': buildProcessStat(41, 'a b) c', 'X', 40, 410),
+				'41/task/41/stat': buildProcessStat(41, 'a b) c', 'X', 40, 410),
+				'50/stat': buildProcessStat(50, 'main', 'Z', 50, 500),
+				'50/task/50/stat': buildProcessStat(50, 'main', 'Z', 50, 500),
+				'50/task/51/stat': buildProcessStat(51, 'worker', 'S', 50, 500),
+				'60/stat': buildProcessStat(60, 'other', 'S', 60, 600),
+				'60/task/60/stat': buildProcessStat(60, 'other', 'S', 60, 600),
 			},
 		})
 		try {
+			scratch.write('self/mountinfo', buildProcessMount(scratch.path, 'rw'))
 			// An entry whose `stat` is gone is a process that ended between the listing and the read.
 			scratch.ensure('80')
 
-			expect(readProcessEnded(40, scratch.path)).toBe(true)
-			expect(readProcessEnded(-40, scratch.path)).toBe(true)
-			expect(readProcessEnded(50, scratch.path)).toBe(false)
-			expect(readProcessEnded(-50, scratch.path)).toBe(false)
-			expect(readProcessEnded(60, scratch.path)).toBe(false)
-			expect(readProcessEnded(-60, scratch.path)).toBe(false)
+			expect(matchesProcessEnded(40, scratch.path)).toBe(true)
+			expect(matchesProcessEnded(-40, scratch.path)).toBe(true)
+			expect(matchesProcessEnded(50, scratch.path)).toBe(false)
+			expect(matchesProcessEnded(-50, scratch.path)).toBe(false)
+			expect(matchesProcessEnded(60, scratch.path)).toBe(false)
+			expect(matchesProcessEnded(-60, scratch.path)).toBe(false)
 		} finally {
 			scratch.destroy()
 		}
@@ -211,60 +224,133 @@ describe('readProcessEnded', () => {
 		const scratch = createScratch({
 			prefix: 'process-table-',
 			files: {
-				'self/stat': '1 (self) S 0 1 1',
-				'70/stat': '70 (no tasks) Z 1 70 70',
-				'71/stat': '71 (empty) Z 1 71 71',
-				'72/stat': '72 (garbled) Z 1 72 72',
+				'self/stat': buildProcessStat(1, 'self', 'S', 1, 1),
+				'70/stat': buildProcessStat(70, 'no tasks', 'Z', 70, 700),
+				'71/stat': buildProcessStat(71, 'empty', 'Z', 71, 710),
+				'72/stat': buildProcessStat(72, 'garbled', 'Z', 72, 720),
 				'72/task/72/stat': 'garbled',
 				'73/stat': 'garbled',
-				'75/stat': '75 (zombie) Z 1 75 75',
-				'75/task/75/stat': '75 (zombie) Z 1 75 75',
+				'75/stat': buildProcessStat(75, 'zombie', 'Z', 75, 750),
+				'75/task/75/stat': buildProcessStat(75, 'zombie', 'Z', 75, 750),
+				// The fields stop before the start time, so the line has no field 22 to read.
+				'76/stat': '76 (short) Z 1 76 76',
+				'76/task/76/stat': '76 (short) Z 1 76 76',
 			},
 		})
 		try {
+			scratch.write('self/mountinfo', buildProcessMount(scratch.path, 'rw'))
 			scratch.ensure('71/task')
 
-			expect(readProcessEnded(70, scratch.path)).toBe(false)
-			expect(readProcessEnded(71, scratch.path)).toBe(false)
-			expect(readProcessEnded(72, scratch.path)).toBe(false)
-			expect(readProcessEnded(74, scratch.path)).toBe(false)
+			expect(matchesProcessEnded(70, scratch.path)).toBe(false)
+			expect(matchesProcessEnded(71, scratch.path)).toBe(false)
+			expect(matchesProcessEnded(72, scratch.path)).toBe(false)
+			expect(matchesProcessEnded(74, scratch.path)).toBe(false)
+			expect(matchesProcessEnded(76, scratch.path)).toBe(false)
 			// One unreadable entry leaves every group unread, because it might be a member.
-			expect(readProcessEnded(-75, scratch.path)).toBe(false)
+			expect(matchesProcessEnded(-75, scratch.path)).toBe(false)
 			// A group no entry claims is an empty reading, which the probe signal contradicts.
 			scratch.remove('73')
-			expect(readProcessEnded(-75, scratch.path)).toBe(true)
-			expect(readProcessEnded(-99, scratch.path)).toBe(false)
+			scratch.remove('76')
+			expect(matchesProcessEnded(-75, scratch.path)).toBe(true)
+			expect(matchesProcessEnded(-99, scratch.path)).toBe(false)
+			// A mountinfo that lists no mount at the table leaves every group unread.
+			scratch.write('self/mountinfo', buildProcessMount('/elsewhere', 'rw'))
+			expect(matchesProcessEnded(-75, scratch.path)).toBe(false)
+			scratch.remove('self/mountinfo')
+			expect(matchesProcessEnded(-75, scratch.path)).toBe(false)
 		} finally {
 			scratch.destroy()
 		}
 	})
 
-	it('lists a process threads by key and a group by every member it holds', () => {
+	// A member that forks between the two scans shows a task the first scan lacked, so the second
+	// scan's gain reads as live even when every task it shows has exited. The injected scan returns
+	// its readings in order, which is the only way to place a fork between two scans.
+	it('reads a group as live when the second scan gains a task the first lacked', () => {
+		const scratch = createScratch({
+			prefix: 'process-table-',
+			files: { 'self/stat': buildProcessStat(1, 'self', 'S', 1, 1) },
+		})
+		try {
+			scratch.write('self/mountinfo', buildProcessMount(scratch.path, 'rw'))
+			const zombie = { id: '40/40', state: 'Z' }
+			const readings = [[zombie], [zombie, { id: '41/41', state: 'Z' }]]
+			const steady = [[zombie], [zombie]]
+
+			expect(matchesProcessEnded(-40, scratch.path, () => readings.shift())).toBe(false)
+			expect(matchesProcessEnded(-40, scratch.path, () => steady.shift())).toBe(true)
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('scans a process threads by key and a group by every member it holds', () => {
 		const scratch = createScratch({
 			prefix: 'process-table-',
 			files: {
-				'40/stat': '40 (leader) S 1 40 40',
-				'40/task/40/stat': '40 (leader) S 1 40 40',
-				'41/stat': '41 (member) Z 40 40 40',
-				'41/task/41/stat': '41 (member) Z 40 40 40',
-				'41/task/42/stat': '42 (thread) R 40 40 40',
-				'60/stat': '60 (other) S 1 60 60',
-				'60/task/60/stat': '60 (other) S 1 60 60',
+				'40/stat': buildProcessStat(40, 'leader', 'S', 40, 400),
+				'40/task/40/stat': buildProcessStat(40, 'leader', 'S', 40, 400),
+				'41/stat': buildProcessStat(41, 'member', 'Z', 40, 410),
+				'41/task/41/stat': buildProcessStat(41, 'member', 'Z', 40, 410),
+				'41/task/42/stat': buildProcessStat(42, 'thread', 'R', 40, 410),
+				'60/stat': buildProcessStat(60, 'other', 'S', 60, 600),
+				'60/task/60/stat': buildProcessStat(60, 'other', 'S', 60, 600),
 			},
 		})
 		try {
 			expect(
-				readProcessThreads('41', scratch.path)
+				scanProcessThreads('41', scratch.path)
 					?.map((task) => `${task.id}:${task.state}`)
 					.toSorted(),
 			).toEqual(['41/41:Z', '41/42:R'])
 			expect(
-				readProcessTasks(-40, scratch.path)
+				scanProcessTasks(-40, scratch.path)
 					?.map((task) => task.id)
 					.toSorted(),
 			).toEqual(['40/40', '41/41', '41/42'])
-			expect(readProcessTasks(60, scratch.path)).toEqual([{ id: '60/60', state: 'S' }])
-			expect(readProcessThreads('99', scratch.path)).toBeUndefined()
+			expect(scanProcessTasks(60, scratch.path)).toEqual([{ id: '60/60', state: 'S' }])
+			expect(scanProcessThreads('99', scratch.path)).toBeUndefined()
+			expect(
+				scanGroupMembers(40, scratch.path)
+					?.map((member) => `${String(member.pid)}:${member.start}`)
+					.toSorted(),
+			).toEqual(['40:400', '41:410'])
+			expect(matchesGroupMembers(40, [{ pid: 41, start: '410' }], scratch.path)).toBe(true)
+			expect(matchesGroupMembers(40, [{ pid: 41, start: '999' }], scratch.path)).toBe(false)
+			expect(matchesGroupMembers(40, [{ pid: 60, start: '600' }], scratch.path)).toBe(false)
+			expect(matchesGroupMembers(40, [], scratch.path)).toBe(false)
+			scratch.write('77/stat', 'garbled')
+			expect(scanGroupMembers(40, scratch.path)).toBeUndefined()
+			expect(matchesGroupMembers(40, [{ pid: 41, start: '410' }], scratch.path)).toBe(false)
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('reads a table mount as hiding unless its hidepid option is absent, 0, or off', () => {
+		const scratch = createScratch({ prefix: 'process-table-' })
+		try {
+			const readings = [
+				'rw',
+				'rw,hidepid=0',
+				'rw,hidepid=off',
+				'rw,hidepid=1',
+				'rw,hidepid=2',
+				'rw,hidepid=invisible',
+				'rw,hidepid=noaccess',
+			].map((options) => {
+				scratch.write('self/mountinfo', buildProcessMount(scratch.path, options))
+				return matchesTableHidden(scratch.path)
+			})
+			// A later line at the same point mounts over an earlier one, so the last line decides.
+			scratch.write(
+				'self/mountinfo',
+				`${buildProcessMount(scratch.path, 'rw')}${buildProcessMount(scratch.path, 'rw,hidepid=2')}`,
+			)
+			const covered = matchesTableHidden(scratch.path)
+
+			expect(readings).toEqual([false, false, false, true, true, true, true])
+			expect(covered).toBe(true)
 		} finally {
 			scratch.destroy()
 		}
@@ -280,17 +366,49 @@ describe('readProcessEnded', () => {
 		expect(matchesEndedTasks([], [])).toBe(false)
 	})
 
+	// Under `hidepid`, `/proc` hides other users' processes, so a live member can be missing from a
+	// group whose visible members are all zombies. The control is the same table mounted without it.
+	it('reads every group as live when the table mount hides processes', () => {
+		const scratch = createScratch({
+			prefix: 'process-table-',
+			files: {
+				'self/stat': buildProcessStat(1, 'self', 'S', 1, 1),
+				'40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
+				'40/task/40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
+			},
+		})
+		try {
+			const readings = ['hidepid=2', 'hidepid=invisible', 'hidepid=0', 'hidepid=off'].map(
+				(option) => {
+					scratch.write('self/mountinfo', buildProcessMount(scratch.path, `rw,${option}`))
+					return [matchesProcessEnded(-40, scratch.path), matchesProcessEnded(40, scratch.path)]
+				},
+			)
+
+			// A hidden process cannot be one of a visible process's own threads, so a single
+			// process keeps its reading.
+			expect(readings).toEqual([
+				[false, true],
+				[false, true],
+				[true, true],
+				[true, true],
+			])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
 	it('reads nothing as ended on a host that publishes no process table', () => {
 		const scratch = createScratch({
 			prefix: 'process-table-',
 			files: {
-				'40/stat': '40 (zombie) Z 1 40 40',
-				'40/task/40/stat': '40 (zombie) Z 1 40 40',
+				'40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
+				'40/task/40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
 			},
 		})
 		try {
-			expect(readProcessEnded(40, scratch.path)).toBe(false)
-			expect(readProcessEnded(-40, scratch.path)).toBe(false)
+			expect(matchesProcessEnded(40, scratch.path)).toBe(false)
+			expect(matchesProcessEnded(-40, scratch.path)).toBe(false)
 		} finally {
 			scratch.destroy()
 		}
@@ -1068,9 +1186,9 @@ describe('stopChild', () => {
 })
 
 describe('stopGroup', () => {
-	// Windows has no process group, and `taskkill` walks only a live root's tree, so the function
-	// returns there immediately and this row reads the POSIX group route.
-	it.skipIf(process.platform === 'win32')(
+	// The group snapshot comes from the host's `/proc` process table, and a host without one signals
+	// nothing; Windows has neither the table nor a process group.
+	it.skipIf(!existsSync('/proc/self/stat'))(
 		'ends the descendant an exited group leader left behind and leaves a live root to stopChild',
 		// The case outlives the condition budgets below it, so a descendant that never leaves reports
 		// its own description and the cleanup still runs.
@@ -1108,9 +1226,14 @@ describe('stopGroup', () => {
 					budget: 5_000,
 				})
 				expect(isRunning(abandoned)).toBe(true)
+				// The exit left the abandoned descendant in the group, so the snapshot names it; the
+				// live root's group is snapshotted the same way and must still go untouched.
+				const members = collectGroupMembers(orphaned)
+				const rootedMembers = collectGroupMembers(rooted)
 
-				await stopGroup(orphaned, 20)
-				await stopGroup(rooted, 20)
+				expect(members.map((member) => member.pid)).toEqual([abandoned])
+				await stopGroup(orphaned, 20, members)
+				await stopGroup(rooted, 20, rootedMembers)
 				await waitForCondition(
 					'the abandoned descendant leaves the host',
 					() => !isRunning(abandoned),
@@ -1122,6 +1245,67 @@ describe('stopGroup', () => {
 			} finally {
 				holds(() => process.kill(-(orphaned.pid ?? 0), 'SIGKILL'))
 				holds(() => process.kill(-(rooted.pid ?? 0), 'SIGKILL'))
+			}
+		},
+	)
+
+	// An exited boundary names a group id an unrelated process leads: `reused` is spawned
+	// detached, so it leads a live group under that id. The snapshot the boundary carries is the
+	// child's own group as its exit left it, and no member of it is in the live group, so nothing is
+	// signalled. The control is the same call carrying the live group's real member, which proves the
+	// call reaches the group when the snapshot names it.
+	it.skipIf(!existsSync('/proc/self/stat'))(
+		'signals nothing for a group id a process outside the exit snapshot leads',
+		{ timeout: 30_000 },
+		async () => {
+			const reused = spawn(process.execPath, [resolveChildFixture(), 'sleep'], {
+				detached: true,
+				stdio: 'ignore',
+			})
+			const stale = reused.pid
+			if (stale === undefined) throw new Error('the fixture child reported no process id')
+			try {
+				await waitForCondition(
+					'the reused group reads its leader in the process table',
+					() => existsSync(`/proc/${String(stale)}/stat`),
+					{ budget: 5_000 },
+				)
+				const live = parseProcessStat(readFileSync(`/proc/${String(stale)}/stat`, 'utf8'))
+				// Each call carries the same exited boundary, which names the id and nothing else.
+				await stopGroup(
+					{
+						pid: stale,
+						exitCode: 0,
+						signalCode: null,
+						kill: () => true,
+						once: () => undefined,
+						off: () => undefined,
+					},
+					20,
+					[{ pid: stale, start: '0' }],
+				)
+				await waitForDelay(200)
+				const survived = isRunning(stale)
+
+				await stopGroup(
+					{
+						pid: stale,
+						exitCode: 0,
+						signalCode: null,
+						kill: () => true,
+						once: () => undefined,
+						off: () => undefined,
+					},
+					20,
+					[{ pid: stale, start: live?.start ?? '' }],
+				)
+				await waitForCondition('the snapshot member leaves the host', () => !isRunning(stale), {
+					budget: 5_000,
+				})
+
+				expect(survived).toBe(true)
+			} finally {
+				holds(() => process.kill(-stale, 'SIGKILL'))
 			}
 		},
 	)
