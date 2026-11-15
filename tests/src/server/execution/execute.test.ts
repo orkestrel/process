@@ -6,7 +6,7 @@ import { holds } from '@orkestrel/contract'
 import { createRecorder, waitForDelay } from '@orkestrel/test'
 import { createScratch, isRunning } from '@orkestrel/test/server'
 import { isProcessError } from '@src/core'
-import { execute } from '@src/server'
+import { execute, matchesOwnTable } from '@src/server'
 import { childCommand, resolveChildFixture } from '../../../setupServer.js'
 
 describe('execute', () => {
@@ -74,7 +74,7 @@ describe('execute', () => {
 	// descendant, so the timeout ends it and the pipe closes. The group route confirms the group's
 	// members through the host's `/proc` process table, so a host without one, Windows included,
 	// signals no group and the run waits out `PROCESS_CONFIRMATION`.
-	it.skipIf(!existsSync('/proc/self/stat'))(
+	it.skipIf(!matchesOwnTable())(
 		'ends a descendant holding the pipe at the timeout after the root exited, and settles near it',
 		// The budget clears a run that waits out the 5000ms confirmation, so a regression reads as the
 		// elapsed assertion rather than as this case's timeout.

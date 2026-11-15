@@ -13,7 +13,7 @@ import {
 } from '@orkestrel/test'
 import { createScratch, destroyScratch, isRunning } from '@orkestrel/test/server'
 import { isProcessError, PROCESS_TIMER, ProcessError } from '@src/core'
-import { createProcess, parseProcessStat } from '@src/server'
+import { createProcess, matchesOwnTable, parseProcessStat } from '@src/server'
 import { childCommand, resolveChildFixture } from '../../../setupServer.js'
 
 describe('Process', () => {
@@ -674,7 +674,7 @@ describe('Process', () => {
 	// alone ends the wait. Version 0.0.5 resolved `destroy` here while `exit` stayed pending for the
 	// descendant's whole life.
 	it('ends a descendant holding the pipe when destroy follows the root exit, where a group reaches it', async () => {
-		const grouped = existsSync('/proc/self/stat')
+		const grouped = matchesOwnTable()
 		const child = createProcess({
 			command: childCommand('orphan'),
 			workspace: process.cwd(),
@@ -1155,7 +1155,7 @@ describe('Process', () => {
 	// host without one, Windows included, the descendant outlives `destroy` and the streams never
 	// close; where the table exists, the group reaches it.
 	it('settles the exit promise after destroy and ends the descendant holding the streams where a group reaches it', async () => {
-		const grouped = existsSync('/proc/self/stat')
+		const grouped = matchesOwnTable()
 		const child = createProcess({
 			command: childCommand('orphan'),
 			workspace: process.cwd(),

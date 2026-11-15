@@ -921,7 +921,7 @@ export function collectGroupMembers(
  * @param pid - A positive process id, or a negative POSIX process-group id
  * @returns True when the host confirms existence or refuses permission and {@link matchesProcessEnded} reads no exit; false for ESRCH or an exited zombie; undefined for another host failure
  * @throws A {@link ProcessError} coded `invalid` for an unsafe integer, zero, minus one, or a negative id on Windows
- * @remarks Negative ids probe POSIX process groups. The `process.platform` branch refuses negative ids on Windows, where the host supports positive process ids only. A zombie answers the probe signal, so an id the host answers reads as ended when the host's process table shows every thread of the process, or of every group member, exited, per {@link matchesProcessEnded}; a group read through a mount that hides processes, and a host without that table, keep the signal's answer.
+ * @remarks Negative ids probe POSIX process groups. The `process.platform` branch refuses negative ids on Windows, where the host supports positive process ids only. A zombie answers the probe signal, so an id the host answers reads as ended when the host's process table shows every thread of the process, or of every group member, exited, per {@link matchesProcessEnded}; a group read through a mount that hides processes, a table whose `self/stat` is foreign or unreadable ({@link matchesOwnTable} false), and a host without that table, keep the signal's answer.
  * @example
  * ```ts
  * inspectProcess(process.pid) // true

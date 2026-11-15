@@ -420,13 +420,13 @@ describe('matchesProcessEnded', () => {
 
 	// A table mounted from another PID namespace numbers processes in that namespace, so its entries
 	// say nothing about the ids this process signals. Its `self/stat` names a pid other than this
-	// process's own, which is how the reader tells it apart; the control is the same table naming
+	// process's own, one that may begin with this pid's digits, which is how the reader tells it apart; the control is the same table naming
 	// this process.
 	it('reads nothing as ended and collects no member through a table that names another process', async () => {
 		const scratch = createScratch({
 			prefix: 'process-table-',
 			files: {
-				'self/stat': buildProcessStat(process.pid + 1, 'foreign', 'S', 1, 1),
+				'self/stat': buildProcessStat(Number(`${String(process.pid)}5`), 'foreign', 'S', 1, 1),
 				'40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
 				'40/task/40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
 			},
@@ -1270,7 +1270,7 @@ describe('stopChild', () => {
 describe('stopGroup', () => {
 	// The group snapshot comes from the host's `/proc` process table, and a host without one signals
 	// nothing; Windows has neither the table nor a process group.
-	it.skipIf(!existsSync('/proc/self/stat'))(
+	it.skipIf(!matchesOwnTable())(
 		'ends the descendant an exited group leader left behind and leaves a live root to stopChild',
 		// The case outlives the condition budgets below it, so a descendant that never leaves reports
 		// its own description and the cleanup still runs.
@@ -1335,7 +1335,7 @@ describe('stopGroup', () => {
 	// the exit. `SIGTERM` ends the root, which this process then reaps, and the trap keeps the
 	// grandchild alive through it; at the second gate the group still has a live member but no
 	// snapshot member, so its identity is unconfirmed and no `SIGKILL` follows.
-	it.skipIf(!existsSync('/proc/self/stat'))(
+	it.skipIf(!matchesOwnTable())(
 		'sends no SIGKILL after the last snapshot member has gone, though an unrecorded member lives',
 		{ timeout: 30_000 },
 		async () => {
@@ -1385,7 +1385,7 @@ describe('stopGroup', () => {
 	// child's own group as its exit left it, and no member of it is in the live group, so nothing is
 	// signalled. The control is the same call carrying the live group's real member, which proves the
 	// call reaches the group when the snapshot names it.
-	it.skipIf(!existsSync('/proc/self/stat'))(
+	it.skipIf(!matchesOwnTable())(
 		'signals nothing for a group id a process outside the exit snapshot leads',
 		{ timeout: 30_000 },
 		async () => {
