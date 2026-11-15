@@ -644,8 +644,8 @@ describe('Process', () => {
 		},
 	)
 
-	// The group reading comes from the host's `/proc` process table, which a host without one lacks.
-	it.skipIf(!existsSync('/proc/self/stat'))(
+	// The group reading comes from this process's own `/proc` table, which a host without one lacks.
+	it.skipIf(!matchesOwnTable())(
 		'spawns its child as the leader of a process group apart from the parent group',
 		async () => {
 			const child = createProcess({

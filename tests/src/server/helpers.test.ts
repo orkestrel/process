@@ -152,9 +152,9 @@ describe('inspectProcess', () => {
 		},
 	)
 
-	// The zombie reading comes from the host's `/proc` process table; a host without one keeps the
+	// The zombie reading comes from this process's own `/proc` table; a host without one keeps the
 	// signal probe, which a zombie answers.
-	it.skipIf(!existsSync('/proc/self/stat'))(
+	it.skipIf(!matchesOwnTable())(
 		'reports an unreaped zombie and its group as ended while the signal probe still reaches them',
 		async () => {
 			const root = createProcess({
