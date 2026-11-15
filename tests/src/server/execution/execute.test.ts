@@ -71,9 +71,10 @@ describe('execute', () => {
 	})
 
 	// The root exits first and its descendant keeps the pipe; the group the root led still holds the
-	// descendant, so the timeout ends it and the pipe closes. Windows has no process group, and
-	// `taskkill` walks only a live root's tree, so there the run waits out `PROCESS_CONFIRMATION`.
-	it.skipIf(process.platform === 'win32')(
+	// descendant, so the timeout ends it and the pipe closes. The group route confirms the group's
+	// members through the host's `/proc` process table, so a host without one, Windows included,
+	// signals no group and the run waits out `PROCESS_CONFIRMATION`.
+	it.skipIf(!existsSync('/proc/self/stat'))(
 		'ends a descendant holding the pipe at the timeout after the root exited, and settles near it',
 		// The budget clears a run that waits out the 5000ms confirmation, so a regression reads as the
 		// elapsed assertion rather than as this case's timeout.

@@ -18,8 +18,10 @@ import { Execution } from '../processes/Execution.js'
  * rather than on process exit, so a descendant that inherited the child's stdio holds the run open
  * after the child itself has gone. Give such a run a `timeout`. The child's `environment` merges over
  * the parent unless the command is `isolated`, then `options.environment` on top, and `options.input`
- * overrides `command.input`. A host fault while writing that input terminates the run by design and
- * marks its result failed; a strict rejection carries the host fault as its cause. This differs
+ * overrides `command.input`. A host fault while writing that input, before any timeout or abort
+ * began, terminates the run by design and marks its result failed; a strict rejection is coded
+ * `input` and carries the host fault as its cause. A fault after a termination began is that
+ * termination's consequence, so the rejection names the timeout or the abort instead. This differs
  * from `Process` constructor input, whose package-initiated input phase stays quiet. Unless `strict`
  * is `false`, a failed run rejects with a {@link ProcessError} carrying the {@link ExecuteResult};
  * {@link createExecuteError} constructs every rejection outside the input-fault door. An invalid

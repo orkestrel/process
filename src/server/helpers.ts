@@ -9,7 +9,7 @@ import type {
 import type { ProcessChildInterface, ProcessMember, ProcessTask } from './types.js'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, posix, win32 } from 'node:path'
 import { platform as hostPlatform } from 'node:process'
 import {
@@ -719,6 +719,28 @@ export function scanProcessTasks(
 }
 
 /**
+ * Checks whether a process table numbers processes the way this process signals them.
+ *
+ * @remarks
+ * A table mounted from another PID namespace numbers its entries in that namespace, so they say
+ * nothing about the ids this process signals. Such a table's `self/stat` names a pid other than
+ * `process.pid`. A `self/stat` that cannot be read, or whose leading pid field is not this
+ * process's, reads as a table to distrust.
+ *
+ * @param table - The process table's root. Default: {@link PROCESS_TABLE}
+ * @returns True if `<table>/self/stat` names `process.pid`; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesOwnTable() // true on Linux, where /proc belongs to this namespace
+ * ```
+ */
+export function matchesOwnTable(table: string = PROCESS_TABLE): boolean {
+	const text = attempt(() => readFileSync(join(table, 'self', 'stat'), 'utf8'))
+	return text.success && text.value.split(' ', 1)[0] === String(process.pid)
+}
+
+/**
  * Checks whether the mount of a process table hides other users' processes from this reader.
  *
  * @remarks
@@ -804,8 +826,8 @@ export function matchesEndedTasks(
  * the host publishes a process table, two scans taken one after the other decide, per
  * {@link matchesEndedTasks}. A process whose main thread exited while another thread runs reads as
  * live through that thread. A group reads as live while {@link matchesTableHidden} reports that the
- * table hides processes, because a hidden member can be live. A host without the table, and a scan
- * that cannot read part of it, read nothing as ended.
+ * table hides processes, because a hidden member can be live. A host without the table, a table
+ * {@link matchesOwnTable} distrusts, and a scan that cannot read part of it read nothing as ended.
  *
  * @param pid - A positive process id, or a negative process-group id
  * @param table - The process table's root. Default: {@link PROCESS_TABLE}
@@ -822,7 +844,7 @@ export function matchesProcessEnded(
 	table: string = PROCESS_TABLE,
 	scan: (pid: number, table: string) => readonly ProcessTask[] | undefined = scanProcessTasks,
 ): boolean {
-	if (!existsSync(join(table, 'self', 'stat'))) return false
+	if (!matchesOwnTable(table)) return false
 	if (pid < 0 && matchesTableHidden(table)) return false
 	const first = scan(pid, table)
 	if (first === undefined) return false
@@ -836,8 +858,8 @@ export function matchesProcessEnded(
  * @remarks
  * A process id and its start time together name one process for the host's whole uptime, so a
  * group that holds a member with both values identical to a snapshot entry is the group the
- * snapshot was taken of, even after its leader's id was freed. An empty snapshot and a scan that
- * cannot read the table match nothing.
+ * snapshot was taken of, even after its leader's id was freed. An empty snapshot, a table
+ * {@link matchesOwnTable} distrusts, and a scan that cannot read the table match nothing.
  *
  * @param group - The positive process-group id
  * @param members - The snapshot, as {@link collectGroupMembers} took it
@@ -854,7 +876,7 @@ export function matchesGroupMembers(
 	members: readonly ProcessMember[],
 	table: string = PROCESS_TABLE,
 ): boolean {
-	if (members.length === 0) return false
+	if (members.length === 0 || !matchesOwnTable(table)) return false
 	const current = scanGroupMembers(group, table)
 	return (
 		current !== undefined &&
@@ -870,7 +892,8 @@ export function matchesGroupMembers(
  * @remarks
  * Call it when the child's exit is observed, while the host still reserves the group's id for the
  * members that remain. It returns no member on Windows, for a child without a pid, when the group
- * no longer answers the probe signal, and when the table cannot be read, so a later
+ * no longer answers the probe signal, when {@link matchesOwnTable} distrusts the table, and when
+ * the table cannot be read, so a later
  * {@link stopGroup} signals nothing then.
  *
  * @param child - The child boundary, which led its own process group
@@ -888,7 +911,7 @@ export function collectGroupMembers(
 ): readonly ProcessMember[] {
 	const group = child.pid
 	if (process.platform === 'win32' || group === undefined) return Object.freeze([])
-	if (!holds(() => process.kill(-group, 0))) return Object.freeze([])
+	if (!holds(() => process.kill(-group, 0)) || !matchesOwnTable(table)) return Object.freeze([])
 	return scanGroupMembers(group, table) ?? Object.freeze([])
 }
 
@@ -1097,13 +1120,14 @@ export async function stopChild(
  * and that group is not the caller's, and `members` is the snapshot {@link collectGroupMembers} took
  * when the child's exit was observed. After every member has left a group, the host can hand its id
  * to an unrelated group, so the id alone names nothing after the child's exit. Before each signal
- * this reads the group again and signals it only while {@link matchesGroupMembers} finds a member
- * of the snapshot, with an identical id and start time, still in it, and {@link inspectProcess}
- * reports a member that has not exited. The group receives `SIGTERM`, then `SIGKILL` when both
- * still hold after `grace` or after the child's read ends close, whichever comes first. An empty or
- * unreadable snapshot signals nothing, and so does a host without a process table. A descendant
- * forked after the child's exit is reached only while a snapshot member that is its ancestor
- * remains in the group; after every such ancestor has ended, it is not reached. Windows has no
+ * this checks that {@link inspectProcess} reports a member that has not exited, and then, last,
+ * that {@link matchesGroupMembers} finds a member of the snapshot, with an identical id and start
+ * time, still in the group, so one identity scan is all that separates that check from the
+ * signal. The group receives `SIGTERM`, then `SIGKILL` when both still hold after `grace` or after
+ * the child's read ends close, whichever comes first. An empty or unreadable snapshot signals
+ * nothing, and so does a host without a process table of its own. A descendant forked after the
+ * child's exit is reached only while a snapshot member remains in the group, so after every
+ * snapshot member, its own ancestors included, has ended, it is not reached. Windows has no
  * process group, and `taskkill` walks only a live root's tree, so this returns immediately there;
  * it also returns immediately while the child has not exited, because {@link stopChild} owns that
  * termination. Never rejects.
@@ -1126,10 +1150,11 @@ export async function stopGroup(
 ): Promise<void> {
 	const group = child.pid
 	if (process.platform === 'win32' || group === undefined || !isExited(child)) return
-	if (!matchesGroupMembers(group, members) || inspectProcess(-group) !== true) return
+	// The identity scan runs last in each gate, so only that one scan separates it from the signal.
+	if (inspectProcess(-group) !== true || !matchesGroupMembers(group, members)) return
 	killProcess(child, 'SIGTERM')
 	await waitForClose(child, grace)
-	if (matchesGroupMembers(group, members) && inspectProcess(-group) === true) {
+	if (inspectProcess(-group) === true && matchesGroupMembers(group, members)) {
 		killProcess(child, 'SIGKILL')
 	}
 }

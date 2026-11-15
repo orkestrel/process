@@ -89,12 +89,16 @@ export function buildProcessStat(
 /**
  * Builds the `self/mountinfo` line of a `proc` mount at a table root, for an inert table fixture.
  *
- * @param table - The mount point, which a process-table reader compares with its table root
+ * @param table - The mount point, which a process-table reader compares with its table root; each
+ * space is written as the `\040` escape the kernel writes
  * @param options - The file-system options, such as `rw,hidepid=2`
+ * @param optional - The optional fields before the `-` separator, such as `shared:12`. Default: none
  * @returns The line, ending in a line feed
  */
-export function buildProcessMount(table: string, options: string): string {
-	return `22 27 0:21 / ${table} rw,relatime - proc proc ${options}\n`
+export function buildProcessMount(table: string, options: string, optional?: string): string {
+	const point = table.replaceAll(' ', '\\040')
+	const fields = optional === undefined ? '' : ` ${optional}`
+	return `22 27 0:21 / ${point} rw,relatime${fields} - proc proc ${options}\n`
 }
 
 // The stderr tail bench reads one trim of a retained tail plus one delivered chunk at the evidence

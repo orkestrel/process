@@ -29,6 +29,7 @@ import {
 	parseProcessStat,
 	quoteArgument,
 	matchesGroupMembers,
+	matchesOwnTable,
 	matchesProcessEnded,
 	matchesTableHidden,
 	readPlatformVariable,
@@ -192,7 +193,7 @@ describe('matchesProcessEnded', () => {
 		const scratch = createScratch({
 			prefix: 'process-table-',
 			files: {
-				'self/stat': buildProcessStat(1, 'self', 'S', 1, 1),
+				'self/stat': buildProcessStat(process.pid, 'self', 'S', 1, 1),
 				'40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
 				'40/task/40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
 				'41/stat': buildProcessStat(41, 'a b) c', 'X', 40, 410),
@@ -224,7 +225,7 @@ describe('matchesProcessEnded', () => {
 		const scratch = createScratch({
 			prefix: 'process-table-',
 			files: {
-				'self/stat': buildProcessStat(1, 'self', 'S', 1, 1),
+				'self/stat': buildProcessStat(process.pid, 'self', 'S', 1, 1),
 				'70/stat': buildProcessStat(70, 'no tasks', 'Z', 70, 700),
 				'71/stat': buildProcessStat(71, 'empty', 'Z', 71, 710),
 				'72/stat': buildProcessStat(72, 'garbled', 'Z', 72, 720),
@@ -269,7 +270,7 @@ describe('matchesProcessEnded', () => {
 	it('reads a group as live when the second scan gains a task the first lacked', () => {
 		const scratch = createScratch({
 			prefix: 'process-table-',
-			files: { 'self/stat': buildProcessStat(1, 'self', 'S', 1, 1) },
+			files: { 'self/stat': buildProcessStat(process.pid, 'self', 'S', 1, 1) },
 		})
 		try {
 			scratch.write('self/mountinfo', buildProcessMount(scratch.path, 'rw'))
@@ -288,6 +289,7 @@ describe('matchesProcessEnded', () => {
 		const scratch = createScratch({
 			prefix: 'process-table-',
 			files: {
+				'self/stat': buildProcessStat(process.pid, 'self', 'S', 1, 1),
 				'40/stat': buildProcessStat(40, 'leader', 'S', 40, 400),
 				'40/task/40/stat': buildProcessStat(40, 'leader', 'S', 40, 400),
 				'41/stat': buildProcessStat(41, 'member', 'Z', 40, 410),
@@ -356,6 +358,24 @@ describe('matchesProcessEnded', () => {
 		}
 	})
 
+	// The kernel writes a space in a mount point as `\040` and can put optional fields such as
+	// `shared:12` before the `-` separator, so the reader decodes the point and counts the file-system
+	// options from the separator rather than from a fixed position.
+	it('reads a table mount whose point holds a space and whose line carries an optional field', () => {
+		const scratch = createScratch({ prefix: 'process table-' })
+		try {
+			const readings = ['rw', 'rw,hidepid=2'].map((options) => {
+				scratch.write('self/mountinfo', buildProcessMount(scratch.path, options, 'shared:12'))
+				return matchesTableHidden(scratch.path)
+			})
+
+			expect(scratch.path).toContain(' ')
+			expect(readings).toEqual([false, true])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
 	it('matches two readings only when they list the same exited threads', () => {
 		const zombie = { id: '7/7', state: 'Z' }
 
@@ -372,7 +392,7 @@ describe('matchesProcessEnded', () => {
 		const scratch = createScratch({
 			prefix: 'process-table-',
 			files: {
-				'self/stat': buildProcessStat(1, 'self', 'S', 1, 1),
+				'self/stat': buildProcessStat(process.pid, 'self', 'S', 1, 1),
 				'40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
 				'40/task/40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
 			},
@@ -394,6 +414,68 @@ describe('matchesProcessEnded', () => {
 				[true, true],
 			])
 		} finally {
+			scratch.destroy()
+		}
+	})
+
+	// A table mounted from another PID namespace numbers processes in that namespace, so its entries
+	// say nothing about the ids this process signals. Its `self/stat` names a pid other than this
+	// process's own, which is how the reader tells it apart; the control is the same table naming
+	// this process.
+	it('reads nothing as ended and collects no member through a table that names another process', async () => {
+		const scratch = createScratch({
+			prefix: 'process-table-',
+			files: {
+				'self/stat': buildProcessStat(process.pid + 1, 'foreign', 'S', 1, 1),
+				'40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
+				'40/task/40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
+			},
+		})
+		const leader = spawn(process.execPath, [resolveChildFixture(), 'sleep'], {
+			detached: true,
+			stdio: 'ignore',
+		})
+		try {
+			const group = leader.pid ?? 0
+			await waitForCondition(
+				'the leader answers the group probe',
+				() => inspectProcess(-group) === true,
+				{
+					budget: 5_000,
+				},
+			)
+			scratch.write('self/mountinfo', buildProcessMount(scratch.path, 'rw'))
+			scratch.write(`${String(group)}/stat`, buildProcessStat(group, 'leader', 'S', group, 900))
+			const known = [{ pid: group, start: '900' }]
+			const foreign = [
+				matchesOwnTable(scratch.path),
+				matchesProcessEnded(-40, scratch.path),
+				matchesGroupMembers(group, known, scratch.path),
+			]
+			const foreignMembers = collectGroupMembers(leader, scratch.path)
+			scratch.write('self/stat', buildProcessStat(process.pid, 'self', 'S', 1, 1))
+			const own = [
+				matchesOwnTable(scratch.path),
+				matchesProcessEnded(-40, scratch.path),
+				matchesGroupMembers(group, known, scratch.path),
+			]
+			const ownMembers = collectGroupMembers(leader, scratch.path)
+			scratch.remove('self/stat')
+			const missing = [
+				matchesOwnTable(scratch.path),
+				matchesProcessEnded(-40, scratch.path),
+				matchesGroupMembers(group, known, scratch.path),
+			]
+			const missingMembers = collectGroupMembers(leader, scratch.path)
+
+			expect(foreign).toEqual([false, false, false])
+			expect(own).toEqual([true, true, true])
+			expect(missing).toEqual([false, false, false])
+			expect(foreignMembers).toEqual([])
+			expect(ownMembers).toEqual(known)
+			expect(missingMembers).toEqual([])
+		} finally {
+			holds(() => leader.kill('SIGKILL'))
 			scratch.destroy()
 		}
 	})
@@ -1245,6 +1327,55 @@ describe('stopGroup', () => {
 			} finally {
 				holds(() => process.kill(-(orphaned.pid ?? 0), 'SIGKILL'))
 				holds(() => process.kill(-(rooted.pid ?? 0), 'SIGKILL'))
+			}
+		},
+	)
+
+	// The snapshot names the root alone, so the trapping grandchild stands for a member forked after
+	// the exit. `SIGTERM` ends the root, which this process then reaps, and the trap keeps the
+	// grandchild alive through it; at the second gate the group still has a live member but no
+	// snapshot member, so its identity is unconfirmed and no `SIGKILL` follows.
+	it.skipIf(!existsSync('/proc/self/stat'))(
+		'sends no SIGKILL after the last snapshot member has gone, though an unrecorded member lives',
+		{ timeout: 30_000 },
+		async () => {
+			const root = spawn(process.execPath, [resolveChildFixture(), 'tree-trap'], {
+				detached: true,
+				stdio: ['ignore', 'pipe', 'ignore'],
+			})
+			const output: string[] = []
+			root.stdout.on('data', (chunk: Buffer) => {
+				output.push(chunk.toString('utf8'))
+			})
+			const group = root.pid ?? 0
+			try {
+				await waitForCondition(
+					'the grandchild announces itself and installs its trap',
+					() => output.join('').includes('trapped\n'),
+					{ budget: 5_000 },
+				)
+				const [line = ''] = output.join('').split(/\r\n|\n/u)
+				const trapped = Number.parseInt(line.replace('grandchild:', ''), 10)
+				const start = parseProcessStat(readFileSync(`/proc/${String(group)}/stat`, 'utf8'))?.start
+
+				await stopGroup(
+					{
+						pid: group,
+						exitCode: 0,
+						signalCode: null,
+						kill: () => true,
+						once: () => undefined,
+						off: () => undefined,
+					},
+					300,
+					[{ pid: group, start: start ?? '' }],
+				)
+				await waitForDelay(200)
+
+				expect(isExited(root)).toBe(true)
+				expect(isRunning(trapped)).toBe(true)
+			} finally {
+				holds(() => process.kill(-group, 'SIGKILL'))
 			}
 		},
 	)

@@ -57,6 +57,7 @@ if (mode === 'write') {
 	process.exit(0)
 } else if (
 	mode === 'tree' ||
+	mode === 'tree-trap' ||
 	mode === 'orphan' ||
 	mode === 'leave' ||
 	mode === 'leave-late' ||
@@ -79,15 +80,23 @@ if (mode === 'write') {
 	// event never arrives. `hold <ms>` releases it after a bounded window, so a caller can put a
 	// drain bound on either side of a real release. `late <path>` keeps writing diagnostics into the
 	// held pipe and appends the same bytes to a file, so a caller can prove late bytes existed.
+	// `tree-trap` keeps the root alive like `tree`, with no handler of its own, so `SIGTERM` ends it,
+	// and its grandchild traps `SIGTERM`, so only `SIGKILL` ends that one.
 	const holder =
-		mode === 'leave-late' ? ['late', detail] : passed !== undefined ? ['hold', passed] : ['sleep']
+		mode === 'tree-trap'
+			? ['trap']
+			: mode === 'leave-late'
+				? ['late', detail]
+				: passed !== undefined
+					? ['hold', passed]
+					: ['sleep']
 	const grandchild = spawn(process.argv[0], [process.argv[1], ...holder], {
 		stdio: ['ignore', 1, 2],
 		detached: process.platform === 'win32' || mode.startsWith('leave'),
 	})
 	grandchild.unref()
 	process.stdout.write(`grandchild:${String(grandchild.pid)}\n`)
-	if (mode === 'tree') {
+	if (mode === 'tree' || mode === 'tree-trap') {
 		setInterval(() => undefined, 1_000)
 	} else {
 		process.stdout.write('exiting\n')

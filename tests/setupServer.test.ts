@@ -91,6 +91,19 @@ describe.skipIf(!existsSync('/proc/self/mountinfo'))('process-table fixture buil
 		expect(host?.[(host?.indexOf('-') ?? 0) + 1]).toBe('proc')
 		expect(built.length - built.indexOf('-')).toBe((host?.length ?? 0) - (host?.indexOf('-') ?? 0))
 	})
+
+	// proc(5): an optional field such as `shared:12` sits between the per-mount options and the `-`,
+	// and a space in the mount point is written as the octal escape `\040`.
+	it('builds a mountinfo line carrying an optional field and an escaped mount point', () => {
+		const built = buildProcessMount('/scratch/a table', 'rw,hidepid=2', 'shared:12')
+			.trimEnd()
+			.split(' ')
+
+		expect(built[4]).toBe('/scratch/a\\040table')
+		expect(built[6]).toBe('shared:12')
+		expect(built.indexOf('-')).toBe(7)
+		expect(built[built.indexOf('-') + 3]).toBe('rw,hidepid=2')
+	})
 })
 
 describe('resolveChildFixture spawned for real', () => {

@@ -211,6 +211,7 @@ await new GuideCommand({
 				'killTree',
 				'matchesEndedTasks',
 				'matchesGroupMembers',
+				'matchesOwnTable',
 				'matchesProcessEnded',
 				'matchesTableHidden',
 				'mergeEnvironment',

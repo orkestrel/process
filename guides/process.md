@@ -160,8 +160,8 @@ answers the probe signal, so where the host publishes a `/proc` process table, `
 returns `false` for an id whose every thread, or every group member's every thread, reads `Z` or
 `X` in two readings taken one after the other. A reading it cannot take reads as live, and so does
 every group while the table's mount carries a `hidepid` option other than `0` or `off`, because
-that mount hides other users' processes and a hidden member can be live. A host without the table
-keeps the signal's answer.
+that mount hides other users' processes and a hidden member can be live. A host without the table,
+and a table whose `self/stat` names a process other than this one, keep the signal's answer.
 
 ### Process-table readers
 
@@ -177,6 +177,7 @@ an argument that defaults to `PROCESS_TABLE`, so a proof can point it at an iner
 | `scanGroupMembers`    | function | `(group: number, table?: string) => readonly ProcessMember[] \| undefined`                                             | Scans the members of one process group from a process table, each with its start time.                               |
 | `scanProcessTasks`    | function | `(pid: number, table?: string) => readonly ProcessTask[] \| undefined`                                                 | Scans every thread of one process, or of every member of one process group, from a process table.                    |
 | `matchesEndedTasks`   | function | `(first: readonly ProcessTask[], second: readonly ProcessTask[]) => boolean`                                           | Checks whether two process-table readings show the same threads, every one of them exited.                           |
+| `matchesOwnTable`     | function | `(table?: string) => boolean`                                                                                          | Checks whether a process table numbers processes the way this process signals them.                                  |
 | `matchesTableHidden`  | function | `(table?: string) => boolean`                                                                                          | Checks whether the mount of a process table hides other users' processes from this reader.                           |
 | `matchesProcessEnded` | function | `(pid: number, table?: string, scan?: (pid: number, table: string) => readonly ProcessTask[] \| undefined) => boolean` | Checks whether a process or a process group has ended while the host still answers its id.                           |
 | `matchesGroupMembers` | function | `(group: number, members: readonly ProcessMember[], table?: string) => boolean`                                        | Checks whether a process group still holds a member a snapshot of that group named.                                  |
@@ -747,13 +748,15 @@ prove that: after every member has left, the host can hand the id to an unrelate
 `Duplex`, and `execute` spawn every POSIX child as the leader of its own group, apart from the
 caller's. When they observe the child's exit, `collectGroupMembers` records the members the group
 still holds, each as its id and its start time. After `stopChild` returns they call `stopGroup`,
-which signals the group only while it still holds a member with an identical id and start time
-from that record, and only while `inspectProcess` reads a member that has not exited. An exited
-child that left no descendant therefore costs no wait. An empty or unreadable record signals
-nothing, and so does a host that publishes no `/proc` process table, where only the drain bound
-ends the wait. A descendant that left the group, by starting a session of its own, is beyond this
-route. So is a descendant forked after the child's exit, from the moment every recorded member that
-is its ancestor has ended; the drain bound is what ends the wait for either.
+which signals the group only while `inspectProcess` reads a member that has not exited and, checked
+last, the group still holds a member with an identical id and start time from that record. One
+identity scan is all that separates that check from each signal. An exited child that left no
+descendant therefore costs no wait. An empty or unreadable record signals nothing, and so does a
+host that publishes no `/proc` process table, or a table whose `self/stat` names another process,
+as one mounted from another PID namespace does; there only the drain bound ends the wait. A
+descendant that left the group, by starting a session of its own, is beyond this route. So is a
+descendant forked after the child's exit, from the moment no recorded member remains in the group,
+its own ancestors included; the drain bound is what ends the wait for either.
 
 After an undrained cutoff, no mechanism here can report whether further diagnostics existed, and that
 is a limit rather than an omission. Node exposes no count of the writers still holding a pipe, and a
@@ -967,10 +970,12 @@ const echoed = executeSync(
 echoed.stdout === input // true
 ```
 
-The `execute` function writes `input` with a host callback. A fault while that write is pending ends
-the run by design and makes `failed` true. With `strict: true`, the rejection is coded `input`, its
-message states that standard-input writing failed, and it carries the host fault as its `cause`;
-with `strict: false`, the result carries no cause member. This behavior is distinct from the quiet
+The `execute` function writes `input` with a host callback. A fault while that write is pending,
+before any timeout or abort began, ends the run by design and makes `failed` true. With
+`strict: true`, the rejection is coded `input`, its message states that standard-input writing
+failed, and it carries the host fault as its `cause`; with `strict: false`, the result carries no
+cause member. A fault that arrives after a termination began is that termination's consequence, so
+the run rejects as `timeout` or `spawn` instead. This behavior is distinct from the quiet
 constructor input phase of `Process`.
 
 A run with no `timeout` and no `signal` is unbounded, and what it waits for is stdio completion
@@ -1004,8 +1009,8 @@ A spawn fault reports the host's negative errno in `ProcessExit.code` and an asy
 `ExecuteResult.code`. The synchronous `executeSync` result reports `null` instead.
 
 By default a failed run rejects with a `ProcessError` carrying the `ExecuteResult` on its `result`
-property. An expired run carries code `timeout`, and a host fault while writing standard input
-carries code `input`; every other failure carries code `spawn`. Passing `strict: false` settles with
+property. An expired run carries code `timeout`, and a host fault while writing standard input,
+before any termination began, carries code `input`; every other failure carries code `spawn`. Passing `strict: false` settles with
 the result even on failure, so you inspect `failed` yourself.
 
 ```ts
@@ -1656,11 +1661,13 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   [`tests/src/server/helpers.bench.ts`](../tests/src/server/helpers.bench.ts) reads its cost at a
   64 KiB bound against the array walk it replaced. `inspectProcess` reads a real unreaped zombie and
   its group as ended, the process-table readers run over inert tables, each reading they cannot take
-  included, a group reads as live under a `hidepid` mount, and a second scan that gains a task reads
-  as live through an injected scan. `stopGroup` ends the descendant an exited group leader left
-  behind while it leaves a live root's group alone, and it signals nothing for a group id an
-  unrelated process leads, against a control that carries that process's own id and start
-  time. The fire-and-forget spawn covers owned inputs, detached process-group behavior,
+  included, a group reads as live under a `hidepid` mount whose line carries an optional field and
+  an escaped mount point, a table whose `self/stat` names another process yields no reading and no
+  member, and a second scan that gains a task reads as live through an injected scan. `stopGroup`
+  ends the descendant an exited group leader left behind while it leaves a live root's group alone,
+  sends no `SIGKILL` after the last recorded member has gone though an unrecorded member lives, and
+  signals nothing for a group id an unrelated process leads, against a control that carries that
+  process's own id and start time. The fire-and-forget spawn covers owned inputs, detached process-group behavior,
   invalid-input refusal, and the validated working directory.
 - [`tests/src/server/execution/execute.test.ts`](../tests/src/server/execution/execute.test.ts)
   — the asynchronous one-shot run: owned inputs, buffered outcomes, failure delivery,

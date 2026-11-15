@@ -667,13 +667,14 @@ describe('Process', () => {
 		},
 	)
 
-	// After the root exits, its process group still holds the descendant, and the group's id stays
-	// reserved while it has a member, so `destroy` ends the descendant through the group and the pipe
-	// closes. Windows has no process group, and `taskkill` walks only a live root's tree, so there the
-	// descendant survives and the drain bound alone ends the wait. Version 0.0.5 resolved `destroy`
-	// here while `exit` stayed pending for the descendant's whole life.
+	// After the root exits, its process group still holds the descendant, and the members recorded at
+	// that exit confirm the group is still the child's, so `destroy` ends the descendant through the
+	// group and the pipe closes. That record comes from the host's `/proc` process table, so a host
+	// without one, Windows included, signals no group: the descendant survives and the drain bound
+	// alone ends the wait. Version 0.0.5 resolved `destroy` here while `exit` stayed pending for the
+	// descendant's whole life.
 	it('ends a descendant holding the pipe when destroy follows the root exit, where a group reaches it', async () => {
-		const grouped = process.platform !== 'win32'
+		const grouped = existsSync('/proc/self/stat')
 		const child = createProcess({
 			command: childCommand('orphan'),
 			workspace: process.cwd(),
@@ -1150,10 +1151,11 @@ describe('Process', () => {
 		}
 	})
 
-	// Windows has no process group, and `taskkill` walks only a live root's tree, so there the
-	// descendant outlives `destroy` and the streams never close; a group reaches it everywhere else.
+	// The group route confirms the group's members through the host's `/proc` process table, so on a
+	// host without one, Windows included, the descendant outlives `destroy` and the streams never
+	// close; where the table exists, the group reaches it.
 	it('settles the exit promise after destroy and ends the descendant holding the streams where a group reaches it', async () => {
-		const grouped = process.platform !== 'win32'
+		const grouped = existsSync('/proc/self/stat')
 		const child = createProcess({
 			command: childCommand('orphan'),
 			workspace: process.cwd(),
