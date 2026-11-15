@@ -625,6 +625,32 @@ describe('Duplex endings', () => {
 		expect(code).toBeLessThan(0)
 		await duplex.destroy()
 	})
+
+	it('refuses to spawn for a signal that already aborted and still settles both endings', async () => {
+		const chunks = createRecorder<readonly [Uint8Array]>()
+		const errors = createRecorder<readonly [unknown]>()
+		const duplex = createDuplex({
+			command: childCommand('sleep'),
+			workspace: process.cwd(),
+			grace: 20,
+			signal: AbortSignal.abort(),
+			on: { stdout: chunks.handler, error: errors.handler },
+		})
+		const pid = duplex.pid
+
+		await duplex.ended
+		const exit = await duplex.exit
+
+		expect(pid).toBeUndefined()
+		expect(duplex.terminated).toBe(true)
+		expect(exit).toEqual({ code: null, signal: null, drained: true })
+		expect(await duplex.write(Uint8Array.from([1]))).toBe(false)
+		await duplex.end()
+		expect(await duplex.stop()).toBe(true)
+		await duplex.destroy()
+		expect(chunks.count).toBe(0)
+		expect(errors.count).toBe(0)
+	})
 })
 
 describe('Duplex validation', () => {

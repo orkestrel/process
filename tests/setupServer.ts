@@ -66,6 +66,15 @@ export const MANAGER_MEMBERS: readonly string[] = Object.freeze([
 	'destroy',
 ])
 
+// The stderr tail bench reads one trim of a retained tail plus one delivered chunk at the evidence
+// bound the audit read (64 KiB), with the cut on a continuation byte so the walk steps past it. The
+// shipped walk must cost at most `TRIM_SHARE` of the per-call array walk it replaced, the audit's
+// -90% bar for the repair.
+export const TRIM_EVIDENCE = 65_536
+export const TRIM_CHUNK = 1_024
+export const TRIM_SHARE = 0.1
+export const TRIM_RUN = Object.freeze({ time: 1_000, warmupTime: 200, iterations: 50 })
+
 /** Records the exit listeners installed by a bounded native-exit wait. */
 export class ExitBoundary {
 	#listeners: Array<() => void> = []

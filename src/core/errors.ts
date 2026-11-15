@@ -156,7 +156,7 @@ export function createInvalidError(subject: string, value: unknown): ProcessErro
  * {@link ExecuteResult}.
  *
  * @param result - The buffered run outcome that failed
- * @param cause - The underlying host fault, when one ended the run
+ * @param cause - The underlying host fault, when one ended the run, or the `reason` of the caller's aborted signal
  * @returns A typed run failure carrying its {@link ExecuteResult}
  */
 export function createExecuteError(result: ExecuteResult, cause?: unknown): ProcessError {

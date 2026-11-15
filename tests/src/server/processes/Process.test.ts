@@ -1,5 +1,6 @@
 import type { ProcessExit } from '@src/core'
 import { getEventListeners } from 'node:events'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { holds } from '@orkestrel/contract'
@@ -12,7 +13,7 @@ import {
 } from '@orkestrel/test'
 import { createScratch, destroyScratch, isRunning } from '@orkestrel/test/server'
 import { isProcessError, PROCESS_TIMER, ProcessError } from '@src/core'
-import { createProcess } from '@src/server'
+import { createProcess, parseProcessStat } from '@src/server'
 import { childCommand, resolveChildFixture } from '../../../setupServer.js'
 
 describe('Process', () => {
@@ -202,7 +203,36 @@ describe('Process', () => {
 
 		expect(Buffer.byteLength(child.evidence)).toBeLessThanOrEqual(31)
 		expect(child.evidence).not.toContain('\u{fffd}')
-		expect(child.evidence.endsWith('tail')).toBe(true)
+		expect(child.evidence).toBe(`${'\u{1f642}'.repeat(6)}tail`)
+	})
+
+	it('retains the same multibyte tail whatever chunks the stderr pipe delivers', async () => {
+		// Each write lands in its own host turn, so the pipe can deliver chunks shorter and longer
+		// than the bound; the tail is a property of the whole stream, never of its chunking.
+		const parts = [
+			'a\u{e9}',
+			'\u{20ac}'.repeat(9),
+			'b\u{1f642}'.repeat(5),
+			'\u{e9}'.repeat(30),
+			'z',
+		]
+		const script = `const parts = ${JSON.stringify(parts)}; const next = (index) => { if (index === parts.length) return; process.stderr.write(parts[index], () => setTimeout(() => next(index + 1), 5)) }; next(0)`
+		const child = createProcess({
+			command: { file: process.execPath, arguments: ['-e', script] },
+			workspace: process.cwd(),
+			grace: 20,
+			evidence: 24,
+		})
+		const points = Array.from(parts.join(''))
+		const expected = points
+			.filter((_, index) => Buffer.byteLength(points.slice(index).join('')) <= 24)
+			.join('')
+
+		await child.exit
+
+		// The bound cuts inside a two-byte sequence, so the kept tail is one byte short of it.
+		expect(child.evidence).toBe(expected)
+		expect(expected).toBe(`${'\u{e9}'.repeat(11)}z`)
 	})
 
 	it('emits the terminal state on the exit event and the exit promise alike', async () => {
@@ -398,6 +428,48 @@ describe('Process', () => {
 		expect(errors.count).toBe(0)
 	})
 
+	it('refuses to spawn for a signal that already aborted and still reaches the terminal moment', async () => {
+		const scratch = createScratch()
+		try {
+			const marker = join(scratch.path, 'aborted.txt')
+			const control = join(scratch.path, 'control.txt')
+			const exits = createRecorder<readonly [ProcessExit]>()
+			const child = createProcess({
+				command: childCommand('write', marker),
+				workspace: process.cwd(),
+				grace: 20,
+				writable: true,
+				signal: AbortSignal.abort(),
+				on: { exit: exits.handler },
+			})
+			const pid = child.pid
+			const terminated = child.terminated
+			const exit = await child.exit
+			// The control is the same command with no abort; its marker shows the command writes when
+			// it runs at all.
+			const ran = createProcess({
+				command: childCommand('write', control),
+				workspace: process.cwd(),
+			})
+			await ran.exit
+
+			expect(pid).toBeUndefined()
+			expect(terminated).toBe(true)
+			expect(exit).toEqual({ code: null, signal: null, drained: true })
+			expect(exits.calls).toEqual([[exit]])
+			expect(await collect(child.lines)).toEqual([])
+			expect(child.evidence).toBe('')
+			expect(await child.send('late')).toBe(false)
+			expect(await child.stop()).toBe(true)
+			await child.destroy()
+			expect(child.emitter.destroyed).toBe(true)
+			expect(existsSync(control)).toBe(true)
+			expect(existsSync(marker)).toBe(false)
+		} finally {
+			await destroyScratch(scratch)
+		}
+	})
+
 	// Version 0.0.4 accepted a write issued after `stop` began, then destroyed the pipe. The retained
 	// contract refuses that write because teardown cannot confirm delivery it is about to discard.
 	it('refuses a send after teardown begins', async () => {
@@ -547,15 +619,66 @@ describe('Process', () => {
 		expect(await child.stop()).toBe(true)
 	})
 
-	// The descendant is the only thing holding the pipe open, and no host reaches it after the root
-	// has exited, so nothing but the bound can end the wait. Version 0.0.5 resolved `destroy` here
-	// while `exit` stayed pending for the descendant's whole life.
-	it('resolves destroy at the drain cutoff and reports the exit undrained while a descendant holds the pipe', async () => {
+	// A child that ended itself and left no descendant leaves no group member to signal, so its
+	// teardown never waits out the cooperative window it would give a live group.
+	it(
+		'destroys a child that exited on its own and left no descendant without waiting out grace',
+		{
+			// The budget clears a teardown that waits out the whole 5000ms grace, so a regression reads as
+			// the elapsed assertion rather than as this case's timeout.
+			timeout: 15_000,
+		},
+		async () => {
+			const child = createProcess({
+				command: childCommand('exit', '0'),
+				workspace: process.cwd(),
+				grace: 5_000,
+			})
+			await child.exit
+
+			const started = performance.now()
+			await child.destroy()
+			const elapsed = performance.now() - started
+
+			expect(elapsed).toBeLessThan(1_000)
+		},
+	)
+
+	// The group reading comes from the host's `/proc` process table, which a host without one lacks.
+	it.skipIf(!existsSync('/proc/self/stat'))(
+		'spawns its child as the leader of a process group apart from the parent group',
+		async () => {
+			const child = createProcess({
+				command: childCommand('sleep'),
+				workspace: process.cwd(),
+				grace: 20,
+			})
+			try {
+				const pid = child.pid ?? 0
+				const own = parseProcessStat(readFileSync('/proc/self/stat', 'utf8'))
+				const led = parseProcessStat(readFileSync(`/proc/${String(pid)}/stat`, 'utf8'))
+
+				expect(pid).toBeGreaterThan(0)
+				expect(led?.group).toBe(pid)
+				expect(own?.group).not.toBe(pid)
+			} finally {
+				await child.destroy()
+			}
+		},
+	)
+
+	// After the root exits, its process group still holds the descendant, and the group's id stays
+	// reserved while it has a member, so `destroy` ends the descendant through the group and the pipe
+	// closes. Windows has no process group, and `taskkill` walks only a live root's tree, so there the
+	// descendant survives and the drain bound alone ends the wait. Version 0.0.5 resolved `destroy`
+	// here while `exit` stayed pending for the descendant's whole life.
+	it('ends a descendant holding the pipe when destroy follows the root exit, where a group reaches it', async () => {
+		const grouped = process.platform !== 'win32'
 		const child = createProcess({
 			command: childCommand('orphan'),
 			workspace: process.cwd(),
 			grace: 20,
-			drain: 200,
+			drain: 2_000,
 		})
 		const iterator = child.lines[Symbol.asyncIterator]()
 		const first = await iterator.next()
@@ -587,15 +710,14 @@ describe('Process', () => {
 			await alone.destroy()
 			const aloneExit = await alone.exit
 
-			// Nothing closed the pipe: the holder is still alive at the moment the barrier resolved.
-			expect(holding).toBe(true)
 			expect(child.settled).toBe(true)
 			expect(child.emitter.destroyed).toBe(true)
-			expect(exit.drained).toBe(false)
-			// The root had already exited, so the barrier owed at most the 200ms bound. Without the
-			// bound it owes the descendant's whole life and never returns.
-			expect(elapsed).toBeLessThan(2_000)
 			expect(aloneExit.drained).toBe(true)
+			// Where a group reaches the holder, its pipe closes long before the 2000ms bound; where none
+			// does, nothing closes the pipe and the barrier owes the bound and no more.
+			expect(holding).toBe(!grouped)
+			expect(exit.drained).toBe(grouped)
+			expect(elapsed).toBeLessThan(grouped ? 1_000 : 4_000)
 		} finally {
 			holds(() => process.kill(held, 'SIGKILL'))
 			await child.destroy()
@@ -879,7 +1001,7 @@ describe('Process', () => {
 	it('freezes the evidence tail at the barrier while the descendant keeps writing', async () => {
 		const scratch = createScratch()
 		const child = createProcess({
-			command: childCommand('orphan-late', join(scratch.path, 'late.log')),
+			command: childCommand('leave-late', join(scratch.path, 'late.log')),
 			workspace: process.cwd(),
 			grace: 20,
 			drain: 100,
@@ -919,7 +1041,7 @@ describe('Process', () => {
 		const chunks = createRecorder<readonly [string]>()
 		const scratch = createScratch()
 		const child = createProcess({
-			command: childCommand('orphan-late', join(scratch.path, 'late.log')),
+			command: childCommand('leave-late', join(scratch.path, 'late.log')),
 			workspace: process.cwd(),
 			grace: 20,
 			drain: 100,
@@ -1028,12 +1150,15 @@ describe('Process', () => {
 		}
 	})
 
-	it('settles the exit promise after destroy even when the child streams never close', async () => {
+	// Windows has no process group, and `taskkill` walks only a live root's tree, so there the
+	// descendant outlives `destroy` and the streams never close; a group reaches it everywhere else.
+	it('settles the exit promise after destroy and ends the descendant holding the streams where a group reaches it', async () => {
+		const grouped = process.platform !== 'win32'
 		const child = createProcess({
 			command: childCommand('orphan'),
 			workspace: process.cwd(),
 			grace: 20,
-			drain: 100,
+			drain: 2_000,
 		})
 		const iterator = child.lines[Symbol.asyncIterator]()
 		const first = await iterator.next()
@@ -1055,8 +1180,8 @@ describe('Process', () => {
 			})
 			const naturalExit = await natural.exit
 
-			expect(holding).toBe(true)
-			expect(exit).toEqual({ code: 0, signal: null, drained: false })
+			expect(holding).toBe(!grouped)
+			expect(exit).toEqual({ code: 0, signal: null, drained: grouped })
 			expect(naturalExit).toEqual({ code: 0, signal: null, drained: true })
 		} finally {
 			holds(() => process.kill(held, 'SIGKILL'))
@@ -1093,7 +1218,7 @@ describe('Process', () => {
 		})
 		const drainedLines = await collect(drained.lines)
 		const cut = createProcess({
-			command: childCommand('orphan-partial'),
+			command: childCommand('leave-partial'),
 			workspace: process.cwd(),
 			grace: 20,
 			drain: 100,
@@ -1122,7 +1247,7 @@ describe('Process', () => {
 
 	it('bounds the drain wait below and above a descendant release', async () => {
 		const cut = createProcess({
-			command: childCommand('orphan', '400'),
+			command: childCommand('leave', '400'),
 			workspace: process.cwd(),
 			grace: 20,
 			drain: 50,
@@ -1131,7 +1256,7 @@ describe('Process', () => {
 		const cutFirst = await cutIterator.next()
 		const cutHeld = Number.parseInt(String(cutFirst.value).replace('grandchild:', ''), 10)
 		const waited = createProcess({
-			command: childCommand('orphan', '400'),
+			command: childCommand('leave', '400'),
 			workspace: process.cwd(),
 			grace: 20,
 			drain: 1_000,
@@ -1183,7 +1308,7 @@ describe('Process', () => {
 		// The pair differs only in whether a close arrives before the bound elapses, so the cutoff
 		// below is the bound rather than the shape of the fixture.
 		const closed = createProcess({
-			command: childCommand('orphan', '400'),
+			command: childCommand('leave', '400'),
 			workspace: process.cwd(),
 			grace: 20,
 			drain: 5_000,
@@ -1277,7 +1402,7 @@ describe('Process', () => {
 		const exits = createRecorder<readonly [ProcessExit]>()
 		const delivered: Array<{ readonly settled: boolean; readonly evidence: string }> = []
 		const child = createProcess({
-			command: childCommand('orphan', '300'),
+			command: childCommand('leave', '300'),
 			workspace: process.cwd(),
 			grace: 20,
 			drain: 50,
@@ -1354,7 +1479,7 @@ describe('Process', () => {
 	it('reaches the terminal moment on stop alone with no destroy call', async () => {
 		const scratch = createScratch()
 		const child = createProcess({
-			command: childCommand('orphan-late', join(scratch.path, 'stopped.log')),
+			command: childCommand('leave-late', join(scratch.path, 'stopped.log')),
 			workspace: process.cwd(),
 			grace: 20,
 			drain: 100,
@@ -1366,7 +1491,7 @@ describe('Process', () => {
 		// The control calls neither verb over the same fixture and puts its bound far outside this
 		// row's window, so at the reading its tail moves, its read is parked, and its exit is pending.
 		const control = createProcess({
-			command: childCommand('orphan-late', join(scratch.path, 'control.log')),
+			command: childCommand('leave-late', join(scratch.path, 'control.log')),
 			workspace: process.cwd(),
 			grace: 20,
 			drain: 30_000,

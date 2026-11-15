@@ -7,7 +7,8 @@
  * `ProcessChildInterface` types the child boundary the termination helpers drive and names
  * `NodeJS.Signals`, which a host-independent contract cannot; `SupervisorFace` names no Node
  * type, but its one consumer is the Node-only `Supervisor` engine, so it sits with the face that
- * constructs one.
+ * constructs one. `ProcessStat` and `ProcessTask` describe the Linux process table the Node-side
+ * readers parse.
  */
 
 import type { ProcessExit } from '@src/core'
@@ -80,6 +81,22 @@ export interface ProcessChildInterface {
 	 * ```
 	 */
 	off(event: 'exit' | 'close', listener: () => void): unknown
+}
+
+/** Represents the fields of one process-table `stat` entry a liveness reading needs. */
+export interface ProcessStat {
+	/** Holds the one-letter scheduler state, such as `S` for sleeping or `Z` for a zombie. */
+	readonly state: string
+	/** Holds the process-group id. */
+	readonly group: number
+}
+
+/** Represents one thread a process-table reading found: its `<pid>/<tid>` key and its state. */
+export interface ProcessTask {
+	/** Holds the `<pid>/<tid>` key that names the thread across readings. */
+	readonly id: string
+	/** Holds the thread's one-letter scheduler state. */
+	readonly state: string
 }
 
 /**

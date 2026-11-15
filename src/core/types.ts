@@ -169,7 +169,7 @@ export interface ProcessOptions {
 	readonly delivery?: number
 	/** If `true`, stdin stays open for {@link ProcessInterface.send}; if `false` or omitted, stdin closes after any initial `input`. */
 	readonly writable?: boolean
-	/** Terminates the child through the same bounded `stop` when this signal aborts. */
+	/** Terminates the child through the same bounded `stop` when this signal aborts; a signal already aborted refuses the spawn, so `pid` stays `undefined` and the terminal moment arrives with `code` and `signal` `null`. */
 	readonly signal?: AbortSignal
 }
 
@@ -303,8 +303,10 @@ export interface ProcessInterface {
 	 * @remarks
 	 * Never rejects. On Windows the whole tree is killed immediately through `taskkill`, with a
 	 * direct kill as the fallback; on a POSIX host the process group receives `SIGTERM`, then
-	 * `SIGKILL` after `grace`. No signal is initiated after the child's native exit is observed; the
-	 * window between initiating a signal and the host delivering it belongs to the operating system.
+	 * `SIGKILL` after `grace`. After the child's native exit, no signal reaches its pid; on a POSIX
+	 * host the group it led receives the same pair while the process table shows a member that has
+	 * not exited, because the host reserves a group's id while the group has a member. The window
+	 * between initiating a signal and the host delivering it belongs to the operating system.
 	 *
 	 * Observation ends here as well as under `destroy`, bounded by `drain`: `evidence` freezes,
 	 * `lines` ends, and `exit` settles. A caller that stops a child and keeps reading it therefore
@@ -396,7 +398,7 @@ export interface DuplexOptions {
 	readonly evidence?: number
 	/** Sets the milliseconds an unconfirmed {@link DuplexInterface.write} waits before resolving `false`. `0` or omitted disables the bound. */
 	readonly delivery?: number
-	/** Terminates the child through the same bounded `stop` when this signal aborts. */
+	/** Terminates the child through the same bounded `stop` when this signal aborts; a signal already aborted refuses the spawn, so `pid` stays `undefined` and the terminal moment arrives with `code` and `signal` `null`. */
 	readonly signal?: AbortSignal
 }
 
@@ -540,7 +542,9 @@ export interface DuplexInterface {
 	 * @remarks
 	 * Never rejects. On Windows the whole tree is killed immediately through `taskkill`, with a
 	 * direct kill as the fallback; on a POSIX host the process group receives `SIGTERM`, then
-	 * `SIGKILL` after `grace`. No signal is initiated after the child's native exit is observed.
+	 * `SIGKILL` after `grace`. After the child's native exit, no signal reaches its pid; on a POSIX
+	 * host the group it led receives the same pair while the process table shows a member that has
+	 * not exited.
 	 *
 	 * Observation ends here as well as under `destroy`, bounded by `drain`: `evidence` freezes, the
 	 * `stdout` and `stderr` events stop, and `exit` settles. A caller that stops a child and keeps
@@ -658,7 +662,7 @@ export interface ExecuteOptions {
 	readonly timeout?: number
 	/** Sets the cooperative POSIX window between `SIGTERM` and `SIGKILL` when terminating. Default: {@link PROCESS_GRACE}. */
 	readonly grace?: number
-	/** Terminates the run and reports `aborted` when this signal aborts. */
+	/** Terminates the run and reports `aborted` when this signal aborts; a signal already aborted refuses the run before anything spawns. A rejection carries the signal's `reason` as its `cause`. */
 	readonly signal?: AbortSignal
 	/** If `true`, reject on failure; if `false`, resolve with the result instead. Default: `true`. */
 	readonly strict?: boolean

@@ -15,22 +15,28 @@ import {
 	buildExecuteResult,
 	buildSpawn,
 	captureChunk,
+	createProcess,
 	formatCommand,
 	inspectProcess,
 	isExited,
 	killProcess,
 	killTree,
+	matchesEndedTasks,
 	mergeEnvironment,
 	mergePlatformEnvironment,
 	namesFile,
 	quoteArgument,
 	readPlatformVariable,
+	readProcessEnded,
+	readProcessTasks,
+	readProcessThreads,
 	readVariable,
 	resolveExecutable,
 	detach,
 	execute,
 	executeSync,
 	stopChild,
+	stopGroup,
 	trimHead,
 	trimTail,
 	validateBytes,
@@ -54,6 +60,29 @@ describe('trimTail', () => {
 		const trimmed = trimTail(buffer, 5)
 		expect(trimmed.byteLength).toBe(5)
 		expect(trimmed.toString('utf8')).toBe(`b${'\u{1f642}'}`)
+	})
+
+	it('keeps the longest code-point suffix that fits at every cut of a mixed-width text', () => {
+		const text = `a\u{e9}\u{20ac}\u{1f642}b\u{1f642}\u{20ac}\u{e9}a`
+		const bytes = Buffer.from(text)
+		const points = Array.from(text)
+
+		for (const limit of Array.from({ length: bytes.byteLength + 2 }, (_, index) => index)) {
+			const expected = points
+				.filter((_, index) => Buffer.byteLength(points.slice(index).join('')) <= limit)
+				.join('')
+			expect(trimTail(bytes, limit).toString('utf8')).toBe(expected)
+		}
+	})
+
+	it('skips every leading continuation byte of an invalid tail and returns an owned copy', () => {
+		const continuation = Buffer.from([0x80, 0x80, 0x80])
+		const stray = Buffer.from([0x61, 0x80, 0x80, 0x62])
+		const trimmed = trimTail(stray, 3)
+		stray[3] = 0x63
+
+		expect(trimTail(continuation, 2).byteLength).toBe(0)
+		expect([...trimmed]).toEqual([0x62])
 	})
 })
 
@@ -110,6 +139,162 @@ describe('inspectProcess', () => {
 			}
 		},
 	)
+
+	// The zombie reading comes from the host's `/proc` process table; a host without one keeps the
+	// signal probe, which a zombie answers.
+	it.skipIf(!existsSync('/proc/self/stat'))(
+		'reports an unreaped zombie and its group as ended while the signal probe still reaches them',
+		async () => {
+			const root = createProcess({
+				command: childCommand('zombie', '10000'),
+				workspace: process.cwd(),
+				grace: 20,
+			})
+			try {
+				const iterator = root.lines[Symbol.asyncIterator]()
+				const first = await iterator.next()
+				const pid = Number.parseInt(String(first.value).replace('zombie:', ''), 10)
+				await waitForCondition(
+					'the killed grandchild reads as a zombie in its process-table status',
+					() => readFileSync(`/proc/${String(pid)}/status`, 'utf8').includes('State:\tZ'),
+					{ budget: 5_000 },
+				)
+
+				expect(process.kill(pid, 0)).toBe(true)
+				expect(process.kill(-pid, 0)).toBe(true)
+				expect(inspectProcess(pid)).toBe(false)
+				expect(inspectProcess(-pid)).toBe(false)
+				expect(inspectProcess(root.pid ?? 0)).toBe(true)
+				expect(inspectProcess(-(root.pid ?? 0))).toBe(true)
+			} finally {
+				await root.destroy()
+			}
+		},
+	)
+})
+
+describe('readProcessEnded', () => {
+	// Each table is inert process-table text in the layout `/proc` publishes: `<pid>/stat` and
+	// `<pid>/task/<tid>/stat`, whose fields after the last `)` are the state, the parent, and the group.
+	it('reads a process or a group as ended only when two readings show every thread exited', () => {
+		const scratch = createScratch({
+			prefix: 'process-table-',
+			files: {
+				'self/stat': '1 (self) S 0 1 1',
+				'40/stat': '40 (zombie) Z 1 40 40',
+				'40/task/40/stat': '40 (zombie) Z 1 40 40',
+				'41/stat': '41 (a b) c) X 40 40 40',
+				'41/task/41/stat': '41 (a b) c) X 40 40 40',
+				'50/stat': '50 (main) Z 1 50 50',
+				'50/task/50/stat': '50 (main) Z 1 50 50',
+				'50/task/51/stat': '51 (worker) S 1 50 50',
+				'60/stat': '60 (other) S 1 60 60',
+				'60/task/60/stat': '60 (other) S 1 60 60',
+			},
+		})
+		try {
+			// An entry whose `stat` is gone is a process that ended between the listing and the read.
+			scratch.ensure('80')
+
+			expect(readProcessEnded(40, scratch.path)).toBe(true)
+			expect(readProcessEnded(-40, scratch.path)).toBe(true)
+			expect(readProcessEnded(50, scratch.path)).toBe(false)
+			expect(readProcessEnded(-50, scratch.path)).toBe(false)
+			expect(readProcessEnded(60, scratch.path)).toBe(false)
+			expect(readProcessEnded(-60, scratch.path)).toBe(false)
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('reads whatever it cannot read as not ended', () => {
+		const scratch = createScratch({
+			prefix: 'process-table-',
+			files: {
+				'self/stat': '1 (self) S 0 1 1',
+				'70/stat': '70 (no tasks) Z 1 70 70',
+				'71/stat': '71 (empty) Z 1 71 71',
+				'72/stat': '72 (garbled) Z 1 72 72',
+				'72/task/72/stat': 'garbled',
+				'73/stat': 'garbled',
+				'75/stat': '75 (zombie) Z 1 75 75',
+				'75/task/75/stat': '75 (zombie) Z 1 75 75',
+			},
+		})
+		try {
+			scratch.ensure('71/task')
+
+			expect(readProcessEnded(70, scratch.path)).toBe(false)
+			expect(readProcessEnded(71, scratch.path)).toBe(false)
+			expect(readProcessEnded(72, scratch.path)).toBe(false)
+			expect(readProcessEnded(74, scratch.path)).toBe(false)
+			// One unreadable entry leaves every group unread, because it might be a member.
+			expect(readProcessEnded(-75, scratch.path)).toBe(false)
+			// A group no entry claims is an empty reading, which the probe signal contradicts.
+			scratch.remove('73')
+			expect(readProcessEnded(-75, scratch.path)).toBe(true)
+			expect(readProcessEnded(-99, scratch.path)).toBe(false)
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('lists a process threads by key and a group by every member it holds', () => {
+		const scratch = createScratch({
+			prefix: 'process-table-',
+			files: {
+				'40/stat': '40 (leader) S 1 40 40',
+				'40/task/40/stat': '40 (leader) S 1 40 40',
+				'41/stat': '41 (member) Z 40 40 40',
+				'41/task/41/stat': '41 (member) Z 40 40 40',
+				'41/task/42/stat': '42 (thread) R 40 40 40',
+				'60/stat': '60 (other) S 1 60 60',
+				'60/task/60/stat': '60 (other) S 1 60 60',
+			},
+		})
+		try {
+			expect(
+				readProcessThreads('41', scratch.path)
+					?.map((task) => `${task.id}:${task.state}`)
+					.toSorted(),
+			).toEqual(['41/41:Z', '41/42:R'])
+			expect(
+				readProcessTasks(-40, scratch.path)
+					?.map((task) => task.id)
+					.toSorted(),
+			).toEqual(['40/40', '41/41', '41/42'])
+			expect(readProcessTasks(60, scratch.path)).toEqual([{ id: '60/60', state: 'S' }])
+			expect(readProcessThreads('99', scratch.path)).toBeUndefined()
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('matches two readings only when they list the same exited threads', () => {
+		const zombie = { id: '7/7', state: 'Z' }
+
+		expect(matchesEndedTasks([zombie], [zombie])).toBe(true)
+		expect(matchesEndedTasks([zombie], [zombie, { id: '8/8', state: 'S' }])).toBe(false)
+		expect(matchesEndedTasks([zombie], [zombie, { id: '8/8', state: 'Z' }])).toBe(false)
+		expect(matchesEndedTasks([{ id: '7/7', state: 'D' }], [{ id: '7/7', state: 'D' }])).toBe(false)
+		expect(matchesEndedTasks([], [])).toBe(false)
+	})
+
+	it('reads nothing as ended on a host that publishes no process table', () => {
+		const scratch = createScratch({
+			prefix: 'process-table-',
+			files: {
+				'40/stat': '40 (zombie) Z 1 40 40',
+				'40/task/40/stat': '40 (zombie) Z 1 40 40',
+			},
+		})
+		try {
+			expect(readProcessEnded(40, scratch.path)).toBe(false)
+			expect(readProcessEnded(-40, scratch.path)).toBe(false)
+		} finally {
+			scratch.destroy()
+		}
+	})
 })
 describe('trimHead', () => {
 	it('returns the whole buffer when it fits the limit', () => {
@@ -882,6 +1067,66 @@ describe('stopChild', () => {
 	})
 })
 
+describe('stopGroup', () => {
+	// Windows has no process group, and `taskkill` walks only a live root's tree, so the function
+	// returns there immediately and this row reads the POSIX group route.
+	it.skipIf(process.platform === 'win32')(
+		'ends the descendant an exited group leader left behind and leaves a live root to stopChild',
+		// The case outlives the condition budgets below it, so a descendant that never leaves reports
+		// its own description and the cleanup still runs.
+		{ timeout: 30_000 },
+		async () => {
+			const orphaned = spawn(process.execPath, [resolveChildFixture(), 'orphan'], {
+				detached: true,
+				stdio: ['ignore', 'pipe', 'ignore'],
+			})
+			// The control leads its own group too, but its root is alive, so the termination is
+			// `stopChild`'s and this function must leave the whole group alone.
+			const rooted = spawn(process.execPath, [resolveChildFixture(), 'tree'], {
+				detached: true,
+				stdio: ['ignore', 'pipe', 'ignore'],
+			})
+			const orphanedOutput: string[] = []
+			const rootedOutput: string[] = []
+			orphaned.stdout.on('data', (chunk: Buffer) => {
+				orphanedOutput.push(chunk.toString('utf8'))
+			})
+			rooted.stdout.on('data', (chunk: Buffer) => {
+				rootedOutput.push(chunk.toString('utf8'))
+			})
+			try {
+				await waitForCondition(
+					'both fixtures announce the descendant they spawned',
+					() => orphanedOutput.join('').includes('\n') && rootedOutput.join('').includes('\n'),
+					{ budget: 5_000 },
+				)
+				const [orphanedLine = ''] = orphanedOutput.join('').split(/\r\n|\n/u)
+				const [rootedLine = ''] = rootedOutput.join('').split(/\r\n|\n/u)
+				const abandoned = Number.parseInt(orphanedLine.replace('grandchild:', ''), 10)
+				const held = Number.parseInt(rootedLine.replace('grandchild:', ''), 10)
+				await waitForCondition('the orphan root exits', () => isExited(orphaned), {
+					budget: 5_000,
+				})
+				expect(isRunning(abandoned)).toBe(true)
+
+				await stopGroup(orphaned, 20)
+				await stopGroup(rooted, 20)
+				await waitForCondition(
+					'the abandoned descendant leaves the host',
+					() => !isRunning(abandoned),
+					{ budget: 5_000 },
+				)
+
+				expect(isRunning(rooted.pid ?? 0)).toBe(true)
+				expect(isRunning(held)).toBe(true)
+			} finally {
+				holds(() => process.kill(-(orphaned.pid ?? 0), 'SIGKILL'))
+				holds(() => process.kill(-(rooted.pid ?? 0), 'SIGKILL'))
+			}
+		},
+	)
+})
+
 describe('killTree', () => {
 	// `taskkill` is the Windows utility that ends a process tree by root id; a POSIX host reaches a
 	// tree through its process group instead, so there is no peer to drive here.
@@ -932,6 +1177,41 @@ describe('mergeEnvironment', () => {
 
 		expect(keys).toHaveLength(folded ? 1 : 2)
 		expect(merged.process_test_key).toBe('second')
+	})
+
+	it('drops an inherited variable whose lower-cased name an added variable claims on every host', () => {
+		const parent = { NPM_CONFIG_CACHE: 'inherited', PROCESS_PARENT_KEY: 'parent' }
+		const base = { npm_config_cache: 'added' }
+
+		for (const platform of ['linux', 'darwin', 'win32'] as const) {
+			expect(mergePlatformEnvironment(platform, parent, false, base)).toEqual({
+				PROCESS_PARENT_KEY: 'parent',
+				npm_config_cache: 'added',
+			})
+		}
+	})
+
+	it('drops every inherited case variant of a name an added layer unsets on every host', () => {
+		const parent = { NPM_CONFIG_CACHE: 'upper', Npm_Config_Cache: 'mixed', PROCESS_PARENT_KEY: 'p' }
+		const override = { npm_config_cache: undefined }
+
+		for (const platform of ['linux', 'darwin', 'win32'] as const) {
+			expect(mergePlatformEnvironment(platform, parent, false, undefined, override)).toEqual({
+				PROCESS_PARENT_KEY: 'p',
+			})
+		}
+	})
+
+	it('folds the parent environment against an added name on the current host', () => {
+		const inherited = Object.keys(process.env).find((key) => key !== key.toLowerCase())
+		if (inherited === undefined) throw new Error('The host environment carries no upper-case name')
+		const merged = mergeEnvironment(false, { [inherited.toLowerCase()]: 'added' })
+		const variants = Object.keys(merged).filter(
+			(key) => key.toLowerCase() === inherited.toLowerCase(),
+		)
+
+		expect(variants).toEqual([inherited.toLowerCase()])
+		expect(merged[inherited.toLowerCase()]).toBe('added')
 	})
 
 	it('excludes the parent environment for an isolated command', () => {

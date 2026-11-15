@@ -58,27 +58,32 @@ if (mode === 'write') {
 } else if (
 	mode === 'tree' ||
 	mode === 'orphan' ||
-	mode === 'orphan-late' ||
-	mode === 'orphan-partial'
+	mode === 'leave' ||
+	mode === 'leave-late' ||
+	mode === 'leave-partial'
 ) {
 	// Spawn a grandchild that inherits this process's stdout, so the pipe outlives this process.
-	// `tree` keeps the root alive for a tree kill; every `orphan` shape lets the root exit while the
-	// pipe is still held, which is the state that keeps a close event pending forever.
+	// `tree` keeps the root alive for a tree kill; every `orphan` and `leave` shape lets the root
+	// exit while the pipe is still held, which is the state that keeps a close event pending until
+	// something ends the holder.
 	//
-	// Each host is given the descendant its own tree mechanism must reach. On Windows a
-	// non-detached grandchild dies with its root, which no `taskkill /T` is needed for, so the
-	// grandchild is detached and survives. On POSIX a detached grandchild leads a new session and
-	// escapes the process group, so it stays in the group instead.
+	// `tree` and `orphan` give each host the descendant its own tree mechanism must reach. On Windows
+	// a non-detached grandchild dies with its root, which no `taskkill /T` is needed for, so the
+	// grandchild is detached and survives. On POSIX a detached grandchild leads a session of its own
+	// outside the process group, so it stays in the group instead, where the group signal reaches it
+	// after the root exits. Every `leave` shape detaches the grandchild on every host, so it leaves
+	// the root's group on POSIX, and after the root exits no tree mechanism reaches it and only the
+	// drain bound ends the wait.
 	//
 	// The holder decides how the held pipe is released. `sleep` never releases it, so the close
 	// event never arrives. `hold <ms>` releases it after a bounded window, so a caller can put a
 	// drain bound on either side of a real release. `late <path>` keeps writing diagnostics into the
 	// held pipe and appends the same bytes to a file, so a caller can prove late bytes existed.
 	const holder =
-		mode === 'orphan-late' ? ['late', detail] : passed !== undefined ? ['hold', passed] : ['sleep']
+		mode === 'leave-late' ? ['late', detail] : passed !== undefined ? ['hold', passed] : ['sleep']
 	const grandchild = spawn(process.argv[0], [process.argv[1], ...holder], {
 		stdio: ['ignore', 1, 2],
-		detached: process.platform === 'win32',
+		detached: process.platform === 'win32' || mode.startsWith('leave'),
 	})
 	grandchild.unref()
 	process.stdout.write(`grandchild:${String(grandchild.pid)}\n`)
@@ -86,7 +91,7 @@ if (mode === 'write') {
 		setInterval(() => undefined, 1_000)
 	} else {
 		process.stdout.write('exiting\n')
-		if (mode === 'orphan-partial') {
+		if (mode === 'leave-partial') {
 			// One framed line and one unterminated line, written last. Only the stream's own end
 			// flushes a trailing partial, and this stream never ends while the grandchild holds it.
 			process.stdout.write('kept-line\n')
@@ -94,6 +99,20 @@ if (mode === 'write') {
 		}
 		setTimeout(() => process.exit(0), 50)
 	}
+} else if (mode === 'zombie') {
+	// Kill a grandchild that leads its own process group, publish its id, and block this process's
+	// event loop for `detail` milliseconds. Node reaps a child only from its event loop, so the
+	// grandchild stays an unreaped zombie, alone in its group, for that whole window.
+	const grandchild = spawn(process.argv[0], [process.argv[1], 'sleep'], {
+		stdio: 'ignore',
+		detached: true,
+	})
+	grandchild.once('spawn', () => {
+		grandchild.kill('SIGKILL')
+		process.stdout.write(`zombie:${String(grandchild.pid)}\n`)
+		Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number.parseInt(detail, 10))
+		process.exit(0)
+	})
 } else if (mode === 'hold') {
 	// Hold the inherited stdout and stderr pipes for the requested window, then release them by
 	// exiting. A caller reads the release as the host close event it defers until this instant.

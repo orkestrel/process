@@ -337,7 +337,7 @@ describe('ProcessManager', () => {
 		const exited = createRecorder<readonly [string, ProcessExit]>()
 		manager.emitter.on('exit', exited.handler)
 		const holder = manager.launch('holder', {
-			command: childCommand('orphan'),
+			command: childCommand('leave'),
 			workspace: process.cwd(),
 			grace: 20,
 			drain: 200,

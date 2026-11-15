@@ -6,13 +6,14 @@ import type {
 	ProcessCommand,
 	SpawnInput,
 } from '@src/core'
-import type { ProcessChildInterface } from './types.js'
+import type { ProcessChildInterface, ProcessTask } from './types.js'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, posix, win32 } from 'node:path'
 import { platform as hostPlatform } from 'node:process'
 import {
+	attempt,
 	boundsOf,
 	holds,
 	isError,
@@ -20,8 +21,15 @@ import {
 	isNonNegativeInteger,
 	isString,
 } from '@orkestrel/contract'
-import { createInvalidError, PROCESS_PATHEXT, PROCESS_TIMER } from '@src/core'
+import {
+	createInvalidError,
+	PROCESS_ENDED,
+	PROCESS_PATHEXT,
+	PROCESS_TABLE,
+	PROCESS_TIMER,
+} from '@src/core'
 import { snapshotCommand } from './cloners.js'
+import { parseProcessStat } from './parsers.js'
 
 /**
  * Trims a buffer to at most `limit` trailing bytes without splitting a UTF-8 sequence.
@@ -44,15 +52,8 @@ export function trimTail(bytes: Uint8Array, limit: number): Buffer {
 	const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)
 	if (buffer.byteLength <= limit) return buffer
 	const offset = buffer.byteLength - limit
-	if (!(offset < buffer.byteLength)) return Buffer.from(buffer.subarray(offset))
-	for (const start of Array.from(
-		{ length: Math.ceil(buffer.byteLength - offset) },
-		(_, index) => offset + index,
-	)) {
-		const byte = buffer[start]
-		if (byte === undefined || (byte & 0xc0) !== 0x80) return Buffer.from(buffer.subarray(start))
-	}
-	return Buffer.from(buffer.subarray(buffer.byteLength))
+	const lead = buffer.subarray(offset).findIndex((byte) => (byte & 0xc0) !== 0x80)
+	return Buffer.from(buffer.subarray(lead === -1 ? buffer.byteLength : offset + lead))
 }
 
 /**
@@ -199,7 +200,10 @@ export function readVariable(
  * @remarks
  * Later maps override earlier ones and an `undefined` value unsets a key. For `win32` the keys fold
  * case-insensitively and the last writer wins, so `PATH` followed by `Path` yields one variable
- * rather than two the host would resolve unpredictably.
+ * rather than two the host would resolve unpredictably. On every other platform the parent layer
+ * drops each variable whose lower-cased name a key of `base` or `override` claims, an unset
+ * included, because a tool such as npm reads its variables case-insensitively there too; the two
+ * added layers keep their exact-case keys.
  *
  * @param platform - The platform whose key rules apply
  * @param parent - The parent environment layer
@@ -221,11 +225,19 @@ export function mergePlatformEnvironment(
 	override?: Readonly<Record<string, string | undefined>>,
 ): NodeJS.ProcessEnv {
 	const folded = platform === 'win32'
-	const layers: ReadonlyArray<Readonly<Record<string, string | undefined>>> = [
-		isolated ? {} : parent,
-		base ?? {},
-		override ?? {},
-	]
+	const added = [base ?? {}, override ?? {}]
+	const claimed = new Set(
+		added.flatMap((layer) => Object.keys(layer).map((key) => key.toLowerCase())),
+	)
+	// Windows folds every layer in the following loop, so only another host needs the inherited fold.
+	const inherited = isolated
+		? {}
+		: folded
+			? parent
+			: Object.fromEntries(
+					Object.entries(parent).filter(([key]) => !claimed.has(key.toLowerCase())),
+				)
+	const layers: ReadonlyArray<Readonly<Record<string, string | undefined>>> = [inherited, ...added]
 	const entries = new Map<string, readonly [key: string, value: string]>()
 	for (const layer of layers) {
 		for (const [key, value] of Object.entries(layer)) {
@@ -613,12 +625,144 @@ export function isExited(child: Pick<ProcessChildInterface, 'exitCode' | 'signal
 }
 
 /**
+ * Reads the state of every thread of one process from a process table.
+ *
+ * @param pid - The process id, as the table's entry names it
+ * @param table - The process table's root. Default: {@link PROCESS_TABLE}
+ * @returns One task per thread, or `undefined` when the thread listing fails, lists no thread, or
+ * holds a thread whose `stat` cannot be read or parsed
+ *
+ * @example
+ * ```ts
+ * readProcessThreads(String(process.pid)) // [{ id: '<pid>/<pid>', state: 'R' }, ...] on Linux
+ * ```
+ */
+export function readProcessThreads(
+	pid: string,
+	table: string = PROCESS_TABLE,
+): readonly ProcessTask[] | undefined {
+	const listing = attempt(() => readdirSync(join(table, pid, 'task')))
+	if (!listing.success || listing.value.length === 0) return undefined
+	const tasks = listing.value.map((tid) => {
+		const text = attempt(() => readFileSync(join(table, pid, 'task', tid, 'stat'), 'utf8'))
+		const stat = text.success ? parseProcessStat(text.value) : undefined
+		return stat === undefined
+			? undefined
+			: Object.freeze({ id: `${pid}/${tid}`, state: stat.state })
+	})
+	return tasks.every((task) => task !== undefined) ? Object.freeze(tasks) : undefined
+}
+
+/**
+ * Reads every thread of one process, or of every member of one process group, from a process table.
+ *
+ * @remarks
+ * A group's members are the entries whose `stat` names the group. An entry whose `stat` is gone
+ * (`ENOENT`) is a process that ended after the listing, and it is skipped; any other entry that
+ * cannot be read leaves the whole reading unread, because it might be a member.
+ *
+ * @param pid - A positive process id, or a negative process-group id
+ * @param table - The process table's root. Default: {@link PROCESS_TABLE}
+ * @returns The threads read, or `undefined` when the table, an entry, or a member's threads cannot be read
+ *
+ * @example
+ * ```ts
+ * readProcessTasks(-process.pid) // the threads of the group this process leads, on Linux
+ * ```
+ */
+export function readProcessTasks(
+	pid: number,
+	table: string = PROCESS_TABLE,
+): readonly ProcessTask[] | undefined {
+	if (pid > 0) return readProcessThreads(String(pid), table)
+	const listing = attempt(() => readdirSync(table))
+	if (!listing.success) return undefined
+	const members = listing.value
+		.filter((name) => /^\d+$/u.test(name))
+		.map((name) => {
+			const text = attempt(() => readFileSync(join(table, name, 'stat'), 'utf8'))
+			if (!text.success) {
+				const code = isError(text.error) && 'code' in text.error ? text.error.code : undefined
+				return code === 'ENOENT' ? [] : undefined
+			}
+			const stat = parseProcessStat(text.value)
+			if (stat === undefined) return undefined
+			return stat.group === -pid ? readProcessThreads(name, table) : []
+		})
+	return members.every((member) => member !== undefined) ? Object.freeze(members.flat()) : undefined
+}
+
+/**
+ * Checks whether two process-table readings show the same threads, every one of them exited.
+ *
+ * @remarks
+ * A thread read as exited cannot create another thread or process after that read, so a thread a
+ * live member created during the first reading appears in the second. An empty reading never
+ * matches, because the probe signal reached a process the table did not show, as a table from
+ * another PID namespace does.
+ *
+ * @param first - The first reading
+ * @param second - The reading taken after the first finished
+ * @returns True if both readings hold a thread, list the same thread keys, and show every thread in a {@link PROCESS_ENDED} state; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesEndedTasks([{ id: '7/7', state: 'Z' }], [{ id: '7/7', state: 'Z' }]) // true
+ * ```
+ */
+export function matchesEndedTasks(
+	first: readonly ProcessTask[],
+	second: readonly ProcessTask[],
+): boolean {
+	return (
+		first.length > 0 &&
+		first
+			.map((task) => task.id)
+			.toSorted()
+			.join(' ') ===
+			second
+				.map((task) => task.id)
+				.toSorted()
+				.join(' ') &&
+		[...first, ...second].every((task) => PROCESS_ENDED.includes(task.state))
+	)
+}
+
+/**
+ * Reads whether a process or a process group has ended while the host still answers its id.
+ *
+ * @remarks
+ * A signal reaches a zombie, so a process or group whose every thread has exited still answers the
+ * probe signal until its parent reaps it, and an init that never reaps leaves it that way. Where
+ * the host publishes a process table, two readings taken one after the other decide, per
+ * {@link matchesEndedTasks}. A process whose main thread exited while another thread runs reads as
+ * live through that thread. A host without the table, and a reading that cannot read part of it,
+ * read nothing as ended.
+ *
+ * @param pid - A positive process id, or a negative process-group id
+ * @param table - The process table's root. Default: {@link PROCESS_TABLE}
+ * @returns True if the table shows every thread exited; false otherwise, including when it cannot tell
+ *
+ * @example
+ * ```ts
+ * readProcessEnded(process.pid) // false
+ * ```
+ */
+export function readProcessEnded(pid: number, table: string = PROCESS_TABLE): boolean {
+	if (!existsSync(join(table, 'self', 'stat'))) return false
+	const first = readProcessTasks(pid, table)
+	if (first === undefined) return false
+	const second = readProcessTasks(pid, table)
+	return second !== undefined && matchesEndedTasks(first, second)
+}
+
+/**
  * Reports whether a process or POSIX process group still exists.
  *
  * @param pid - A positive process id, or a negative POSIX process-group id
- * @returns True when the host confirms existence or refuses permission; false for ESRCH; undefined for another host failure
+ * @returns True when the host confirms existence or refuses permission and {@link readProcessEnded} reads no exit; false for ESRCH or an exited zombie; undefined for another host failure
  * @throws A {@link ProcessError} coded `invalid` for an unsafe integer, zero, minus one, or a negative id on Windows
- * @remarks Negative ids probe POSIX process groups. The `process.platform` branch refuses negative ids on Windows, where the host supports positive process ids only.
+ * @remarks Negative ids probe POSIX process groups. The `process.platform` branch refuses negative ids on Windows, where the host supports positive process ids only. A zombie answers the probe signal, so an id the host answers reads as ended when the host's process table shows every thread of the process, or of every group member, exited; a host without that table keeps the signal's answer.
  * @example
  * ```ts
  * inspectProcess(process.pid) // true
@@ -634,11 +778,12 @@ export function inspectProcess(pid: number): boolean | undefined {
 		throw createInvalidError('process id', pid)
 	}
 	try {
-		return process.kill(pid, 0)
+		process.kill(pid, 0)
 	} catch (error) {
 		const code = isError(error) && 'code' in error ? error.code : undefined
-		return code === 'ESRCH' ? false : code === 'EPERM' ? true : undefined
+		if (code !== 'EPERM') return code === 'ESRCH' ? false : undefined
 	}
+	return !readProcessEnded(pid)
 }
 
 /**
@@ -806,6 +951,38 @@ export async function stopChild(
 	if (isExited(child)) return true
 	await waitForExit(child, confirm)
 	return isExited(child)
+}
+
+/**
+ * Terminates the POSIX process group an exited child led, while the group still has a member.
+ *
+ * @remarks
+ * Prerequisite: the child was spawned `detached` on a POSIX host, so it led its own process group
+ * and that group is not the caller's. After the child's own exit its descendants keep the group, and
+ * the host reserves the group's id while the group has a member, so the negated pid still names
+ * that group alone. The group receives `SIGTERM` only while {@link inspectProcess} reports a member
+ * that has not exited, and `SIGKILL` when one remains after `grace` or after the child's read ends
+ * close, whichever comes first. Windows has no process group, and `taskkill` walks only a live
+ * root's tree, so this returns immediately there; it also returns immediately while the child has
+ * not exited, because {@link stopChild} owns that termination. Never rejects.
+ *
+ * @param child - The child boundary, which led its own process group
+ * @param grace - The cooperative window in milliseconds between `SIGTERM` and `SIGKILL`
+ * @returns Nothing
+ *
+ * @example
+ * ```ts
+ * await stopChild(child, 5_000, 5_000)
+ * await stopGroup(child, 5_000)
+ * ```
+ */
+export async function stopGroup(child: ProcessChildInterface, grace: number): Promise<void> {
+	const group = child.pid
+	if (process.platform === 'win32' || group === undefined || !isExited(child)) return
+	if (inspectProcess(-group) !== true) return
+	killProcess(child, 'SIGTERM')
+	await waitForClose(child, grace)
+	if (inspectProcess(-group) === true) killProcess(child, 'SIGKILL')
 }
 
 /**

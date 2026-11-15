@@ -2,8 +2,9 @@ import { Buffer } from 'node:buffer'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { holds } from '@orkestrel/contract'
 import { createRecorder, waitForDelay } from '@orkestrel/test'
-import { createScratch } from '@orkestrel/test/server'
+import { createScratch, isRunning } from '@orkestrel/test/server'
 import { isProcessError } from '@src/core'
 import { execute } from '@src/server'
 import { childCommand, resolveChildFixture } from '../../../setupServer.js'
@@ -67,6 +68,92 @@ describe('execute', () => {
 		expect(result.expired).toBe(true)
 		expect(result.aborted).toBe(false)
 		expect(result.failed).toBe(true)
+	})
+
+	// The root exits first and its descendant keeps the pipe; the group the root led still holds the
+	// descendant, so the timeout ends it and the pipe closes. Windows has no process group, and
+	// `taskkill` walks only a live root's tree, so there the run waits out `PROCESS_CONFIRMATION`.
+	it.skipIf(process.platform === 'win32')(
+		'ends a descendant holding the pipe at the timeout after the root exited, and settles near it',
+		// The budget clears a run that waits out the 5000ms confirmation, so a regression reads as the
+		// elapsed assertion rather than as this case's timeout.
+		{ timeout: 15_000 },
+		async () => {
+			const started = performance.now()
+			const result = await execute(childCommand('orphan'), {
+				workspace: process.cwd(),
+				timeout: 300,
+				grace: 20,
+				strict: false,
+			})
+			const elapsed = performance.now() - started
+			const [line = ''] = result.stdout.split(/\r\n|\n/u)
+			const held = Number.parseInt(line.replace('grandchild:', ''), 10)
+			try {
+				expect(held).toBeGreaterThan(0)
+				expect(result).toMatchObject({ expired: true, aborted: false, code: 0, signal: null })
+				expect(isRunning(held)).toBe(false)
+				expect(elapsed).toBeLessThan(2_000)
+			} finally {
+				if (held > 0) holds(() => process.kill(held, 'SIGKILL'))
+			}
+		},
+	)
+
+	it('refuses a run whose signal already aborted before anything spawns, carrying the reason', async () => {
+		const scratch = createScratch()
+		try {
+			const marker = join(scratch.path, 'aborted.txt')
+			const control = join(scratch.path, 'control.txt')
+			const reason = new Error('the caller withdrew the run')
+			const error = await execute(childCommand('write', marker), {
+				workspace: process.cwd(),
+				grace: 20,
+				signal: AbortSignal.abort(reason),
+			}).catch((caught: unknown) => caught)
+			const relaxed = await execute(childCommand('write', marker), {
+				workspace: process.cwd(),
+				grace: 20,
+				signal: AbortSignal.abort(reason),
+				strict: false,
+			})
+			// The control runs the same command with no abort, so the marker it writes shows the command
+			// reaches the file system when it runs at all.
+			await execute(childCommand('write', control), { workspace: process.cwd(), grace: 20 })
+
+			expect(isProcessError(error)).toBe(true)
+			expect(error).toMatchObject({ code: 'spawn', cause: reason })
+			expect(isProcessError(error) ? error.result : undefined).toMatchObject({
+				aborted: true,
+				expired: false,
+				failed: true,
+				code: null,
+				signal: null,
+				stdout: '',
+				stderr: '',
+			})
+			expect(relaxed).toMatchObject({ aborted: true, failed: true, code: null, signal: null })
+			expect(existsSync(control)).toBe(true)
+			expect(existsSync(marker)).toBe(false)
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('carries the abort reason of a running execution as the rejection cause', async () => {
+		const controller = new AbortController()
+		const reason = new Error('the caller withdrew the run')
+		const pending = execute(childCommand('sleep'), {
+			workspace: process.cwd(),
+			grace: 20,
+			signal: controller.signal,
+		}).catch((caught: unknown) => caught)
+		controller.abort(reason)
+		const error = await pending
+
+		expect(isProcessError(error)).toBe(true)
+		expect(error).toMatchObject({ code: 'spawn', cause: reason })
+		expect(isProcessError(error) ? error.result?.aborted : undefined).toBe(true)
 	})
 
 	it('reports an externally aborted run as aborted rather than expired', async () => {

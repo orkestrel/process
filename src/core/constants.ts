@@ -36,6 +36,15 @@ export const PROCESS_TIMER = 2_147_483_647
 /** Lists the executable extensions a Windows lookup applies when the environment declares no `PATHEXT`, `.COM;.EXE;.BAT;.CMD`. */
 export const PROCESS_PATHEXT = '.COM;.EXE;.BAT;.CMD'
 
+/** Names the directory where a Linux host publishes its process table, `/proc`. */
+export const PROCESS_TABLE = '/proc'
+
+/**
+ * Lists the process-table states of a thread that has exited: `Z` for a zombie its parent has not
+ * reaped, and `X` for one the kernel is releasing.
+ */
+export const PROCESS_ENDED: readonly string[] = Object.freeze(['Z', 'X'])
+
 /**
  * Lists the machine-readable failure categories a {@link ProcessError} carries, in declaration order:
  * `spawn`, `timeout`, `input`, `duplicate`, `protocol`, and `invalid`.

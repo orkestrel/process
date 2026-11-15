@@ -1,9 +1,9 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import type { Readable } from 'node:stream'
 import type { ProcessExit, ProcessOptions } from '@src/core'
 import type { SupervisorFace } from '../types.js'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
+import { Readable } from 'node:stream'
 import { StringDecoder } from 'node:string_decoder'
 import {
 	ProcessError,
@@ -17,6 +17,7 @@ import {
 	buildSpawn,
 	mergeEnvironment,
 	stopChild,
+	stopGroup,
 	trimTail,
 	validateBytes,
 	validateCommand,
@@ -80,7 +81,8 @@ export class Supervisor {
 	readonly #close: () => void
 	readonly #terminal: (exit: ProcessExit) => void
 	readonly #teardown: () => void
-	readonly #child: ChildProcessWithoutNullStreams
+	readonly #child: ChildProcessWithoutNullStreams | undefined
+	readonly #stdout: Readable
 	readonly #grace: number
 	readonly #drain: number
 	readonly #evidence: number
@@ -156,7 +158,15 @@ export class Supervisor {
 		this.#signal = signal
 		const childEnvironment = mergeEnvironment(command.isolated === true, command.environment)
 		const plan = buildSpawn(command, { workspace, environment: childEnvironment })
-		this.#child = spawn(plan.file, [...plan.arguments], {
+		// A signal that already aborted refuses the spawn: no child starts, and the termination it asks
+		// for reaches the terminal moment with nothing to end.
+		if (signal?.aborted === true) {
+			this.#child = undefined
+			this.#stdout = Readable.from([])
+			void this.stop()
+			return
+		}
+		const child = spawn(plan.file, [...plan.arguments], {
 			cwd: workspace,
 			detached: process.platform !== 'win32',
 			env: childEnvironment,
@@ -164,44 +174,45 @@ export class Supervisor {
 			windowsHide: true,
 			windowsVerbatimArguments: plan.verbatim,
 		})
-		this.#child.once('error', this.#fault)
-		this.#child.once('exit', this.#expire.bind(this))
-		this.#child.once('close', this.#complete.bind(this))
-		this.#child.stdin.on('error', this.#failInputStream.bind(this))
-		this.#child.stderr.on('data', this.#retain.bind(this))
+		this.#child = child
+		this.#stdout = child.stdout
+		child.once('error', this.#fault)
+		child.once('exit', this.#expire.bind(this))
+		child.once('close', this.#complete.bind(this))
+		child.stdin.on('error', this.#failInputStream.bind(this))
+		child.stderr.on('data', this.#retain.bind(this))
 		if (input !== undefined) {
 			this.#input += 1
-			this.#child.stdin.write(input, this.#completeInput.bind(this))
+			child.stdin.write(input, this.#completeInput.bind(this))
 		}
 		if (writable !== true) {
 			this.#input += 1
-			this.#child.stdin.end(this.#completeInput.bind(this))
+			child.stdin.end(this.#completeInput.bind(this))
 		}
 		if (signal !== undefined) {
 			this.#abort = this.#terminate.bind(this)
 			signal.addEventListener('abort', this.#abort, { once: true })
-			if (signal.aborted) void this.stop()
 		}
 	}
 
 	/** Holds the child's standard-output stream, for the composing face to attach its own consumer to. */
 	get stdout(): Readable {
-		return this.#child.stdout
+		return this.#stdout
 	}
 
-	/** Holds the host process id, fixed when construction returns, or `undefined` when the spawn produced none. */
+	/** Holds the host process id, fixed when construction returns, or `undefined` when the spawn produced none or was refused. */
 	get pid(): number | undefined {
-		return this.#child.pid
+		return this.#child?.pid
 	}
 
 	/** Holds the exit code the host recorded, or `null` while the child has not exited and when a signal ended it. */
 	get code(): number | null {
-		return this.#child.exitCode
+		return this.#child?.exitCode ?? null
 	}
 
 	/** Holds the terminating signal name the host recorded, or `null` while the child has not exited and when it exited on its own. */
 	get signal(): string | null {
-		return this.#child.signalCode
+		return this.#child?.signalCode ?? null
 	}
 
 	/** Holds the decoded byte-bounded stderr tail, frozen at the terminal moment. */
@@ -275,8 +286,14 @@ export class Supervisor {
 	 * ```
 	 */
 	deliver(bytes: Uint8Array): Promise<boolean> {
-		const stdin = this.#child.stdin
-		if (this.#settled || this.#terminated || this.#failure !== undefined || !stdin.writable) {
+		const stdin = this.#child?.stdin
+		if (
+			this.#settled ||
+			this.#terminated ||
+			this.#failure !== undefined ||
+			stdin === undefined ||
+			!stdin.writable
+		) {
 			return Promise.resolve(false)
 		}
 		const settled = Promise.withResolvers<boolean>()
@@ -351,7 +368,10 @@ export class Supervisor {
 
 	#retain(chunk: unknown): void {
 		if (!Buffer.isBuffer(chunk) || this.#settled) return
-		this.#tail = trimTail(Buffer.concat([this.#tail, chunk]), this.#evidence)
+		// Only the chunk's last `evidence` bytes can survive the trim, so the rest is never copied. The
+		// one byte kept before them holds the trim's cut where a whole chunk would have put it.
+		const kept = chunk.subarray(Math.max(0, chunk.byteLength - this.#evidence - 1))
+		this.#tail = trimTail(Buffer.concat([this.#tail, kept]), this.#evidence)
 		const text = this.#decoder.write(chunk)
 		if (text.length > 0) this.#chunk(text)
 	}
@@ -377,7 +397,9 @@ export class Supervisor {
 	// own timer on either outcome. The constructor registers `#complete` before this listener exists,
 	// so a natural close settles drained and the following continuation finds the latch already set.
 	#wait(): Promise<void> {
-		this.#waiting ??= waitForClose(this.#child, this.#drain).then(() => {
+		const child = this.#child
+		if (child === undefined) return Promise.resolve()
+		this.#waiting ??= waitForClose(child, this.#drain).then(() => {
 			if (!this.#settled) this.#settle(false)
 		})
 		return this.#waiting
@@ -400,8 +422,8 @@ export class Supervisor {
 		this.#ended.resolve()
 		this.#terminal(exit)
 		// Release read handles only after every pull surface is final.
-		this.#child.stdout.destroy()
-		this.#child.stderr.destroy()
+		this.#child?.stdout.destroy()
+		this.#child?.stderr.destroy()
 	}
 
 	#terminate(): void {
@@ -430,8 +452,14 @@ export class Supervisor {
 	// host error that no consumer asked for. Otherwise Node's own `end` flushes whatever it already
 	// accepted and reports through the callback either way, which is why this never rejects.
 	#endInput(): Promise<void> {
-		const stdin = this.#child.stdin
-		if (this.#terminated || this.#settled || stdin.writableEnded || stdin.destroyed) {
+		const stdin = this.#child?.stdin
+		if (
+			this.#terminated ||
+			this.#settled ||
+			stdin === undefined ||
+			stdin.writableEnded ||
+			stdin.destroyed
+		) {
 			return Promise.resolve()
 		}
 		const ended = Promise.withResolvers<void>()
@@ -468,7 +496,7 @@ export class Supervisor {
 		// produces is not news to report. Pending writes still settle, because nothing left is going to
 		// confirm them. A `writable: true` channel never sets `writableEnded` until ended, so a later
 		// host fault on an open channel stays classifiable.
-		if (this.#child.stdin.writableEnded) {
+		if (this.#child?.stdin.writableEnded === true) {
 			this.#settleWrites()
 			return
 		}
@@ -484,9 +512,18 @@ export class Supervisor {
 		// instead of pausing the stream again.
 		this.#terminated = true
 		this.#relieve?.()
-		const confirmed = await stopChild(this.#child, this.#grace, PROCESS_CONFIRMATION)
+		const child = this.#child
+		if (child === undefined) {
+			// A refused spawn left nothing to end. The face builds its own surface after the constructor
+			// that started this call returns, so the terminal moment waits one microtask for it.
+			await Promise.resolve()
+			this.#settle(true)
+			return true
+		}
+		const confirmed = await stopChild(child, this.#grace, PROCESS_CONFIRMATION)
 		this.#settleWrites()
-		this.#child.stdin.destroy()
+		child.stdin.destroy()
+		await stopGroup(child, this.#grace)
 		if (!this.#settled) await this.#wait()
 		if (!this.#settled) this.#settle(false)
 		return confirmed
