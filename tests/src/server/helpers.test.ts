@@ -422,63 +422,68 @@ describe('matchesProcessEnded', () => {
 	// say nothing about the ids this process signals. Its `self/stat` names a pid other than this
 	// process's own, one that may begin with this pid's digits, which is how the reader tells it apart; the control is the same table naming
 	// this process.
-	it('reads nothing as ended and collects no member through a table that names another process', async () => {
-		const scratch = createScratch({
-			prefix: 'process-table-',
-			files: {
-				'self/stat': buildProcessStat(Number(`${String(process.pid)}5`), 'foreign', 'S', 1, 1),
-				'40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
-				'40/task/40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
-			},
-		})
-		const leader = spawn(process.execPath, [resolveChildFixture(), 'sleep'], {
-			detached: true,
-			stdio: 'ignore',
-		})
-		try {
-			const group = leader.pid ?? 0
-			await waitForCondition(
-				'the leader answers the group probe',
-				() => inspectProcess(-group) === true,
-				{
-					budget: 5_000,
+	// The leader is found through `inspectProcess(-group)`, a POSIX process-group probe that Windows
+	// refuses as an invalid process id, as 'refuses negative process ids on Windows' pins.
+	it.skipIf(process.platform === 'win32')(
+		'reads nothing as ended and collects no member through a table that names another process',
+		async () => {
+			const scratch = createScratch({
+				prefix: 'process-table-',
+				files: {
+					'self/stat': buildProcessStat(Number(`${String(process.pid)}5`), 'foreign', 'S', 1, 1),
+					'40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
+					'40/task/40/stat': buildProcessStat(40, 'zombie', 'Z', 40, 400),
 				},
-			)
-			scratch.write('self/mountinfo', buildProcessMount(scratch.path, 'rw'))
-			scratch.write(`${String(group)}/stat`, buildProcessStat(group, 'leader', 'S', group, 900))
-			const known = [{ pid: group, start: '900' }]
-			const foreign = [
-				matchesOwnTable(scratch.path),
-				matchesProcessEnded(-40, scratch.path),
-				matchesGroupMembers(group, known, scratch.path),
-			]
-			const foreignMembers = collectGroupMembers(leader, scratch.path)
-			scratch.write('self/stat', buildProcessStat(process.pid, 'self', 'S', 1, 1))
-			const own = [
-				matchesOwnTable(scratch.path),
-				matchesProcessEnded(-40, scratch.path),
-				matchesGroupMembers(group, known, scratch.path),
-			]
-			const ownMembers = collectGroupMembers(leader, scratch.path)
-			scratch.remove('self/stat')
-			const missing = [
-				matchesOwnTable(scratch.path),
-				matchesProcessEnded(-40, scratch.path),
-				matchesGroupMembers(group, known, scratch.path),
-			]
-			const missingMembers = collectGroupMembers(leader, scratch.path)
+			})
+			const leader = spawn(process.execPath, [resolveChildFixture(), 'sleep'], {
+				detached: true,
+				stdio: 'ignore',
+			})
+			try {
+				const group = leader.pid ?? 0
+				await waitForCondition(
+					'the leader answers the group probe',
+					() => inspectProcess(-group) === true,
+					{
+						budget: 5_000,
+					},
+				)
+				scratch.write('self/mountinfo', buildProcessMount(scratch.path, 'rw'))
+				scratch.write(`${String(group)}/stat`, buildProcessStat(group, 'leader', 'S', group, 900))
+				const known = [{ pid: group, start: '900' }]
+				const foreign = [
+					matchesOwnTable(scratch.path),
+					matchesProcessEnded(-40, scratch.path),
+					matchesGroupMembers(group, known, scratch.path),
+				]
+				const foreignMembers = collectGroupMembers(leader, scratch.path)
+				scratch.write('self/stat', buildProcessStat(process.pid, 'self', 'S', 1, 1))
+				const own = [
+					matchesOwnTable(scratch.path),
+					matchesProcessEnded(-40, scratch.path),
+					matchesGroupMembers(group, known, scratch.path),
+				]
+				const ownMembers = collectGroupMembers(leader, scratch.path)
+				scratch.remove('self/stat')
+				const missing = [
+					matchesOwnTable(scratch.path),
+					matchesProcessEnded(-40, scratch.path),
+					matchesGroupMembers(group, known, scratch.path),
+				]
+				const missingMembers = collectGroupMembers(leader, scratch.path)
 
-			expect(foreign).toEqual([false, false, false])
-			expect(own).toEqual([true, true, true])
-			expect(missing).toEqual([false, false, false])
-			expect(foreignMembers).toEqual([])
-			expect(ownMembers).toEqual(known)
-			expect(missingMembers).toEqual([])
-		} finally {
-			holds(() => leader.kill('SIGKILL'))
-			scratch.destroy()
-		}
-	})
+				expect(foreign).toEqual([false, false, false])
+				expect(own).toEqual([true, true, true])
+				expect(missing).toEqual([false, false, false])
+				expect(foreignMembers).toEqual([])
+				expect(ownMembers).toEqual(known)
+				expect(missingMembers).toEqual([])
+			} finally {
+				holds(() => leader.kill('SIGKILL'))
+				scratch.destroy()
+			}
+		},
+	)
 
 	it('reads nothing as ended on a host that publishes no process table', () => {
 		const scratch = createScratch({
