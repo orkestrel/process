@@ -16,9 +16,10 @@ import {
 	attempt,
 	boundsOf,
 	holds,
-	isError,
+	isCodedError,
 	isNonEmptyString,
 	isNonNegativeInteger,
+	isSafeInteger,
 	isString,
 } from '@orkestrel/contract'
 import {
@@ -681,7 +682,7 @@ export function scanGroupMembers(
 		.map((name) => {
 			const text = attempt(() => readFileSync(join(table, name, 'stat'), 'utf8'))
 			if (!text.success) {
-				const code = isError(text.error) && 'code' in text.error ? text.error.code : undefined
+				const code = isCodedError(text.error) ? text.error.code : undefined
 				return code === 'ENOENT' ? [] : undefined
 			}
 			const stat = parseProcessStat(text.value)
@@ -928,18 +929,13 @@ export function collectGroupMembers(
  * ```
  */
 export function inspectProcess(pid: number): boolean | undefined {
-	if (
-		!Number.isSafeInteger(pid) ||
-		pid === 0 ||
-		pid === -1 ||
-		(process.platform === 'win32' && pid < 0)
-	) {
+	if (!isSafeInteger(pid) || pid === 0 || pid === -1 || (process.platform === 'win32' && pid < 0)) {
 		throw createInvalidError('process id', pid)
 	}
 	try {
 		process.kill(pid, 0)
 	} catch (error) {
-		const code = isError(error) && 'code' in error ? error.code : undefined
+		const code = isCodedError(error) ? error.code : undefined
 		if (code !== 'EPERM') return code === 'ESRCH' ? false : undefined
 	}
 	return !matchesProcessEnded(pid)
@@ -976,7 +972,7 @@ export function killProcess(
 		}
 		process.kill(-child.pid, signal)
 	} catch (error) {
-		if (isError(error) && 'code' in error && error.code === 'ESRCH') {
+		if (isCodedError(error) && error.code === 'ESRCH') {
 			holds(() => child.kill(signal))
 			return
 		}
